@@ -1,0 +1,5 @@
+shell/flux-shell
+fluxai/fluxaid
+build/overlay/usr/bin/flux-shell
+build/overlay/usr/bin/fluxaid
+*.o
