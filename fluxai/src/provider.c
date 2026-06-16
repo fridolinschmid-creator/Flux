@@ -1,4 +1,5 @@
 #include "provider.h"
+#include "../../common/flux_config.h"
 
 #include <curl/curl.h>
 #include <stdio.h>
@@ -7,6 +8,29 @@
 
 #define FLUX_DEFAULT_MODEL "claude-haiku-4-5-20251001"
 #define FLUX_API_URL       "https://api.anthropic.com/v1/messages"
+
+/* Erlaubt der KI, statt einer normalen Textantwort eine konkrete
+ * Aktion vorzuschlagen (Mail/SMS/Anruf). flux-shell zeigt dafuer einen
+ * Bestaetigungs-Dialog (Senden/Bearbeiten/Abbrechen) -- die KI fuehrt
+ * also nie direkt etwas aus, sie schlaegt nur vor (siehe
+ * shell/src/action.h fuer den Parser, fluxai/src/exec.c fuer die
+ * tatsaechliche Ausfuehrung nach Bestaetigung). */
+#define FLUX_SYSTEM_PROMPT \
+    "Du bist der KI-Assistent des Telefon-Betriebssystems Flux. " \
+    "Antworte normalerweise kurz und klar auf Deutsch in normalem Text. " \
+    "WENN der Nutzer eindeutig eine E-Mail senden, eine SMS senden oder " \
+    "einen Anruf taetigen moechte UND du Empfaenger und Inhalt sicher aus " \
+    "der Nachricht ableiten kannst, antworte AUSSCHLIESSLICH in folgendem " \
+    "Format, ohne zusaetzlichen Text davor oder danach:\n" \
+    "ACTION:<mail|sms|call>\n" \
+    "TO:<E-Mail-Adresse, Telefonnummer oder Name>\n" \
+    "SUBJECT:<Betreff, nur bei mail, sonst leer lassen>\n" \
+    "BODY:\n" \
+    "<Nachrichtentext, bei call ein kurzer Anrufgrund>\n" \
+    "Falls Empfaenger oder Inhalt unklar sind, frage stattdessen ganz " \
+    "normal nach den fehlenden Angaben (kein ACTION-Format). Wenn der " \
+    "Nutzer offensichtlich keine Nachricht/keinen Anruf will, antworte " \
+    "immer ganz normal in Text."
 
 struct membuf {
     char  *data;
@@ -80,21 +104,30 @@ static int extract_text(const char *json, char *out, size_t out_cap) {
 }
 
 void flux_provider_ask(const char *question, char *out, size_t out_cap) {
-    const char *api_key = getenv("FLUX_AI_API_KEY");
+    char key_buf[256];
+    const char *api_key = NULL;
+    if (flux_config_get("api_key", key_buf, sizeof(key_buf)) && key_buf[0])
+        api_key = key_buf;
+    else
+        api_key = getenv("FLUX_AI_API_KEY");
+
     if (!api_key || !*api_key) {
         snprintf(out, out_cap,
-            "Kein Cloud-Zugang konfiguriert. Setze FLUX_AI_API_KEY, "
-            "um Fragen zu stellen, die ich nicht lokal beantworten kann.");
+            "Kein Cloud-Zugang konfiguriert. Trage einen API-Key in den "
+            "Einstellungen ein (oder setze FLUX_AI_API_KEY), um Fragen zu "
+            "stellen, die ich nicht lokal beantworten kann.");
         return;
     }
 
     const char *model = getenv("FLUX_AI_MODEL");
     if (!model || !*model) model = FLUX_DEFAULT_MODEL;
 
-    char body[4096];
+    char body[8192];
     snprintf(body, sizeof(body),
-             "{\"model\":\"%s\",\"max_tokens\":300,\"messages\":"
-             "[{\"role\":\"user\",\"content\":\"", model);
+             "{\"model\":\"%s\",\"max_tokens\":500,\"system\":\"", model);
+    json_escape_append(body, sizeof(body), FLUX_SYSTEM_PROMPT);
+    strncat(body, "\",\"messages\":[{\"role\":\"user\",\"content\":\"",
+            sizeof(body) - strlen(body) - 1);
     json_escape_append(body, sizeof(body), question);
     strncat(body, "\"}]}", sizeof(body) - strlen(body) - 1);
 

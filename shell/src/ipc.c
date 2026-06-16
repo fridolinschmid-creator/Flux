@@ -7,7 +7,7 @@
 #include <sys/socket.h>
 #include <sys/un.h>
 
-void flux_ipc_ask(const char *question, char *out, size_t out_cap) {
+void flux_ipc_send_raw(const char *request, char *out, size_t out_cap) {
     int fd = socket(AF_UNIX, SOCK_STREAM, 0);
     if (fd < 0) {
         snprintf(out, out_cap, "fluxaid nicht erreichbar (socket).");
@@ -24,15 +24,13 @@ void flux_ipc_ask(const char *question, char *out, size_t out_cap) {
         return;
     }
 
-    char req[FLUX_MAX_LINE];
-    snprintf(req, sizeof(req), "Q:%s\n", question);
-    if (write(fd, req, strlen(req)) < 0) {
+    if (write(fd, request, strlen(request)) < 0) {
         snprintf(out, out_cap, "Fehler beim Senden an fluxaid.");
         close(fd);
         return;
     }
 
-    char resp[8300];
+    char resp[FLUX_MAX_RESPONSE];
     ssize_t n = read(fd, resp, sizeof(resp) - 1);
     close(fd);
     if (n <= 0) {
@@ -49,4 +47,10 @@ void flux_ipc_ask(const char *question, char *out, size_t out_cap) {
     if (end) *end = '\0';
 
     snprintf(out, out_cap, "%s", body);
+}
+
+void flux_ipc_ask(const char *question, char *out, size_t out_cap) {
+    char req[FLUX_MAX_LINE];
+    snprintf(req, sizeof(req), "Q:%s\n", question);
+    flux_ipc_send_raw(req, out, out_cap);
 }

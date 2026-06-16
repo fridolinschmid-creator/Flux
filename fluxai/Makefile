@@ -7,7 +7,7 @@ CC      := $(CROSS_COMPILE)gcc
 CFLAGS  ?= -O2 -Wall -Wextra -std=gnu11 -D_GNU_SOURCE
 LDFLAGS ?= -lcurl
 
-SRC := $(wildcard src/*.c)
+SRC := $(wildcard src/*.c) $(wildcard ../common/*.c)
 BIN := fluxaid
 
 $(BIN): $(SRC)

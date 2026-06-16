@@ -10,12 +10,36 @@ gebaut wurde).
 ## Komponenten
 
 ### `flux-shell` (`shell/`)
-Einziger UI-Prozess. Zustandsmaschine mit zwei Bildschirmen:
+Einziger UI-Prozess. Zustandsmaschine (`flux_screen_t`, `shell/src/ui.h`)
+mit sieben Bildschirmen, aber weiterhin keinem App-Grid -- das ist
+beabsichtigt, nicht unvollstaendig:
 
 - `FLUX_SCREEN_LOCK`: Uhrzeit, Datum, Hinweis zum Entsperren.
-- `FLUX_SCREEN_ASSISTANT`: Eingabezeile + letzte Antwort. Es gibt keinen
-  dritten Zustand "App-Liste" -- das ist beabsichtigt, nicht
-  unvollstaendig.
+- `FLUX_SCREEN_PIN`: nur erreicht, wenn in den Einstellungen ein PIN-Hash
+  gesetzt ist (`flux_config_get("pin_hash", ...)`, `shell/src/main.c`).
+  Ohne PIN entsperrt der Wisch direkt in den Assistenten -- ehrlicher
+  "noch nicht eingerichtet"-Default statt erzwungener Huerde beim
+  Erststart.
+- `FLUX_SCREEN_ASSISTANT`: der eigentliche Homescreen. Eingabezeile +
+  letzte Antwort, Mikrofon-Knopf (siehe README, aktuell Platzhalter),
+  Schnellzugriff-Leiste fuer Einstellungen/Dateien.
+- `FLUX_SCREEN_CONFIRM`: Bestaetigungs-Dialog, wenn `fluxaid` einen
+  `ACTION:`-Vorschlag (Mail/SMS/Anruf) liefert (`shell/src/action.c`).
+  Drei Knoepfe: Senden, Abbrechen, Bearbeiten. Die KI fuehrt nie direkt
+  etwas aus -- erst ein Tap auf "Senden" loest die `X:`-Anfrage aus.
+- `FLUX_SCREEN_EDIT_BODY`: Text vor dem Senden bearbeiten (von "Bearbeiten"
+  aus erreichbar), wiederverwendet auch fuer das Bearbeiten einzelner
+  Einstellungswerte -- gleiche Bildschirmtastatur, gleicher Code.
+- `FLUX_SCREEN_SETTINGS` / `FLUX_SCREEN_FILES`: ueber die Schnellzugriff-
+  Leiste oder Tippen/Sprechen von "Einstellungen"/"Dateien" erreichbar,
+  client-seitig in `main.c` ohne Roundtrip zu `fluxaid` umgeschaltet
+  (gleiche "lokale Intents zuerst"-Haltung wie bei `actions.c`).
+
+Jede Liste/Tastatur hat genau eine Geometrie-Funktion, die sowohl vom
+Zeichnen als auch vom Hit-Testing genutzt wird (`build_kbd_geom`,
+`build_pin_geom`, `build_confirm_buttons`, `build_list_rows` in
+`shell/src/ui.c`) -- sonst driften Darstellung und Tap-Erkennung
+irgendwann auseinander.
 
 Zeichnet direkt auf `/dev/fb0` (`shell/src/fb.c`). Zwei Puffer:
 `back` (woandersbeschrieben) und `prev` (zuletzt tatsaechlich auf den
@@ -48,13 +72,27 @@ Unix-Domain-Socket (`/run/flux/fluxai.sock`), ein Request pro
 Verbindung, zeilenbasiertes Mini-Protokoll (`common/flux_protocol.h`) --
 bewusst kein JSON-RPC, kein HTTP-Server im eigenen OS-Daemon.
 
-Anfragereihenfolge (`fluxai/src/main.c`):
+`fluxaid/src/main.c` unterscheidet zwei Request-Typen: `Q:<frage>`
+(bestehend) und `X:<typ>\nTO:...\nSUBJECT:...\nBODY:\n<text>` (neu --
+eine bereits vom Nutzer bestaetigte Aktion, siehe unten). Nur `Q:`-
+Requests werden beim ersten Zeilenumbruch trunciert; `X:`-Requests
+bleiben mehrzeilig erhalten, sonst wuerde die TO:/SUBJECT:/BODY:-
+Struktur zerstoert.
+
+Anfragereihenfolge fuer `Q:`:
 1. `actions.c`: lokale Intents (Uhrzeit, Datum, Akku, Uptime). Trifft
    ein Intent zu, verlaesst die Frage das Geraet nie.
 2. `provider.c`: nur falls (1) nichts gefunden hat. Ruft die Anthropic
    Messages API mit dem in `FLUX_AI_API_KEY` hinterlegten Schluessel des
-   Nutzers auf. Ohne Schluessel: ehrliche Fehlermeldung statt Absturz
-   oder erfundener Antwort.
+   Nutzers auf (oder `api_key` aus `/etc/flux/flux.conf`, falls in den
+   Einstellungen gesetzt). Ohne Schluessel: ehrliche Fehlermeldung statt
+   Absturz oder erfundener Antwort. Der System-Prompt weist das Modell
+   an, bei einem klaren Mail/SMS/Anruf-Auftrag mit einem strukturierten
+   `ACTION:`-Block statt Freitext zu antworten.
+
+`X:`-Requests gehen direkt an `exec.c`, das anhand des Typs an `mail.c`
+(echter SMTP-Versand per libcurl) oder `telephony.c` (SMS/Anruf -- siehe
+README, ehrlicher Modem-Stub, austauschbares Backend) weiterleitet.
 
 ### Kernel/Rootfs (`build/`)
 Linux-Kernel + Toolchain + Basissystem kommen von Buildroot

@@ -6,6 +6,7 @@
  */
 #include "actions.h"
 #include "provider.h"
+#include "exec.h"
 #include "../../common/flux_protocol.h"
 
 #include <stdio.h>
@@ -38,22 +39,28 @@ static void handle_client(int cfd) {
     ssize_t n = read(cfd, line, sizeof(line) - 1);
     if (n <= 0) { close(cfd); return; }
     line[n] = '\0';
-    char *nl = strchr(line, '\n');
-    if (nl) *nl = '\0';
 
-    if (strncmp(line, "Q:", 2) != 0) {
-        const char *msg = "ERR:Unbekanntes Protokoll, erwarte 'Q:<frage>'\nEND\n";
+    char answer[FLUX_MAX_LINE];
+    if (strncmp(line, "Q:", 2) == 0) {
+        /* Eine Frage ist eine einzelne Zeile -- am ersten Newline
+         * abschneiden, falls noch einer mitgesendet wurde. */
+        char *nl = strchr(line, '\n');
+        if (nl) *nl = '\0';
+        const char *question = line + 2;
+        if (!flux_actions_try(question, answer, sizeof(answer)))
+            flux_provider_ask(question, answer, sizeof(answer));
+    } else if (strncmp(line, "X:", 2) == 0) {
+        /* Eine bestaetigte Aktion ist mehrzeilig (TO:/SUBJECT:/BODY:)
+         * -- NICHT am ersten Newline abschneiden. */
+        flux_exec_action(line + 2, answer, sizeof(answer));
+    } else {
+        const char *msg = "ERR:Unbekanntes Protokoll, erwarte 'Q:<frage>' oder 'X:<aktion>'\nEND\n";
         if (write(cfd, msg, strlen(msg)) < 0) { /* Client schon weg, egal */ }
         close(cfd);
         return;
     }
-    const char *question = line + 2;
 
-    char answer[8192];
-    if (!flux_actions_try(question, answer, sizeof(answer)))
-        flux_provider_ask(question, answer, sizeof(answer));
-
-    char resp[8300];
+    char resp[FLUX_MAX_RESPONSE];
     snprintf(resp, sizeof(resp), "A:%s\nEND\n", answer);
     if (write(cfd, resp, strlen(resp)) < 0) { /* Client schon weg, egal */ }
     close(cfd);
