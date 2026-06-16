@@ -4,6 +4,21 @@ Ein mobiles Betriebssystem, das auf KI statt auf einem App-Grid aufbaut.
 Kein App-Drawer mit hunderten Icons — der KI-Assistent **ist** der
 Homescreen. Man entsperrt das Geraet und fragt direkt, statt zu suchen.
 
+## Verifiziert: echter Boot in QEMU (aarch64)
+
+Kein Mockup -- das ist ein echter Linux/ARM64-Kernel (Buildroot-gebaut),
+der in QEMU bootet, bei dem `flux-shell` auf den von `virtio-gpu`
+bereitgestellten Framebuffer zeichnet und `fluxaid` ueber den
+Unix-Socket antwortet:
+
+| Lockscreen | Assistent | Lokaler Intent | Ehrlicher Cloud-Hinweis |
+|---|---|---|---|
+| ![Lockscreen](docs/screenshots/01-lockscreen.png) | ![Assistent](docs/screenshots/02-assistant.png) | ![Lokaler Intent](docs/screenshots/03-local-intent.png) | ![Cloud-Hinweis](docs/screenshots/04-cloud-fallback.png) |
+
+("Akku" -> kein Sensor in QEMU vorhanden, ehrlich gemeldet statt erfunden.
+"Wer bist du" -> kein `FLUX_AI_API_KEY` gesetzt, ehrlich gemeldet statt
+Absturz oder Fantasieantwort.)
+
 ---
 
 ## Ehrliche Einordnung (bitte zuerst lesen)
