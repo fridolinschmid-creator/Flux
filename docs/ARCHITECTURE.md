@@ -30,9 +30,17 @@ fuer Systemtexte reicht das, fuer spaeteres App-Rendering nicht.
 
 Eingaben kommen ueber `/dev/input/eventN` (`shell/src/input.c`),
 generisch ueber `EVIOCGBIT` erkannt, nicht hart auf eine PS/2-Tastatur
-verdrahtet. Touch-Events (`EV_ABS`) tauchen am selben Layer auf einem
-echten Touchscreen auf -- die Eingabeabstraktion ist dafuer vorbereitet,
-aber noch nicht implementiert (siehe Roadmap Punkt 4).
+verdrahtet. Tastatur- und Touch/Pointer-Geraet werden parallel offen
+gehalten (`flux_input_t` mit `kbd_fd`/`touch_fd`), `select()` wartet auf
+beide gleichzeitig. Touch-Rohkoordinaten (`EV_ABS`, `ABS_X`/`ABS_Y`)
+werden anhand der vom Geraet gemeldeten Wertebereiche (`EVIOCGABS`) auf
+Bildschirmpixel skaliert; `BTN_TOUCH`/`BTN_LEFT` markiert Tap-Beginn/
+-Ende. Ein kurzer Tap erzeugt `FLUX_EV_TAP` (Koordinaten), ein schneller
+Wisch nach oben `FLUX_EV_SWIPE_UP` (zum Entsperren). In QEMU liefert
+`virtio-tablet-pci` genau dieselben Events wie ein echter Touchscreen --
+dieselbe Abstraktion deckt beides ab. Die Bildschirmtastatur
+(`shell/src/ui.c`, `flux_ui_kbd_hit`/`draw_keyboard`) macht Tastatur-
+Hardware optional, nicht nur theoretisch vorbereitet.
 
 ### `fluxaid` (`fluxai/`)
 System-Daemon, kein App-Prozess, startet vor der Shell. Hoert auf einem

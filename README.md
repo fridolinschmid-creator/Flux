@@ -4,20 +4,23 @@ Ein mobiles Betriebssystem, das auf KI statt auf einem App-Grid aufbaut.
 Kein App-Drawer mit hunderten Icons — der KI-Assistent **ist** der
 Homescreen. Man entsperrt das Geraet und fragt direkt, statt zu suchen.
 
-## Verifiziert: echter Boot in QEMU (aarch64)
+## Verifiziert: echter Boot in QEMU (aarch64), touch-first
 
 Kein Mockup -- das ist ein echter Linux/ARM64-Kernel (Buildroot-gebaut),
 der in QEMU bootet, bei dem `flux-shell` auf den von `virtio-gpu`
 bereitgestellten Framebuffer zeichnet und `fluxaid` ueber den
-Unix-Socket antwortet:
+Unix-Socket antwortet. Bedienung komplett ohne Tastatur moeglich --
+per `virtio-tablet` simuliertem Touch (Wisch-Geste + Bildschirm-
+tastatur), Hardware-Tastatur funktioniert weiterhin parallel:
 
-| Lockscreen | Assistent | Lokaler Intent | Ehrlicher Cloud-Hinweis |
-|---|---|---|---|
-| ![Lockscreen](docs/screenshots/01-lockscreen.png) | ![Assistent](docs/screenshots/02-assistant.png) | ![Lokaler Intent](docs/screenshots/03-local-intent.png) | ![Cloud-Hinweis](docs/screenshots/04-cloud-fallback.png) |
+| Lockscreen (Wisch-Hinweis) | Entsperrt per Wisch | Bildschirmtastatur | Lokaler Intent (per Touch) | Ehrlicher Cloud-Hinweis (per Tastatur) |
+|---|---|---|---|---|
+| ![Lockscreen](docs/screenshots/01-lockscreen.png) | ![Assistent](docs/screenshots/02-assistant.png) | ![Bildschirmtastatur](docs/screenshots/03-touch-keyboard.png) | ![Lokaler Intent](docs/screenshots/04-local-intent.png) | ![Cloud-Hinweis](docs/screenshots/05-cloud-fallback.png) |
 
-("Akku" -> kein Sensor in QEMU vorhanden, ehrlich gemeldet statt erfunden.
+("Akku" -> kein Sensor in QEMU vorhanden, ehrlich gemeldet statt erfunden,
+hier komplett per Touch-Tastatur eingetippt und abgesendet.
 "Wer bist du" -> kein `FLUX_AI_API_KEY` gesetzt, ehrlich gemeldet statt
-Absturz oder Fantasieantwort.)
+Absturz oder Fantasieantwort, hier per Hardware-Tastatur gestellt.)
 
 ---
 
@@ -171,7 +174,9 @@ export FLUX_AI_MODEL="claude-haiku-4-5-20251001"   # optional, das ist der Defau
 1. ~~Framebuffer-UI mit Double-Buffering~~
 2. ~~System-KI-Daemon mit lokalen Intents + Cloud-Fallback~~
 3. ~~Bootbares aarch64-Image (Buildroot, QEMU `virt`)~~
-4. Touch-Input statt nur Tastatur (evdev liefert das schon, UI fehlt noch)
+4. ~~Touch-Input statt nur Tastatur~~ -- Wisch-Geste zum Entsperren,
+   Bildschirmtastatur fuer den Assistenten, Hardware-Tastatur bleibt
+   nebenbei nutzbar (`shell/src/input.c`, `shell/src/ui.c`)
 5. Echter Compositor (DRM/KMS, GPU-Beschleunigung, Animationen, mehrere
    "Karten" statt nur Lockscreen+Assistent)
 6. Benachrichtigungen als eigener Systemdienst (nicht App-spezifisch)

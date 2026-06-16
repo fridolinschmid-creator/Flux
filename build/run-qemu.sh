@@ -20,6 +20,7 @@ exec qemu-system-aarch64 \
     -netdev user,id=eth0 -device virtio-net-pci,netdev=eth0 \
     -device virtio-gpu-pci \
     -device virtio-keyboard-pci \
+    -device virtio-tablet-pci \
     -display "$DISPLAY_BACKEND" \
     -serial mon:stdio \
     -qmp "unix:${QMP_SOCK},server,nowait"
