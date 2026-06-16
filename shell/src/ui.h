@@ -14,10 +14,15 @@
 
 #include "fb.h"
 
-typedef enum { FLUX_SCREEN_LOCK, FLUX_SCREEN_ASSISTANT } flux_screen_t;
+typedef enum { FLUX_SCREEN_LOCK, FLUX_SCREEN_ASSISTANT, FLUX_SCREEN_CALL } flux_screen_t;
 
 void flux_ui_draw_lock(flux_fb_t *fb);
 void flux_ui_draw_assistant(flux_fb_t *fb, const char *input, const char *answer, int thinking);
+
+/* Simulierter Anruf-Bildschirm -- klar als Simulation gekennzeichnet,
+ * weil QEMU kein Modem/SIM/Mobilfunknetz hat (siehe ARCHITECTURE.md).
+ * Tap oder Enter legt auf (siehe main.c). */
+void flux_ui_draw_call(flux_fb_t *fb, const char *name, const char *phone);
 
 /* Y-Koordinate, ab der die Bildschirmtastatur beginnt -- braucht
  * main.c nicht, aber draw_assistant nutzt es, um den Antwortbereich

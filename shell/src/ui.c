@@ -52,8 +52,12 @@ typedef struct {
 } kbd_key_geom_t;
 
 static int kbd_key_h(const flux_fb_t *fb) {
-    int h = fb->width / 11;
-    if (h > 56) h = 56;
+    /* Hoehe nach Bildschirmhoehe richten, nicht nach Breite -- auf
+     * einem hohen Handy-Bildschirm (Hochformat) soll die Tastatur
+     * proportional ihren ueblichen Anteil bekommen, nicht winzig
+     * gegenueber der Gesamthoehe wirken. */
+    int h = fb->height / 16;
+    if (h > 120) h = 120;
     if (h < 28) h = 28;
     return h;
 }
@@ -263,6 +267,46 @@ void flux_ui_draw_assistant(flux_fb_t *fb, const char *input, const char *answer
     flux_fb_text(fb, 16, input_y + 14, prompt, COL_TEXT, 2);
 
     draw_keyboard(fb);
+
+    flux_fb_present(fb);
+}
+
+/* ---- Simulierter Anruf-Bildschirm ------------------------------------
+ * Kein Modem/SIM in QEMU -- klar als Simulation gekennzeichnet statt
+ * einen echten Anruf vorzutaeuschen (gleiches Ehrlichkeitsprinzip wie
+ * die Akku-Fehlermeldung in fluxai/src/actions.c). */
+
+void flux_ui_draw_call(flux_fb_t *fb, const char *name, const char *phone) {
+    flux_fb_clear(fb, COL_BG);
+    draw_statusbar(fb);
+
+    const char *label = "SIMULIERTER ANRUF";
+    int lw = flux_fb_text_width(label, 2);
+    flux_fb_text(fb, (fb->width - lw) / 2, fb->height / 5, label, COL_ACCENT, 2);
+
+    int scale_name = fb->width / 200;
+    if (scale_name < 3) scale_name = 3;
+    int nw = flux_fb_text_width(name, scale_name);
+    flux_fb_text(fb, (fb->width - nw) / 2, fb->height / 3, name, COL_TEXT, scale_name);
+
+    int pw = flux_fb_text_width(phone, 2);
+    flux_fb_text(fb, (fb->width - pw) / 2, fb->height / 3 + scale_name * 12, phone, COL_DIM, 2);
+
+    const char *note = "Simulation -- kein Modem/SIM in QEMU vorhanden";
+    int nnw = flux_fb_text_width(note, 2);
+    flux_fb_text(fb, (fb->width - nnw) / 2, fb->height * 2 / 3, note, COL_DIM, 2);
+
+    /* Roter "Auflegen"-Button, mittig unten -- groesste Tap-Flaeche auf
+     * dem Bildschirm, damit er auch ohne Beschriftung sofort als
+     * Aktion erkennbar ist. */
+    int btn_w = fb->width / 3;
+    int btn_h = 64;
+    int btn_x = (fb->width - btn_w) / 2;
+    int btn_y = fb->height - 160;
+    flux_fb_fill_rect(fb, btn_x, btn_y, btn_w, btn_h, 0xC0392B);
+    const char *hangup = "AUFLEGEN";
+    int hw = flux_fb_text_width(hangup, 2);
+    flux_fb_text(fb, btn_x + (btn_w - hw) / 2, btn_y + (btn_h - 14) / 2, hangup, COL_TEXT, 2);
 
     flux_fb_present(fb);
 }

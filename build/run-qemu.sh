@@ -18,7 +18,7 @@ exec qemu-system-aarch64 \
     -drive file="$OUT_DIR/images/rootfs.ext4",if=none,format=raw,id=hd0 \
     -device virtio-blk-pci,drive=hd0 \
     -netdev user,id=eth0 -device virtio-net-pci,netdev=eth0 \
-    -device virtio-gpu-pci \
+    -device virtio-gpu-pci,xres=1080,yres=2400 \
     -device virtio-keyboard-pci \
     -device virtio-tablet-pci \
     -display "$DISPLAY_BACKEND" \

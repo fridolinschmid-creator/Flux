@@ -4,23 +4,35 @@ Ein mobiles Betriebssystem, das auf KI statt auf einem App-Grid aufbaut.
 Kein App-Drawer mit hunderten Icons — der KI-Assistent **ist** der
 Homescreen. Man entsperrt das Geraet und fragt direkt, statt zu suchen.
 
-## Verifiziert: echter Boot in QEMU (aarch64), touch-first
+## Verifiziert: echter Boot in QEMU (aarch64), touch-first, Hochformat
 
 Kein Mockup -- das ist ein echter Linux/ARM64-Kernel (Buildroot-gebaut),
 der in QEMU bootet, bei dem `flux-shell` auf den von `virtio-gpu`
 bereitgestellten Framebuffer zeichnet und `fluxaid` ueber den
-Unix-Socket antwortet. Bedienung komplett ohne Tastatur moeglich --
-per `virtio-tablet` simuliertem Touch (Wisch-Geste + Bildschirm-
-tastatur), Hardware-Tastatur funktioniert weiterhin parallel:
+Unix-Socket antwortet. Bildschirm im Telefon-Hochformat (1080x2400),
+Bedienung komplett ohne Tastatur moeglich -- per `virtio-tablet`
+simuliertem Touch (Wisch-Geste + Bildschirmtastatur), Hardware-Tastatur
+funktioniert weiterhin parallel:
 
-| Lockscreen (Wisch-Hinweis) | Entsperrt per Wisch | Bildschirmtastatur | Lokaler Intent (per Touch) | Ehrlicher Cloud-Hinweis (per Tastatur) |
+| Lockscreen | Assistent | Bildschirmtastatur (Touch) | Lokaler Intent |
+|---|---|---|---|
+| ![Lockscreen](docs/screenshots/01-lockscreen.png) | ![Assistent](docs/screenshots/02-assistant.png) | ![Bildschirmtastatur](docs/screenshots/03-touch-keyboard.png) | ![Lokaler Intent](docs/screenshots/04-local-intent.png) |
+
+("Akku" -> kein Sensor in QEMU vorhanden, ehrlich gemeldet statt erfunden;
+hier komplett per Touch-Tastatur eingetippt und abgesendet.)
+
+### Kontakte, simulierter Anruf, E-Mail
+
+| Kontakt anlegen (Dialog) | Kontakt gespeichert | Simulierter Anruf | Mail schreiben (Dialog) | Ehrlicher SMTP-Hinweis |
 |---|---|---|---|---|
-| ![Lockscreen](docs/screenshots/01-lockscreen.png) | ![Assistent](docs/screenshots/02-assistant.png) | ![Bildschirmtastatur](docs/screenshots/03-touch-keyboard.png) | ![Lokaler Intent](docs/screenshots/04-local-intent.png) | ![Cloud-Hinweis](docs/screenshots/05-cloud-fallback.png) |
+| ![Kontakt-Dialog](docs/screenshots/05-contact-dialog.png) | ![Kontakt gespeichert](docs/screenshots/06-contact-saved.png) | ![Anruf](docs/screenshots/07-call.png) | ![Mail-Dialog](docs/screenshots/08-email-dialog.png) | ![SMTP-Hinweis](docs/screenshots/09-email-honest.png) |
 
-("Akku" -> kein Sensor in QEMU vorhanden, ehrlich gemeldet statt erfunden,
-hier komplett per Touch-Tastatur eingetippt und abgesendet.
-"Wer bist du" -> kein `FLUX_AI_API_KEY` gesetzt, ehrlich gemeldet statt
-Absturz oder Fantasieantwort, hier per Hardware-Tastatur gestellt.)
+Mehrschritt-Dialoge ("wie soll der Kontakt heissen?", "an welche
+Adresse?") leben komplett in `flux-shell` als eigene Zustandsmaschine --
+`fluxaid` bleibt zustandslos und bekommt erst den fertigen Request. Der
+Anruf-Bildschirm ist klar als Simulation gekennzeichnet (kein Modem/SIM
+in QEMU), und ohne SMTP-Konfiguration meldet `fluxaid` das ehrlich statt
+einen Versand vorzutaeuschen.
 
 ---
 
@@ -62,8 +74,9 @@ Touchscreen-Kalibrierung, Modem/RIL, Akku-Management) — siehe Roadmap.
 ┌───────────────────┴───────────────────────────┐
 │  fluxaid (System-KI-Daemon, kein App-Prozess)│  <- lokale Intents zuerst
 │  - lokale Intents: Uhrzeit, Akku, Uptime ...  │     (Geschwindigkeit +
-│  - Cloud-Fallback ueber eigenen API-Key       │     Privacy), Cloud nur
-└───────────────────┬───────────────────────────┘     wenn wirklich noetig
+│  - Kontakte, E-Mail (SMTP/TLS)                │     Privacy), dann
+│  - lokales LLM (Ollama/LM Studio) > Cloud      │     lokales LLM, dann
+└───────────────────┬───────────────────────────┘     Cloud als letzter Fallback
                     │
 ┌───────────────────┴───────────────────────────┐
 │  Linux-Kernel (Buildroot, aarch64)            │  <- Treiber, Speicher,
@@ -119,19 +132,22 @@ Flux/
 │       ├── fb.c/.h          Framebuffer + Double-Buffering
 │       ├── stb_easy_font.h  Public-Domain-Bitmapfont (nothings/stb)
 │       ├── input.c/.h       Tastatur/Touch ueber Linux evdev
-│       ├── ipc.c/.h         Client fuer fluxaid
-│       ├── ui.c/.h          Lockscreen + Assistenten-Bildschirm
-│       └── main.c           Event-Loop
+│       ├── ipc.c/.h         Client fuer fluxaid (Q:/C:/F:/M:)
+│       ├── ui.c/.h          Lockscreen, Assistent, simulierter Anruf
+│       └── main.c           Event-Loop + Mehrschritt-Dialoge (Kontakt/Mail)
 ├── fluxai/              fluxaid -- System-KI-Daemon
 │   └── src/
-│       ├── actions.c/.h     Lokale Geraete-Intents (Zeit, Akku, Uptime)
-│       ├── provider.c/.h    Cloud-Fallback (Anthropic API, eigener Key)
-│       └── main.c           Unix-Socket-Server
+│       ├── actions.c/.h     Lokale Geraete-Intents (Zeit, Akku, Uptime, ...)
+│       ├── contacts.c/.h    Kontaktverwaltung (/var/lib/flux/contacts.tsv)
+│       ├── email.c/.h       E-Mail-Versand per SMTP/TLS (libcurl)
+│       ├── provider.c/.h    Lokales LLM (Ollama/LM Studio) + Cloud-Fallback
+│       └── main.c           Unix-Socket-Server, Protokoll-Dispatch
 ├── common/
 │   └── flux_protocol.h      Mini-Protokoll Shell <-> Daemon
 ├── build/
-│   ├── overlay/              Rootfs-Overlay (eigenes /etc/inittab, Binaries)
-│   └── build.sh              Buildroot-Build + Cross-Compile in einem Schritt
+│   ├── configs/               Buildroot-Defconfig (versioniert, reproduzierbar)
+│   ├── overlay/                Rootfs-Overlay (eigenes /etc/inittab, Binaries)
+│   └── build.sh                Buildroot-Build + Cross-Compile in einem Schritt
 └── docs/
     └── ARCHITECTURE.md
 ```
@@ -159,12 +175,33 @@ Start in QEMU (Grafikfenster + virtuelle Tastatur):
 ```
 
 ### Eigenen KI-Zugang einrichten (optional)
-Ohne API-Key beantwortet `fluxaid` nur lokale Fragen (Zeit, Akku, Uptime)
-und sagt ehrlich, dass kein Cloud-Zugang konfiguriert ist. Mit eigenem
-Anthropic-Key:
+Ohne jede Konfiguration beantwortet `fluxaid` nur lokale Fragen (Zeit,
+Akku, Uptime, Kontaktliste) und sagt ehrlich, dass kein KI-Zugang
+konfiguriert ist. Reihenfolge: lokales LLM (falls gesetzt) -> Anthropic
+Cloud (falls Key gesetzt) -> ehrliche Fehlermeldung.
+
 ```bash
+# Lokales LLM zuerst (Ollama oder LM Studio, beide ueber die
+# OpenAI-kompatible /v1/chat/completions-API). Komplett optional --
+# ohne diese Variable kein Verhaltensunterschied zum reinen Cloud-Pfad.
+export FLUX_AI_LOCAL_URL="http://127.0.0.1:11434"
+export FLUX_AI_LOCAL_MODEL="llama3"                # optional, Default "local-model"
+
+# Cloud-Fallback, nur falls (1) nicht erreichbar ist oder nicht gesetzt:
 export FLUX_AI_API_KEY="dein-key"
 export FLUX_AI_MODEL="claude-haiku-4-5-20251001"   # optional, das ist der Default
+```
+
+### E-Mail-Versand einrichten (optional)
+Ohne Konfiguration meldet `fluxaid` ehrlich, dass kein Mail-Zugang
+eingerichtet ist, statt einen Versand vorzutaeuschen. SMTP/TLS wird
+immer erzwungen (`CURLOPT_USE_SSL = CURLUSESSL_ALL`), Zugangsdaten gehen
+nie im Klartext raus:
+```bash
+export FLUX_SMTP_URL="smtp://smtp.example.com:587"  # Pflicht
+export FLUX_SMTP_FROM="ich@example.com"              # Pflicht
+export FLUX_SMTP_USER="ich@example.com"              # optional
+export FLUX_SMTP_PASS="dein-app-passwort"             # optional
 ```
 
 ---
@@ -177,15 +214,25 @@ export FLUX_AI_MODEL="claude-haiku-4-5-20251001"   # optional, das ist der Defau
 4. ~~Touch-Input statt nur Tastatur~~ -- Wisch-Geste zum Entsperren,
    Bildschirmtastatur fuer den Assistenten, Hardware-Tastatur bleibt
    nebenbei nutzbar (`shell/src/input.c`, `shell/src/ui.c`)
-5. Echter Compositor (DRM/KMS, GPU-Beschleunigung, Animationen, mehrere
+5. ~~Telefon-Hochformat (1080x2400) statt Desktop-Querformat~~
+6. ~~Lokales LLM (Ollama/LM Studio) vor dem Cloud-Fallback~~ -- spart
+   Netzwerk-Roundtrip und API-Kosten, wenn ein lokales Modell laeuft
+7. ~~Kontakte anlegen/suchen/auflisten~~, ~~simulierter Anruf~~ (klar als
+   Simulation gekennzeichnet, kein Modem/SIM in QEMU), ~~E-Mail-Versand~~
+   per SMTP/TLS mit eigenen Zugangsdaten
+8. Echte Spracheingabe (STT, z.B. whisper.cpp) -- noch nicht begonnen;
+   braucht Cross-Compile fuer aarch64, ein Modell zum Download, sowie
+   Audio-Treiber im Kernel (`virtio-sound`) und einen Weg, Mikrofon-Input
+   in QEMU zu simulieren
+9. Echter Compositor (DRM/KMS, GPU-Beschleunigung, Animationen, mehrere
    "Karten" statt nur Lockscreen+Assistent)
-6. Benachrichtigungen als eigener Systemdienst (nicht App-spezifisch)
-7. Portierung auf ein konkretes echtes Geraet (Geraetebaum, Touchscreen-
-   Treiber, Akku/Power-Management) — das ist der Schritt, der "Telefon"
-   ernst nimmt, siehe postmarketOS-Doku zum Geraete-Porting
-8. Sicherheitsmodell fuer Drittanbieter-Apps (Sandbox/Permissions) --
-   aktuell laeuft alles als root, das ist fuer einen Dev-Build okay, fuer
-   ein echtes Telefon-Betriebssystem nicht
+10. Benachrichtigungen als eigener Systemdienst (nicht App-spezifisch)
+11. Portierung auf ein konkretes echtes Geraet (Geraetebaum, Touchscreen-
+    Treiber, Akku/Power-Management) — das ist der Schritt, der "Telefon"
+    ernst nimmt, siehe postmarketOS-Doku zum Geraete-Porting
+12. Sicherheitsmodell fuer Drittanbieter-Apps (Sandbox/Permissions) --
+    aktuell laeuft alles als root, das ist fuer einen Dev-Build okay, fuer
+    ein echtes Telefon-Betriebssystem nicht
 
 ## Sicherheits-Hinweis (Dev-Build)
 Das gebaute Image hat einen Root-Login ohne Passwort auf der seriellen

@@ -1,4 +1,5 @@
 #include "actions.h"
+#include "contacts.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -69,10 +70,20 @@ static int try_uptime(const char *q, char *out, size_t cap) {
     return 1;
 }
 
+static int try_contacts_list(const char *q, char *out, size_t cap) {
+    if (!contains(q, "kontakt"))
+        return 0;
+    if (!contains(q, "liste") && !contains(q, "zeig") && !contains(q, "alle"))
+        return 0;
+    flux_contacts_list(out, cap);
+    return 1;
+}
+
 int flux_actions_try(const char *question, char *out, size_t out_cap) {
     if (try_battery(question, out, out_cap)) return 1;
     if (try_time(question, out, out_cap))    return 1;
     if (try_date(question, out, out_cap))    return 1;
     if (try_uptime(question, out, out_cap))  return 1;
+    if (try_contacts_list(question, out, out_cap)) return 1;
     return 0;
 }

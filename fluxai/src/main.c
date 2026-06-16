@@ -6,6 +6,8 @@
  */
 #include "actions.h"
 #include "provider.h"
+#include "contacts.h"
+#include "email.h"
 #include "../../common/flux_protocol.h"
 
 #include <stdio.h>
@@ -33,6 +35,20 @@ static int make_listen_socket(const char *path) {
     return fd;
 }
 
+/* Zerlegt s an Tabs in bis zu max_fields Teile (in-place, s wird
+ * veraendert). Gibt die Anzahl gefundener Felder zurueck. */
+static int split_tabs(char *s, char **fields, int max_fields) {
+    int n = 0;
+    while (n < max_fields) {
+        fields[n++] = s;
+        char *tab = strchr(s, '\t');
+        if (!tab) break;
+        *tab = '\0';
+        s = tab + 1;
+    }
+    return n;
+}
+
 static void handle_client(int cfd) {
     char line[FLUX_MAX_LINE];
     ssize_t n = read(cfd, line, sizeof(line) - 1);
@@ -41,20 +57,44 @@ static void handle_client(int cfd) {
     char *nl = strchr(line, '\n');
     if (nl) *nl = '\0';
 
-    if (strncmp(line, "Q:", 2) != 0) {
-        const char *msg = "ERR:Unbekanntes Protokoll, erwarte 'Q:<frage>'\nEND\n";
-        if (write(cfd, msg, strlen(msg)) < 0) { /* Client schon weg, egal */ }
-        close(cfd);
-        return;
-    }
-    const char *question = line + 2;
-
     char answer[8192];
-    if (!flux_actions_try(question, answer, sizeof(answer)))
-        flux_provider_ask(question, answer, sizeof(answer));
+    int ok;
+
+    if (strncmp(line, "Q:", 2) == 0) {
+        const char *question = line + 2;
+        if (!flux_actions_try(question, answer, sizeof(answer)))
+            flux_provider_ask(question, answer, sizeof(answer));
+        ok = 1;
+    } else if (strncmp(line, "C:", 2) == 0) {
+        char *fields[2];
+        int nf = split_tabs(line + 2, fields, 2);
+        if (nf < 2) {
+            snprintf(answer, sizeof(answer), "Erwarte 'C:<name>\\t<telefonnummer>'.");
+            ok = 0;
+        } else {
+            ok = flux_contacts_add(fields[0], fields[1], answer, sizeof(answer));
+        }
+    } else if (strncmp(line, "F:", 2) == 0) {
+        const char *name = line + 2;
+        ok = flux_contacts_find(name, answer, sizeof(answer));
+        if (!ok) snprintf(answer, sizeof(answer), "Kein Kontakt \"%s\" gefunden.", name);
+    } else if (strncmp(line, "M:", 2) == 0) {
+        char *fields[3];
+        int nf = split_tabs(line + 2, fields, 3);
+        if (nf < 3) {
+            snprintf(answer, sizeof(answer), "Erwarte 'M:<empfaenger>\\t<betreff>\\t<text>'.");
+            ok = 0;
+        } else {
+            ok = flux_email_send(fields[0], fields[1], fields[2], answer, sizeof(answer));
+        }
+    } else {
+        snprintf(answer, sizeof(answer),
+                 "Unbekanntes Protokoll, erwarte 'Q:'/'C:'/'F:'/'M:'.");
+        ok = 0;
+    }
 
     char resp[8300];
-    snprintf(resp, sizeof(resp), "A:%s\nEND\n", answer);
+    snprintf(resp, sizeof(resp), "%s:%s\nEND\n", ok ? "A" : "ERR", answer);
     if (write(cfd, resp, strlen(resp)) < 0) { /* Client schon weg, egal */ }
     close(cfd);
 }

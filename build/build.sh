@@ -24,6 +24,11 @@ fi
 
 echo "==> [1/3] Buildroot: Toolchain + Kernel + Basis-Rootfs"
 export FORCE_UNSAFE_CONFIGURE=1   # diese Pipeline laeuft typischerweise als root in einer Sandbox
+# Buildroot sucht benannte Defconfigs nur in seinem eigenen configs/ --
+# unsere liegt versioniert im Flux-Repo, also rueberkopieren statt sie
+# nur lokal/ephemer in $BR_DIR anzulegen (sonst ist der Build aus einem
+# frischen Buildroot-Checkout nicht reproduzierbar).
+cp "$ROOT_DIR/build/configs/flux_aarch64_virt_defconfig" "$BR_DIR/configs/"
 make -C "$BR_DIR" O="$OUT_DIR" flux_aarch64_virt_defconfig
 make -C "$BR_DIR" O="$OUT_DIR" -j"$(nproc)"
 
