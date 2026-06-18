@@ -20,6 +20,7 @@ typedef struct {
 } flux_fb_t;
 
 int  flux_fb_open(flux_fb_t *fb, const char *device);
+int  flux_fb_open_null(flux_fb_t *fb, int width, int height); /* Mock ohne /dev/fb0 */
 void flux_fb_close(flux_fb_t *fb);
 
 void flux_fb_clear(flux_fb_t *fb, uint32_t rgb);

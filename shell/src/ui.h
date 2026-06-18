@@ -44,7 +44,11 @@ int flux_ui_pin_hit(const flux_fb_t *fb, int x, int y, char *out_digit, int *out
 
 /* ---- KI-Assistent (Homescreen) ------------------------------------ */
 
-void flux_ui_draw_assistant(flux_fb_t *fb, const char *input, const char *answer, int thinking);
+/* last_q: die zuletzt gestellte Frage (Nutzer-Blase, rechts); leer wenn
+ * noch nichts gefragt wurde. input: aktuell tippender Text im Eingabefeld.
+ * answer: letzte KI-Antwort (KI-Blase, links). thinking: Lade-Animation. */
+void flux_ui_draw_assistant(flux_fb_t *fb, const char *last_q,
+                              const char *input, const char *answer, int thinking);
 
 int flux_ui_kbd_top(const flux_fb_t *fb);
 int flux_ui_kbd_hit(const flux_fb_t *fb, int x, int y,
@@ -56,6 +60,12 @@ int flux_ui_quickrow_hit(const flux_fb_t *fb, int x, int y);
 
 /* Mikrofon-Knopf rechts neben der Eingabezeile. */
 int flux_ui_mic_hit(const flux_fb_t *fb, int x, int y);
+
+/* Kopieren- und Einfuegen-Knoepfe in der Eingabeleiste.
+ * [C] kopiert den aktuellen Eingabetext in die Zwischenablage,
+ * [V] fuegt ihn wieder ein -- Touch-first, kein langer Druck noetig. */
+int flux_ui_copy_hit(const flux_fb_t *fb, int x, int y);
+int flux_ui_paste_hit(const flux_fb_t *fb, int x, int y);
 
 /* ---- Bestaetigungs-Dialog (KI will Mail/SMS/Anruf ausloesen) ------ */
 

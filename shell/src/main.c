@@ -179,6 +179,8 @@ int main(void) {
     char input_buf[256] = {0};
     char answer_buf[FLUX_MAX_RESPONSE] = {0};
     char edit_buf[4096] = {0};
+    char last_q[256] = {0};      /* zuletzt gestellte Frage (Nutzer-Blase) */
+    char clipboard[4096] = {0};  /* Zwischenablage fuer [C]/[V] in der Eingabeleiste */
 
     char pin_buf[FLUX_PIN_LEN + 1] = {0};
     int  pin_len = 0;
@@ -221,7 +223,7 @@ int main(void) {
                     screen = FLUX_SCREEN_ASSISTANT;
                     input_buf[0] = '\0';
                     answer_buf[0] = '\0';
-                    flux_ui_draw_assistant(&fb, input_buf, answer_buf, 0);
+                    flux_ui_draw_assistant(&fb, last_q, input_buf, answer_buf, 0);
                 }
             }
             continue;
@@ -261,7 +263,7 @@ int main(void) {
                     screen = FLUX_SCREEN_ASSISTANT;
                     input_buf[0] = '\0';
                     answer_buf[0] = '\0';
-                    flux_ui_draw_assistant(&fb, input_buf, answer_buf, 0);
+                    flux_ui_draw_assistant(&fb, last_q, input_buf, answer_buf, 0);
                 } else {
                     pin_error = 1;
                     flux_ui_draw_pin(&fb, pin_len, pin_error);
@@ -278,7 +280,7 @@ int main(void) {
             if (hit == FLUX_CONFIRM_CANCEL) {
                 screen = FLUX_SCREEN_ASSISTANT;
                 snprintf(answer_buf, sizeof(answer_buf), "Abgebrochen.");
-                flux_ui_draw_assistant(&fb, input_buf, answer_buf, 0);
+                flux_ui_draw_assistant(&fb, last_q, input_buf, answer_buf, 0);
             } else if (hit == FLUX_CONFIRM_EDIT) {
                 snprintf(edit_buf, sizeof(edit_buf), "%s", pending_action.body);
                 edit_target = EDIT_ACTION_BODY;
@@ -289,7 +291,7 @@ int main(void) {
                 flux_action_build_request(&pending_action, req, sizeof(req));
                 flux_ipc_send_raw(req, answer_buf, sizeof(answer_buf));
                 screen = FLUX_SCREEN_ASSISTANT;
-                flux_ui_draw_assistant(&fb, input_buf, answer_buf, 0);
+                flux_ui_draw_assistant(&fb, last_q, input_buf, answer_buf, 0);
             }
             continue;
         }
@@ -299,6 +301,28 @@ int main(void) {
             char ch = ev.ch;
 
             if (kind == FLUX_EV_TAP) {
+                /* OK-Knopf (= MIC-Position auf diesem Bildschirm) -> Speichern */
+                if (flux_ui_mic_hit(&fb, ev.x, ev.y)) {
+                    kind = FLUX_EV_ENTER;
+                    goto edit_body_enter;
+                }
+                /* Kopieren */
+                if (flux_ui_copy_hit(&fb, ev.x, ev.y)) {
+                    if (edit_buf[0]) snprintf(clipboard, sizeof(clipboard), "%s", edit_buf);
+                    continue;
+                }
+                /* Einfuegen */
+                if (flux_ui_paste_hit(&fb, ev.x, ev.y)) {
+                    if (clipboard[0]) {
+                        size_t clen = strlen(clipboard);
+                        size_t elen = strlen(edit_buf);
+                        size_t avail = sizeof(edit_buf) - elen - 1;
+                        size_t copy = clen < avail ? clen : avail;
+                        strncat(edit_buf, clipboard, copy);
+                        flux_ui_draw_edit_body(&fb, edit_buf);
+                    }
+                    continue;
+                }
                 char tap_ch = 0;
                 int tap_backspace = 0, tap_enter = 0;
                 if (!flux_ui_kbd_hit(&fb, ev.x, ev.y, &tap_ch, &tap_backspace, &tap_enter))
@@ -322,6 +346,7 @@ int main(void) {
                 if (len > 0) edit_buf[len - 1] = '\0';
                 flux_ui_draw_edit_body(&fb, edit_buf);
             } else if (kind == FLUX_EV_ENTER) {
+                edit_body_enter:
                 if (edit_target == EDIT_ACTION_BODY) {
                     snprintf(pending_action.body, sizeof(pending_action.body), "%s", edit_buf);
                     screen = FLUX_SCREEN_CONFIRM;
@@ -343,7 +368,7 @@ int main(void) {
             if (!flux_ui_list_hit(&fb, ev.x, ev.y, FLUX_SETTINGS_N, &idx, &back)) continue;
             if (back) {
                 screen = FLUX_SCREEN_ASSISTANT;
-                flux_ui_draw_assistant(&fb, input_buf, answer_buf, 0);
+                flux_ui_draw_assistant(&fb, last_q, input_buf, answer_buf, 0);
             } else {
                 edit_target = EDIT_SETTING_FIELD;
                 edit_setting_index = idx;
@@ -361,7 +386,7 @@ int main(void) {
             if (!flux_ui_list_hit(&fb, ev.x, ev.y, file_n, &idx, &back)) continue;
             if (back) {
                 screen = FLUX_SCREEN_ASSISTANT;
-                flux_ui_draw_assistant(&fb, input_buf, answer_buf, 0);
+                flux_ui_draw_assistant(&fb, last_q, input_buf, answer_buf, 0);
             } else if (idx < file_n && file_is_dir[idx]) {
                 if (strcmp(file_names_buf[idx], "..") == 0) files_go_parent();
                 else files_enter(file_names_buf[idx]);
@@ -391,7 +416,24 @@ int main(void) {
             if (flux_ui_mic_hit(&fb, ev.x, ev.y)) {
                 snprintf(answer_buf, sizeof(answer_buf),
                          "Kein Mikrofon erkannt -- Spracheingabe ist in dieser Umgebung noch nicht verfuegbar.");
-                flux_ui_draw_assistant(&fb, input_buf, answer_buf, 0);
+                flux_ui_draw_assistant(&fb, last_q, input_buf, answer_buf, 0);
+                continue;
+            }
+            if (flux_ui_copy_hit(&fb, ev.x, ev.y)) {
+                if (input_buf[0])
+                    snprintf(clipboard, sizeof(clipboard), "%s", input_buf);
+                /* kein Redraw noetig, visuelles Feedback nicht erforderlich */
+                continue;
+            }
+            if (flux_ui_paste_hit(&fb, ev.x, ev.y)) {
+                if (clipboard[0]) {
+                    size_t clen = strlen(clipboard);
+                    size_t ilen = strlen(input_buf);
+                    size_t avail = sizeof(input_buf) - ilen - 1;
+                    size_t copy = clen < avail ? clen : avail;
+                    strncat(input_buf, clipboard, copy);
+                    flux_ui_draw_assistant(&fb, last_q, input_buf, answer_buf, 0);
+                }
                 continue;
             }
         }
@@ -417,11 +459,11 @@ int main(void) {
                 input_buf[len] = ch;
                 input_buf[len + 1] = '\0';
             }
-            flux_ui_draw_assistant(&fb, input_buf, answer_buf, 0);
+            flux_ui_draw_assistant(&fb, last_q, input_buf, answer_buf, 0);
         } else if (kind == FLUX_EV_BACKSPACE) {
             size_t len = strlen(input_buf);
             if (len > 0) input_buf[len - 1] = '\0';
-            flux_ui_draw_assistant(&fb, input_buf, answer_buf, 0);
+            flux_ui_draw_assistant(&fb, last_q, input_buf, answer_buf, 0);
         } else if (kind == FLUX_EV_ENTER) {
             if (input_buf[0] == '\0') continue;
 
@@ -441,8 +483,9 @@ int main(void) {
                 continue;
             }
 
-            flux_ui_draw_assistant(&fb, input_buf, answer_buf, 1); /* "Denke nach..." sofort zeigen */
-            flux_ipc_ask(input_buf, answer_buf, sizeof(answer_buf));
+            snprintf(last_q, sizeof(last_q), "%s", input_buf); /* Frage als Nutzer-Blase sichern */
+            flux_ui_draw_assistant(&fb, last_q, "", answer_buf, 1);
+            flux_ipc_ask(last_q, answer_buf, sizeof(answer_buf));
             input_buf[0] = '\0';
 
             if (flux_action_parse(answer_buf, &pending_action)) {
@@ -450,7 +493,7 @@ int main(void) {
                 flux_ui_draw_confirm(&fb, flux_action_type_label(pending_action.type),
                                       pending_action.to, pending_action.subject, pending_action.body);
             } else {
-                flux_ui_draw_assistant(&fb, input_buf, answer_buf, 0);
+                flux_ui_draw_assistant(&fb, last_q, input_buf, answer_buf, 0);
             }
         }
     }

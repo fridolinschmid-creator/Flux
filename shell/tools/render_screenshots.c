@@ -1,0 +1,145 @@
+/* render_screenshots.c -- rendert alle UI-Bildschirme als PPM-Dateien.
+ * Kein /dev/fb0 noetig: flux_fb_open_null() ersetzt das Framebuffer-mmap
+ * durch malloc'd Speicher. ImageMagick/netpbm kann die PPMs in PNG wandeln.
+ *
+ * Aufruf: ./render_screenshots [ausgabepfad]
+ * Default-Pfad: /tmp/flux_screenshots/
+ */
+#include "../src/fb.h"
+#include "../src/ui.h"
+#include "../src/action.h"
+
+#include <stdio.h>
+#include <string.h>
+#include <stdlib.h>
+#include <sys/stat.h>
+
+static void save_ppm(const flux_fb_t *fb, const char *dir, const char *name) {
+    char path[512];
+    snprintf(path, sizeof(path), "%s/%s.ppm", dir, name);
+    FILE *f = fopen(path, "wb");
+    if (!f) { perror(path); return; }
+    fprintf(f, "P6\n%d %d\n255\n", fb->width, fb->height);
+    for (int i = 0; i < fb->width * fb->height; i++) {
+        uint32_t px = fb->back[i];
+        fputc((px >> 16) & 0xff, f);
+        fputc((px >>  8) & 0xff, f);
+        fputc( px        & 0xff, f);
+    }
+    fclose(f);
+    printf("  gespeichert: %s\n", path);
+}
+
+int main(int argc, char *argv[]) {
+    const char *outdir = (argc > 1) ? argv[1] : "/tmp/flux_screenshots";
+    mkdir(outdir, 0755);
+
+    flux_fb_t fb;
+    if (flux_fb_open_null(&fb, 480, 854) != 0) {
+        fprintf(stderr, "flux_fb_open_null fehlgeschlagen\n");
+        return 1;
+    }
+
+    printf("Rendere Flux UI-Screenshots (480x854) nach %s/ ...\n", outdir);
+
+    /* 01 -- Lockscreen */
+    flux_ui_draw_lock(&fb);
+    save_ppm(&fb, outdir, "01_lockscreen");
+
+    /* 02 -- PIN-Eingabe (2 von 4 Ziffern) */
+    flux_ui_draw_pin(&fb, 2, 0);
+    save_ppm(&fb, outdir, "02_pin");
+
+    /* 03 -- PIN falsch */
+    flux_ui_draw_pin(&fb, 0, 1);
+    save_ppm(&fb, outdir, "03_pin_fehler");
+
+    /* 04 -- Assistent leer */
+    flux_ui_draw_assistant(&fb, "", "", "", 0);
+    save_ppm(&fb, outdir, "04_assistent_leer");
+
+    /* 05 -- Assistent: tippt Frage */
+    flux_ui_draw_assistant(&fb, "", "schreibe eine E-Mail an Max", "", 0);
+    save_ppm(&fb, outdir, "05_assistent_tipp");
+
+    /* 06 -- Assistent: denkt nach (Nutzer-Blase + Lade-Blase) */
+    flux_ui_draw_assistant(&fb, "schreibe eine E-Mail an Max", "", "", 1);
+    save_ppm(&fb, outdir, "06_assistent_denkt");
+
+    /* 07 -- Assistent: normale Textantwort (keine Aktion) */
+    flux_ui_draw_assistant(&fb,
+        "wie spaet ist es?",
+        "",
+        "Es ist 14:35 Uhr.",
+        0);
+    save_ppm(&fb, outdir, "07_assistent_antwort");
+
+    /* 08 -- Assistent: laengere Antwort */
+    flux_ui_draw_assistant(&fb,
+        "erklaer mir kurz wie Flux funktioniert",
+        "",
+        "Flux ist ein KI-zentriertes Mobil-OS. "
+        "Du entsperrst das Geraet und sprichst direkt mit der KI -- "
+        "kein App-Grid, kein Suchen. "
+        "Einstellungen und Dateien erreichst du ueber die zwei "
+        "Knoepfe oben oder indem du sie einfach eintippst.",
+        0);
+    save_ppm(&fb, outdir, "08_assistent_lange_antwort");
+
+    /* 09 -- Bestaetigungs-Dialog: E-Mail */
+    flux_ui_draw_confirm(&fb,
+        "E-Mail",
+        "max@example.com",
+        "Bin heute krank",
+        "Hallo Max!\n\n"
+        "Ich muss dir leider sagen, dass ich heute krank bin "
+        "und nicht ins Buero komme.\n\n"
+        "Viele Gruesse");
+    save_ppm(&fb, outdir, "09_bestaetigung_email");
+
+    /* 10 -- Bestaetigungs-Dialog: SMS */
+    flux_ui_draw_confirm(&fb,
+        "SMS",
+        "+49 151 12345678",
+        "",
+        "Ich komme heute etwas spaeter, alles gut!");
+    save_ppm(&fb, outdir, "10_bestaetigung_sms");
+
+    /* 11 -- Bestaetigungs-Dialog: Anruf */
+    flux_ui_draw_confirm(&fb,
+        "Anruf",
+        "+49 151 12345678",
+        "",
+        "");
+    save_ppm(&fb, outdir, "11_bestaetigung_anruf");
+
+    /* 12 -- Text bearbeiten */
+    flux_ui_draw_edit_body(&fb,
+        "Hallo Max!\n\n"
+        "Ich muss dir leider sagen, dass ich heute krank bin "
+        "und nicht ins Buero komme.\n\n"
+        "Viele Gruesse");
+    save_ppm(&fb, outdir, "12_text_bearbeiten");
+
+    /* 13 -- Einstellungen */
+    const char *setting_labels[] = {
+        "PIN-Code", "SMTP-Server", "SMTP-Port",
+        "SMTP-Benutzer", "SMTP-Passwort", "Absender-Adresse", "Cloud-API-Key"
+    };
+    const char *setting_values[] = {
+        "gesetzt", "smtp.icloud.com", "587",
+        "ich@icloud.com", "********", "ich@icloud.com", "gesetzt"
+    };
+    flux_ui_draw_settings(&fb, setting_labels, setting_values, 7);
+    save_ppm(&fb, outdir, "13_einstellungen");
+
+    /* 14 -- Dateibrowser */
+    const char *names[] = { "..", "Documents", "Pictures", "Music", "Videos", "flux.conf" };
+    const char *metas[] = { "Ordner", "Ordner", "Ordner", "Ordner", "Ordner", "1.2 KB" };
+    flux_ui_draw_files(&fb, "/home/user", names, metas, 6, 0);
+    save_ppm(&fb, outdir, "14_dateien");
+
+    flux_fb_close(&fb);
+    printf("\nFertig! PPM -> PNG: convert %s/XX.ppm %s/XX.png\n", outdir, outdir);
+    return 0;
+}

@@ -55,6 +55,24 @@ void flux_fb_close(flux_fb_t *fb) {
     if (fb->fd >= 0) close(fb->fd);
 }
 
+/* Mock-Framebuffer fuer Host-Tests / Screenshots ohne /dev/fb0. */
+int flux_fb_open_null(flux_fb_t *fb, int width, int height) {
+    memset(fb, 0, sizeof(*fb));
+    fb->fd       = -1;
+    fb->mmio     = NULL;
+    fb->width    = width;
+    fb->height   = height;
+    fb->bpp      = 32;
+    fb->stride_px = width;
+    fb->screensize = (size_t)width * height * 4;
+    size_t pixels = (size_t)width * height;
+    fb->back = calloc(pixels, sizeof(uint32_t));
+    fb->prev = calloc(pixels, sizeof(uint32_t));
+    if (!fb->back || !fb->prev) { flux_fb_close(fb); return -1; }
+    memset(fb->prev, 0xFF, pixels * sizeof(uint32_t));
+    return 0;
+}
+
 static inline void put_back(flux_fb_t *fb, int x, int y, uint32_t rgb) {
     if ((unsigned)x >= (unsigned)fb->width || (unsigned)y >= (unsigned)fb->height)
         return;
@@ -134,6 +152,7 @@ int flux_fb_text_width(const char *s, int scale) {
 }
 
 void flux_fb_present(flux_fb_t *fb) {
+    if (!fb->mmio) return; /* Mock-Framebuffer (flux_fb_open_null) -- nichts zu kopieren */
     int row_bytes = fb->width * (fb->bpp / 8);
     for (int y = 0; y < fb->height; y++) {
         uint32_t *back_row = fb->back + (size_t)y * fb->stride_px;

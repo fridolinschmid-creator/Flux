@@ -11,10 +11,15 @@
 #define COL_STATUSBAR 0x161B26
 #define COL_KEY      0x1F2533
 #define COL_KEY_SPEC 0x29384A
-#define COL_ROW      0x1A2230
-#define COL_DANGER   0xE05252
-#define COL_CANCEL   0xB23B3B
-#define COL_SEND     0x2F9E6E
+#define COL_ROW          0x1A2230
+#define COL_DANGER       0xE05252
+#define COL_CANCEL       0xB23B3B
+#define COL_SEND         0x2F9E6E
+#define COL_BUBBLE_USER  0x1D7A6B  /* Nutzer-Blase: dunkles Teal */
+#define COL_BUBBLE_AI    0x1A2535  /* KI-Blase: dunkelblau */
+#define COL_CARD         0x1C2840  /* Karten-Hintergrund im Bestaetigungs-Dialog */
+#define COL_DIVIDER      0x2A3850  /* Trennlinie */
+#define CLIP_BTN_W       48        /* Breite der Kopieren-/Einfuegen-Knoepfe */
 
 #define STATUSBAR_H  40
 #define QUICKROW_H   56
@@ -365,44 +370,135 @@ static int draw_wrapped(flux_fb_t *fb, int x, int y, int max_w, const char *s,
     return cy;
 }
 
-void flux_ui_draw_assistant(flux_fb_t *fb, const char *input, const char *answer, int thinking) {
+/* ---- Nachrichtenblasen (Nutzer rechts, KI links) -------------------- */
+
+static int measure_wrapped_height(int max_w, const char *s, int scale, int line_h) {
+    char line[256];
+    int line_len = 0, lines = 0;
+    line[0] = '\0';
+    const char *word_start = s;
+    while (1) {
+        const char *word_end = word_start;
+        while (*word_end && *word_end != ' ' && *word_end != '\n') word_end++;
+        int wlen = (int)(word_end - word_start);
+        char candidate[256];
+        snprintf(candidate, sizeof(candidate), "%s%s%.*s",
+                 line, line_len ? " " : "", wlen, word_start);
+        if (flux_fb_text_width(candidate, scale) > max_w && line_len > 0) {
+            lines++;
+            line[0] = '\0'; line_len = 0;
+            snprintf(candidate, sizeof(candidate), "%.*s", wlen, word_start);
+        }
+        strncpy(line, candidate, sizeof(line) - 1);
+        line[sizeof(line) - 1] = '\0';
+        line_len = (int)strlen(line);
+        if (*word_end == '\n') { lines++; line[0] = '\0'; line_len = 0; word_end++; }
+        if (!*word_end) break;
+        word_start = word_end + (*word_end == ' ' ? 1 : 0);
+        if (!*word_start) break;
+    }
+    if (line_len > 0) lines++;
+    return lines * line_h;
+}
+
+#define BUBBLE_PAD_X 14
+#define BUBBLE_PAD_Y  9
+
+/* Zeichnet eine Nachrichtenblase, gibt den y-Wert direkt unter der Blase
+ * plus 8px Abstand zurueck (fuer die naechste Blase). */
+static int draw_bubble(flux_fb_t *fb, const char *text, int y,
+                        int max_w, uint32_t col, int scale, int line_h,
+                        int right_align) {
+    int text_w = max_w - 2 * BUBBLE_PAD_X;
+    int text_h = measure_wrapped_height(text_w, text, scale, line_h);
+    if (text_h <= 0) text_h = line_h;
+    int bubble_h = text_h + 2 * BUBBLE_PAD_Y;
+    int bx = right_align ? (fb->width - max_w - 10) : 10;
+    flux_fb_fill_rect(fb, bx, y, max_w, bubble_h, col);
+    draw_wrapped(fb, bx + BUBBLE_PAD_X, y + BUBBLE_PAD_Y, text_w,
+                 text, COL_TEXT, scale, line_h);
+    return y + bubble_h + 8;
+}
+
+/* ---- Hilfsfunktion: Eingabeleiste zeichnen (Assistent + Bearbeiten) -- */
+
+static void draw_input_bar(flux_fb_t *fb, int input_y, const char *prompt_text,
+                             int show_mic) {
+    flux_fb_fill_rect(fb, 0, input_y, fb->width, INPUT_BAR_H, COL_STATUSBAR);
+
+    /* Rechts: MIC-Knopf (Assistent) oder OK-Knopf (Bearbeiten) */
+    int mic_x = fb->width - MIC_BTN_W;
+    flux_fb_fill_rect(fb, mic_x + 4, input_y + 4, MIC_BTN_W - 8, INPUT_BAR_H - 8,
+                       COL_KEY_SPEC);
+    const char *mic_label = show_mic ? "MIC" : "OK";
+    int mlw = flux_fb_text_width(mic_label, 2);
+    flux_fb_text(fb, mic_x + (MIC_BTN_W - mlw) / 2,
+                 input_y + (INPUT_BAR_H - 16) / 2, mic_label, COL_ACCENT, 2);
+
+    /* Links vom MIC: [V] Einfuegen */
+    int paste_x = mic_x - CLIP_BTN_W;
+    flux_fb_fill_rect(fb, paste_x + 3, input_y + 4, CLIP_BTN_W - 6, INPUT_BAR_H - 8, COL_KEY);
+    int pw = flux_fb_text_width("V", 2);
+    flux_fb_text(fb, paste_x + (CLIP_BTN_W - pw) / 2,
+                 input_y + (INPUT_BAR_H - 16) / 2, "V", COL_DIM, 2);
+
+    /* Links vom Einfuegen: [C] Kopieren */
+    int copy_x = paste_x - CLIP_BTN_W;
+    flux_fb_fill_rect(fb, copy_x + 3, input_y + 4, CLIP_BTN_W - 6, INPUT_BAR_H - 8, COL_KEY);
+    int cw = flux_fb_text_width("C", 2);
+    flux_fb_text(fb, copy_x + (CLIP_BTN_W - cw) / 2,
+                 input_y + (INPUT_BAR_H - 16) / 2, "C", COL_DIM, 2);
+
+    /* Eingabetext links (wird ggf. von Knoepfen ueberlagert, falls zu lang) */
+    if (prompt_text)
+        flux_fb_text(fb, 12, input_y + (INPUT_BAR_H - 21) / 2, prompt_text, COL_TEXT, 3);
+}
+
+void flux_ui_draw_assistant(flux_fb_t *fb, const char *last_q,
+                              const char *input, const char *answer, int thinking) {
     flux_fb_clear(fb, COL_BG);
     draw_statusbar(fb);
     draw_quickrow(fb);
 
-    const char *title = "Frag Flux";
-    flux_fb_text(fb, 16, STATUSBAR_H + QUICKROW_H + 16, title, COL_ACCENT, 4);
+    int kbd_top   = flux_ui_kbd_top(fb);
+    int input_y   = kbd_top - INPUT_BAR_H;
+    int chat_top  = STATUSBAR_H + QUICKROW_H + 8;
 
-    int answer_y = STATUSBAR_H + QUICKROW_H + 64;
-    if (thinking) {
-        flux_fb_text(fb, 16, answer_y, "Denke nach...", COL_DIM, 3);
-    } else if (answer && *answer) {
-        draw_wrapped(fb, 16, answer_y, fb->width - 32, answer, COL_TEXT, 3, 34);
+    int bubble_max_w = fb->width * 3 / 4;
+    int cy = chat_top;
+
+    int has_q = (last_q && *last_q);
+    int has_a = (answer && *answer);
+
+    if (!has_q && !thinking && !has_a) {
+        /* Leerer Zustand: kleine Kopfzeile + Tipp-Hinweis */
+        flux_fb_text(fb, 16, cy, "Frag Flux", COL_ACCENT, 3);
+        cy += 36;
+        draw_wrapped(fb, 16, cy, fb->width - 32,
+                     "Tippe deine Frage. Sage \"Einstellungen\" oder "
+                     "\"Dateien\" fuer direkten Zugriff.",
+                     COL_DIM, 2, 26);
     } else {
-        draw_wrapped(fb, 16, answer_y, fb->width - 32,
-                     "Frag mich nach Uhrzeit, Akkustand, oder sag/schreib "
-                     "\"Einstellungen\" bzw. \"Dateien\".", COL_DIM, 2, 26);
+        /* Nutzer-Blase rechts (gruen-teal) */
+        if (has_q)
+            cy = draw_bubble(fb, last_q, cy, bubble_max_w,
+                              COL_BUBBLE_USER, 2, 24, 1);
+
+        /* KI-Blase links (dunkelblau) oder Lade-Animation */
+        if (thinking) {
+            flux_fb_fill_rect(fb, 10, cy, bubble_max_w, 40, COL_BUBBLE_AI);
+            flux_fb_text(fb, 10 + BUBBLE_PAD_X, cy + 12, "Denke nach ...", COL_DIM, 2);
+        } else if (has_a) {
+            draw_bubble(fb, answer, cy, bubble_max_w, COL_BUBBLE_AI, 2, 24, 0);
+        }
     }
 
-    /* Eingabezeile direkt ueber der Bildschirmtastatur, mit
-     * Mikrofon-Knopf am rechten Rand. */
-    int kbd_top = flux_ui_kbd_top(fb);
-    int input_y = kbd_top - INPUT_BAR_H;
-    flux_fb_fill_rect(fb, 0, input_y, fb->width, INPUT_BAR_H, COL_STATUSBAR);
-
-    int mic_x = fb->width - MIC_BTN_W;
-    flux_fb_fill_rect(fb, mic_x + 4, input_y + 4, MIC_BTN_W - 8, INPUT_BAR_H - 8, COL_KEY_SPEC);
-    const char *mic_label = "MIC";
-    int mlw = flux_fb_text_width(mic_label, 2);
-    flux_fb_text(fb, mic_x + (MIC_BTN_W - mlw) / 2, input_y + (INPUT_BAR_H - 16) / 2,
-                 mic_label, COL_ACCENT, 2);
-
+    /* Eingabeleiste mit [C] [V] [MIC] */
     char prompt[300];
     snprintf(prompt, sizeof(prompt), "> %s_", input);
-    flux_fb_text(fb, 16, input_y + (INPUT_BAR_H - 21) / 2, prompt, COL_TEXT, 3);
+    draw_input_bar(fb, input_y, prompt, 1);
 
     draw_keyboard(fb);
-
     flux_fb_present(fb);
 }
 
@@ -411,6 +507,25 @@ int flux_ui_mic_hit(const flux_fb_t *fb, int x, int y) {
     int input_y = kbd_top - INPUT_BAR_H;
     int mic_x = fb->width - MIC_BTN_W;
     return (x >= mic_x && y >= input_y && y < input_y + INPUT_BAR_H);
+}
+
+int flux_ui_copy_hit(const flux_fb_t *fb, int x, int y) {
+    int kbd_top  = flux_ui_kbd_top(fb);
+    int input_y  = kbd_top - INPUT_BAR_H;
+    int mic_x    = fb->width - MIC_BTN_W;
+    int paste_x  = mic_x  - CLIP_BTN_W;
+    int copy_x   = paste_x - CLIP_BTN_W;
+    return (x >= copy_x && x < copy_x + CLIP_BTN_W &&
+            y >= input_y && y < input_y + INPUT_BAR_H);
+}
+
+int flux_ui_paste_hit(const flux_fb_t *fb, int x, int y) {
+    int kbd_top  = flux_ui_kbd_top(fb);
+    int input_y  = kbd_top - INPUT_BAR_H;
+    int mic_x    = fb->width - MIC_BTN_W;
+    int paste_x  = mic_x - CLIP_BTN_W;
+    return (x >= paste_x && x < paste_x + CLIP_BTN_W &&
+            y >= input_y && y < input_y + INPUT_BAR_H);
 }
 
 /* ---- Bestaetigungs-Dialog (KI will Mail/SMS/Anruf ausloesen) --------
@@ -436,29 +551,51 @@ void flux_ui_draw_confirm(flux_fb_t *fb, const char *type_label,
     flux_fb_clear(fb, COL_BG);
     draw_statusbar(fb);
 
-    char title[160];
-    snprintf(title, sizeof(title), "Flux moechte eine %s senden", type_label);
-    flux_fb_text(fb, 16, STATUSBAR_H + 16, title, COL_ACCENT, 3);
+    /* Kopfzeile: Aktionstyp gross zentriert */
+    char header[80];
+    snprintf(header, sizeof(header), "%s senden?", type_label);
+    int hw = flux_fb_text_width(header, 4);
+    flux_fb_text(fb, (fb->width - hw) / 2, STATUSBAR_H + 14, header, COL_ACCENT, 4);
 
-    int y = STATUSBAR_H + 64;
-    char line[300];
-    snprintf(line, sizeof(line), "An: %s", to);
-    flux_fb_text(fb, 16, y, line, COL_TEXT, 2);
-    y += 30;
-    if (subject && subject[0]) {
-        snprintf(line, sizeof(line), "Betreff: %s", subject);
-        flux_fb_text(fb, 16, y, line, COL_TEXT, 2);
-        y += 30;
-    }
-    y += 10;
-    draw_wrapped(fb, 16, y, fb->width - 32, body, COL_TEXT, 2, 28);
-
+    /* Aktions-Knoepfe ganz unten */
     btn_geom_t btn[3];
     build_confirm_buttons(fb, btn);
+
+    /* Karte zwischen Kopfzeile und Knoepfen */
+    int card_x = 10;
+    int card_y = STATUSBAR_H + 68;
+    int card_w = fb->width - 2 * card_x;
+    int card_h = btn[0].y - card_y - 6;
+    flux_fb_fill_rect(fb, card_x, card_y, card_w, card_h, COL_CARD);
+
+    int cx = card_x + 14;
+    int cy = card_y + 12;
+
+    /* An: */
+    flux_fb_text(fb, cx, cy, "An:", COL_DIM, 2);
+    flux_fb_text(fb, cx + 38, cy, to, COL_ACCENT, 2);
+    cy += 28;
+
+    /* Betreff: (optional) */
+    if (subject && subject[0]) {
+        flux_fb_text(fb, cx, cy, "Betreff:", COL_DIM, 2);
+        flux_fb_text(fb, cx + 80, cy, subject, COL_TEXT, 2);
+        cy += 28;
+    }
+
+    /* Trennlinie */
+    flux_fb_fill_rect(fb, cx, cy, card_w - 28, 2, COL_DIVIDER);
+    cy += 10;
+
+    /* Nachrichtentext */
+    draw_wrapped(fb, cx, cy, card_w - 28, body, COL_TEXT, 2, 26);
+
+    /* Aktions-Knoepfe */
     static const char *labels[3] = { "Bearbeiten", "Abbrechen", "Senden" };
     const uint32_t cols[3] = { COL_KEY_SPEC, COL_CANCEL, COL_SEND };
     for (int i = 0; i < 3; i++) {
-        flux_fb_fill_rect(fb, btn[i].x + 3, btn[i].y + 3, btn[i].w - 6, btn[i].h - 6, cols[i]);
+        flux_fb_fill_rect(fb, btn[i].x + 3, btn[i].y + 3,
+                           btn[i].w - 6, btn[i].h - 6, cols[i]);
         int tw = flux_fb_text_width(labels[i], 2);
         flux_fb_text(fb, btn[i].x + (btn[i].w - tw) / 2,
                      btn[i].y + (btn[i].h - 16) / 2, labels[i], COL_TEXT, 2);
@@ -489,13 +626,17 @@ void flux_ui_draw_edit_body(flux_fb_t *fb, const char *body) {
     draw_statusbar(fb);
     flux_fb_text(fb, 16, STATUSBAR_H + 16, "Text bearbeiten", COL_ACCENT, 3);
 
-    draw_wrapped(fb, 16, STATUSBAR_H + 64, fb->width - 32, body, COL_TEXT, 2, 28);
-
+    /* Text als bearbeitbare Blase (hellerer Hintergrund = aktiv) */
+    int text_y = STATUSBAR_H + 64;
     int kbd_top = flux_ui_kbd_top(fb);
     int input_y = kbd_top - INPUT_BAR_H;
-    flux_fb_fill_rect(fb, 0, input_y, fb->width, INPUT_BAR_H, COL_STATUSBAR);
-    const char *hint = "OK auf der Tastatur speichert die Aenderung";
-    flux_fb_text(fb, 16, input_y + (INPUT_BAR_H - 21) / 2, hint, COL_DIM, 2);
+    int text_h  = input_y - text_y - 8;
+    if (text_h > 0)
+        flux_fb_fill_rect(fb, 8, text_y, fb->width - 16, text_h, COL_CARD);
+    draw_wrapped(fb, 22, text_y + 10, fb->width - 44, body, COL_TEXT, 2, 28);
+
+    /* Eingabeleiste: [C] [V] [OK] -- OK speichert/schliesst */
+    draw_input_bar(fb, input_y, NULL, 0);
 
     draw_keyboard(fb);
     flux_fb_present(fb);
