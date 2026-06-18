@@ -22,7 +22,11 @@ typedef enum {
     FLUX_SCREEN_SETTINGS,
     FLUX_SCREEN_FILES,
     FLUX_SCREEN_FILE_VIEWER,
-    FLUX_SCREEN_NOTIFY,      /* Benachrichtigungs-Overlay (Wisch nach unten) */
+    FLUX_SCREEN_NOTIFY,       /* Benachrichtigungs-Overlay (Wisch nach unten) */
+    FLUX_SCREEN_CALENDAR,    /* Kalenderansicht */
+    FLUX_SCREEN_CONTACTS,    /* Kontaktliste */
+    FLUX_SCREEN_GALLERY,     /* Fotogalerie */
+    FLUX_SCREEN_IMAGE_VIEWER, /* Einzelbild-Betrachter mit KI-Analyse */
 } flux_screen_t;
 
 typedef enum {
@@ -123,6 +127,59 @@ void flux_ui_draw_notify(flux_fb_t *fb);
 
 /* Gibt 1 wenn der Bildschirm per Tap geschlossen werden soll. */
 int flux_ui_notify_hit(const flux_fb_t *fb, int x, int y);
+
+/* ---- Kalender -------------------------------------------------------
+ * Monatsgitter. today_day: heutiger Tag (1-31, 0=unbekannt).
+ * selected_day: markierter Tag (0=keiner). event_strs: Ereignis-Strings
+ * fuer den ausgewaehlten Tag (aus /etc/flux/calendar.txt). */
+
+void flux_ui_draw_calendar(flux_fb_t *fb, int year, int month,
+                            int today_day, int selected_day,
+                            const char **event_strs, int n_events);
+
+/* Gibt 1 bei Treffer. Setzt *day (1-31) bei Tagszellen,
+ * *prev_month / *next_month bei den Navigationspfeilen. */
+int flux_ui_calendar_hit(const flux_fb_t *fb, int x, int y,
+                          int *day, int *prev_month, int *next_month);
+
+/* ---- Kontakte -------------------------------------------------------
+ * names/details parallel (z.B. "+49 151 ...  ich@mail.de").
+ * selected_idx: -1 = keiner. Nutzt dieselbe Listen-Infrastruktur wie
+ * Einstellungen/Dateien. */
+
+void flux_ui_draw_contacts(flux_fb_t *fb, const char **names,
+                            const char **details, int n, int selected_idx);
+
+/* ---- Fotogalerie ---------------------------------------------------- */
+
+/* Zeigt eine Liste von Fotonamen mit Datumsangaben.
+ * names/dates parallel. selected_idx: -1 = kein. */
+void flux_ui_draw_gallery(flux_fb_t *fb, const char **names, const char **dates,
+                           int n, int selected_idx);
+
+/* Gibt 1 wenn der Kamera-Aufnahme-Knopf getroffen. */
+int flux_ui_gallery_camera_hit(const flux_fb_t *fb, int x, int y);
+
+/* ---- Bild-Betrachter ------------------------------------------------ */
+
+/* Zeigt ein skaliertes Bild (bereits auf img_w x img_h skaliert als RGB32).
+ * ai_caption: KI-Beschreibung (leer = noch nicht analysiert).
+ * analyzing: 1 = Analyse laeuft (Lade-Indikator). */
+void flux_ui_draw_image_viewer(flux_fb_t *fb, const char *filename,
+                                const uint32_t *pixels, int img_w, int img_h,
+                                const char *ai_caption, int analyzing);
+
+/* Hit-Test fuer den Bild-Betrachter.
+ * Setzt *back, *analyze oder *del auf 1 bei Treffer. */
+int flux_ui_image_viewer_hit(const flux_fb_t *fb, int x, int y,
+                              int *back, int *analyze, int *del);
+
+/* ---- Tap-Ripple-Animation ------------------------------------------
+ * Zeichnet einen Rahmen des Expanding-Ring-Effekts bei (cx,cy).
+ * frame: 0 (klein) bis 4 (gross+verblasst). Ruft flux_fb_present()
+ * NICHT auf -- Aufrufer kuemmert sich darum. */
+
+void flux_ui_draw_ripple(flux_fb_t *fb, int cx, int cy, int frame);
 
 /* ---- Farbthema ----------------------------------------------------- */
 

@@ -17,6 +17,7 @@
  *   vibrate          -- Geraet vibrieren lassen, ARG: Dauer in ms (z.B. 300)
  */
 #include "tools.h"
+#include "vision.h"
 #include "../../common/flux_config.h"
 
 #include <curl/curl.h>
@@ -748,6 +749,280 @@ static int tool_vibrate(const char *arg, char *out, size_t cap) {
     return 1;
 }
 
+/* ---- contact_save ---------------------------------------------------- */
+static int tool_contact_save(const char *arg, char *out, size_t cap) {
+    if (!arg || !*arg) {
+        snprintf(out, cap, "Fehler: kein Kontakt angegeben (Format: Name,Telefon,Email)");
+        return 1;
+    }
+    mkdir("/etc/flux", 0755);
+    FILE *f = fopen("/etc/flux/contacts.txt", "a");
+    if (!f) {
+        snprintf(out, cap, "Fehler: Kontakt konnte nicht gespeichert werden");
+        return 1;
+    }
+    /* Strip trailing newline */
+    char entry[256];
+    snprintf(entry, sizeof(entry), "%s", arg);
+    size_t l = strlen(entry);
+    while (l > 0 && (entry[l-1] == '\n' || entry[l-1] == '\r')) entry[--l] = '\0';
+    fprintf(f, "%s\n", entry);
+    fclose(f);
+    snprintf(out, cap, "Kontakt gespeichert: %s", entry);
+    return 1;
+}
+
+/* ---- contacts_list --------------------------------------------------- */
+static int tool_contacts_list(const char *arg, char *out, size_t cap) {
+    (void)arg;
+    FILE *f = fopen("/etc/flux/contacts.txt", "r");
+    if (!f) {
+        snprintf(out, cap, "Keine Kontakte gespeichert. "
+                 "Speichere mit: Speichere Kontakt Name,Telefon,Email");
+        return 1;
+    }
+    char tmp[4096];
+    size_t pos = snprintf(tmp, sizeof(tmp), "Gespeicherte Kontakte:\n");
+    char line[256];
+    int n = 0;
+    while (fgets(line, sizeof(line), f) && pos + 2 < sizeof(tmp)) {
+        if (line[0] == '#' || line[0] == '\n') continue;
+        size_t ll = strlen(line);
+        if (pos + ll + 1 < sizeof(tmp)) {
+            memcpy(tmp + pos, line, ll);
+            pos += ll;
+            tmp[pos] = '\0';
+        }
+        n++;
+    }
+    fclose(f);
+    if (!n) snprintf(out, cap, "Keine Kontakte vorhanden.");
+    else snprintf(out, cap, "%s", tmp);
+    return 1;
+}
+
+/* ---- calendar_add ---------------------------------------------------- */
+static int tool_calendar_add(const char *arg, char *out, size_t cap) {
+    if (!arg || !*arg) {
+        snprintf(out, cap, "Fehler: kein Termin angegeben (Format: YYYY-MM-DD HH:MM Beschreibung)");
+        return 1;
+    }
+    mkdir("/etc/flux", 0755);
+    FILE *f = fopen("/etc/flux/calendar.txt", "a");
+    if (!f) {
+        snprintf(out, cap, "Fehler: Termin konnte nicht gespeichert werden");
+        return 1;
+    }
+    char entry[256];
+    snprintf(entry, sizeof(entry), "%s", arg);
+    size_t l = strlen(entry);
+    while (l > 0 && (entry[l-1] == '\n' || entry[l-1] == '\r')) entry[--l] = '\0';
+    /* If no date prefix given, prepend today */
+    if (!(entry[4] == '-' && entry[7] == '-')) {
+        time_t t = time(NULL); struct tm tm; localtime_r(&t, &tm);
+        char dated[256];
+        strftime(dated, sizeof(dated), "%Y-%m-%d ", &tm);
+        snprintf(entry, sizeof(entry), "%s%s", dated, arg);
+        l = strlen(entry);
+        while (l > 0 && (entry[l-1] == '\n' || entry[l-1] == '\r')) entry[--l] = '\0';
+    }
+    fprintf(f, "%s\n", entry);
+    fclose(f);
+    snprintf(out, cap, "Termin eingetragen: %s", entry);
+    return 1;
+}
+
+/* ---- calendar_list --------------------------------------------------- */
+static int tool_calendar_list(const char *arg, char *out, size_t cap) {
+    (void)arg;
+    FILE *f = fopen("/etc/flux/calendar.txt", "r");
+    if (!f) {
+        snprintf(out, cap, "Keine Termine gespeichert. "
+                 "Termin hinzufuegen: YYYY-MM-DD HH:MM Beschreibung");
+        return 1;
+    }
+    time_t now = time(NULL);
+    struct tm tm_now; localtime_r(&now, &tm_now);
+    char today[12]; strftime(today, sizeof(today), "%Y-%m-%d", &tm_now);
+
+    char tmp[4096];
+    size_t pos = snprintf(tmp, sizeof(tmp), "Bevorstehende Termine:\n");
+    char line[256]; int n = 0;
+    while (fgets(line, sizeof(line), f) && n < 10) {
+        if (line[0] == '#' || line[0] == '\n') continue;
+        size_t ll = strlen(line);
+        while (ll > 0 && (line[ll-1] == '\n' || line[ll-1] == '\r')) line[--ll] = '\0';
+        if (!line[0]) continue;
+        /* Only show events from today onward (simple string compare works for ISO dates) */
+        if (strncmp(line, today, 10) < 0) continue;
+        if (pos + ll + 2 < sizeof(tmp)) {
+            tmp[pos++] = ' '; tmp[pos++] = ' ';
+            memcpy(tmp + pos, line, ll); pos += ll;
+            tmp[pos++] = '\n'; tmp[pos] = '\0';
+        }
+        n++;
+    }
+    fclose(f);
+    if (!n) { snprintf(out, cap, "Keine bevorstehenden Termine."); }
+    else    { snprintf(out, cap, "%s", tmp); }
+    return 1;
+}
+
+/* ---- search_files ---------------------------------------------------- */
+static void search_files_walk(const char *base, const char *pattern,
+                               char *out, size_t cap, int *count) {
+    if (*count >= 20) return;
+    DIR *d = opendir(base);
+    if (!d) return;
+    struct dirent *e;
+    while ((e = readdir(d)) != NULL && *count < 20) {
+        if (e->d_name[0] == '.') continue;
+        char full[1280];
+        snprintf(full, sizeof(full), "%s/%s", base, e->d_name);
+        struct stat st;
+        if (stat(full, &st) != 0) continue;
+        /* Case-insensitive name match */
+        char lower_name[256], lower_pat[128];
+        for (int i = 0; e->d_name[i] && i < 255; i++)
+            lower_name[i] = (e->d_name[i] >= 'A' && e->d_name[i] <= 'Z')
+                           ? e->d_name[i] + 32 : e->d_name[i];
+        lower_name[strlen(e->d_name)] = '\0';
+        for (int i = 0; pattern[i] && i < 127; i++)
+            lower_pat[i] = (pattern[i] >= 'A' && pattern[i] <= 'Z')
+                          ? pattern[i] + 32 : pattern[i];
+        lower_pat[strlen(pattern)] = '\0';
+        if (strstr(lower_name, lower_pat)) {
+            size_t ol = strlen(out);
+            snprintf(out + ol, cap - ol, "  %s\n", full);
+            (*count)++;
+        }
+        if (S_ISDIR(st.st_mode))
+            search_files_walk(full, pattern, out, cap, count);
+    }
+    closedir(d);
+}
+
+static int tool_search_files(const char *arg, char *out, size_t cap) {
+    if (!arg || !*arg) {
+        snprintf(out, cap, "Fehler: kein Suchbegriff angegeben");
+        return 1;
+    }
+    snprintf(out, cap, "Suche nach \"%s\" in /home/user/:\n", arg);
+    int count = 0;
+    search_files_walk("/home/user", arg, out, cap, &count);
+    if (!count) {
+        size_t l = strlen(out);
+        snprintf(out + l, cap - l, "  (keine Treffer)");
+    }
+    return 1;
+}
+
+/* ---- prefs_set ------------------------------------------------------- */
+static int tool_prefs_set(const char *arg, char *out, size_t cap) {
+    if (!arg || !*arg) {
+        snprintf(out, cap, "Fehler: keine Praeferenz angegeben");
+        return 1;
+    }
+    mkdir("/etc/flux", 0755);
+    FILE *f = fopen("/etc/flux/prefs.txt", "a");
+    if (!f) {
+        snprintf(out, cap, "Fehler: Praeferenz konnte nicht gespeichert werden");
+        return 1;
+    }
+    char entry[256]; snprintf(entry, sizeof(entry), "%s", arg);
+    size_t l = strlen(entry);
+    while (l > 0 && (entry[l-1] == '\n' || entry[l-1] == '\r')) entry[--l] = '\0';
+    fprintf(f, "%s\n", entry);
+    fclose(f);
+    snprintf(out, cap, "Praeferenz gespeichert: %s", entry);
+    return 1;
+}
+
+/* ---- image_list ------------------------------------------------------- */
+static int tool_image_list(const char *arg, char *out, size_t cap) {
+    (void)arg;
+    const char *dir = "/home/user/Pictures";
+    DIR *d = opendir(dir);
+    if (!d) {
+        snprintf(out, cap, "Keine Fotos gefunden (Verzeichnis existiert nicht).");
+        return 1;
+    }
+    struct dirent *e;
+    size_t pos = 0;
+    int count = 0;
+    pos += (size_t)snprintf(out + pos, cap - pos, "Fotos in %s:\n", dir);
+    while ((e = readdir(d)) != NULL && count < 50) {
+        size_t nl = strlen(e->d_name);
+        if (nl < 4) continue;
+        const char *ext = e->d_name + nl - 4;
+        if (strcmp(ext, ".ppm") != 0 && strcmp(ext, ".jpg") != 0 &&
+            strcmp(ext, ".png") != 0) continue;
+        if (pos + nl + 4 >= cap) break;
+        pos += (size_t)snprintf(out + pos, cap - pos, "  %s\n", e->d_name);
+        count++;
+    }
+    closedir(d);
+    if (count == 0) snprintf(out, cap, "Noch keine Fotos vorhanden.");
+    return 1;
+}
+
+/* ---- image_analyze ---------------------------------------------------- */
+static int tool_image_analyze(const char *arg, char *out, size_t cap) {
+    if (!arg || !*arg) {
+        snprintf(out, cap, "Fehler: kein Bildpfad angegeben.");
+        return 1;
+    }
+    /* Relativen Pfad in /home/user/Pictures/ auflösen */
+    char full[512];
+    if (arg[0] == '/') {
+        snprintf(full, sizeof(full), "%s", arg);
+    } else {
+        snprintf(full, sizeof(full), "/home/user/Pictures/%s", arg);
+    }
+    if (access(full, R_OK) != 0) {
+        snprintf(out, cap, "Bilddatei nicht gefunden: %s", full);
+        return 1;
+    }
+    return flux_vision_analyze(full, out, cap, NULL);
+}
+
+/* ---- image_take ------------------------------------------------------- */
+static int tool_image_take(const char *arg, char *out, size_t cap) {
+    (void)arg;
+    /* Einfache Testmuster-Aufnahme (kein V4L2 in fluxaid -- das laeuft im Shell) */
+    mkdir("/home/user", 0755);
+    mkdir("/home/user/Pictures", 0755);
+    time_t t = time(NULL);
+    struct tm tmv; localtime_r(&t, &tmv);
+    char path[256];
+    strftime(path, sizeof(path), "/home/user/Pictures/IMG_%Y%m%d_%H%M%S.ppm", &tmv);
+
+    /* Testmuster als PPM erzeugen */
+    FILE *f = fopen(path, "wb");
+    if (!f) { snprintf(out, cap, "Fehler beim Speichern des Fotos."); return 1; }
+    int W = 320, H = 320;
+    fprintf(f, "P6\n%d %d\n255\n", W, H);
+    for (int y = 0; y < H; y++) {
+        for (int x = 0; x < W; x++) {
+            int r, g, b;
+            if (y < H * 2 / 5) {
+                r = 80  + y * 60 / (H * 2 / 5);
+                g = 140 + y * 50 / (H * 2 / 5);
+                b = 220;
+            } else {
+                r = 80;  g = 110; b = 40;
+                if ((x * 7 + y * 13) % 20 == 0) { r -= 15; g -= 15; }
+            }
+            fputc((unsigned char)(r < 0 ? 0 : r > 255 ? 255 : r), f);
+            fputc((unsigned char)(g < 0 ? 0 : g > 255 ? 255 : g), f);
+            fputc((unsigned char)(b < 0 ? 0 : b > 255 ? 255 : b), f);
+        }
+    }
+    fclose(f);
+    snprintf(out, cap, "Foto aufgenommen und gespeichert: %s", path);
+    return 1;
+}
+
 /* ---- Dispatch -------------------------------------------------------- */
 
 int flux_tool_exec(const char *name, const char *arg,
@@ -769,6 +1044,15 @@ int flux_tool_exec(const char *name, const char *arg,
     if (strcmp(name, "brightness_set")   == 0) return tool_brightness_set(arg, out, out_cap);
     if (strcmp(name, "wifi_info")        == 0) return tool_wifi_info(arg, out, out_cap);
     if (strcmp(name, "vibrate")          == 0) return tool_vibrate(arg, out, out_cap);
+    if (strcmp(name, "contact_save")   == 0) return tool_contact_save(arg, out, out_cap);
+    if (strcmp(name, "contacts_list")  == 0) return tool_contacts_list(arg, out, out_cap);
+    if (strcmp(name, "calendar_add")   == 0) return tool_calendar_add(arg, out, out_cap);
+    if (strcmp(name, "calendar_list")  == 0) return tool_calendar_list(arg, out, out_cap);
+    if (strcmp(name, "search_files")   == 0) return tool_search_files(arg, out, out_cap);
+    if (strcmp(name, "prefs_set")      == 0) return tool_prefs_set(arg, out, out_cap);
+    if (strcmp(name, "image_list")    == 0) return tool_image_list(arg, out, out_cap);
+    if (strcmp(name, "image_analyze") == 0) return tool_image_analyze(arg, out, out_cap);
+    if (strcmp(name, "image_take")    == 0) return tool_image_take(arg, out, out_cap);
     return 0; /* unbekanntes Tool */
 }
 
@@ -796,6 +1080,15 @@ const char *flux_tools_description(void) {
         "  brightness_set   -- Bildschirmhelligkeit setzen. ARG: 0-100 (Prozent)\n"
         "  wifi_info        -- WLAN-Signalstaerke und Interface. ARG: (leer)\n"
         "  vibrate          -- Geraet vibrieren lassen. ARG: Dauer in ms (z.B. 300)\n"
+        "  contact_save    -- Kontakt speichern. ARG: Name,Telefon,Email\n"
+        "  contacts_list   -- Alle Kontakte anzeigen. ARG: (leer)\n"
+        "  calendar_add    -- Termin eintragen. ARG: YYYY-MM-DD HH:MM Beschreibung\n"
+        "  calendar_list   -- Bevorstehende Termine. ARG: (leer)\n"
+        "  search_files    -- Dateien suchen. ARG: Suchbegriff (in /home/user/)\n"
+        "  prefs_set       -- Nutzerpraeferenz merken (fuer spaetere Kontextnutzung). ARG: Praeferenztext\n"
+        "  image_list      -- Fotos in /home/user/Pictures/ auflisten. ARG: (leer)\n"
+        "  image_analyze   -- Bild per KI analysieren (Was ist drauf? Wo wurde es aufgenommen?). ARG: Dateiname oder Pfad\n"
+        "  image_take      -- Neues Foto aufnehmen und speichern. ARG: (leer)\n"
         "Verwende Tools NUR wenn Echtzeitdaten benoetigt werden (Wetter, Dateien, Berechnung usw.). "
         "Normale Fragen beantworte ohne Tools.";
 }

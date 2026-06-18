@@ -3,9 +3,11 @@
 #include "../../common/flux_config.h"
 
 #include <curl/curl.h>
+#include <time.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 
 #define FLUX_DEFAULT_MODEL "claude-haiku-4-5-20251001"
 #define FLUX_API_URL       "https://api.anthropic.com/v1/messages"
@@ -237,10 +239,24 @@ void flux_provider_ask(const char *question, char *out, size_t out_cap) {
     const char *model = getenv("FLUX_AI_MODEL");
     if (!model || !*model) model = FLUX_DEFAULT_MODEL;
 
-    /* System-Prompt = Basis + Tool-Beschreibung */
-    char system_prompt[4096];
-    snprintf(system_prompt, sizeof(system_prompt),
-             "%s\n\n%s", FLUX_SYSTEM_PROMPT_BASE, flux_tools_description());
+    /* System-Prompt = Basis + Uhrzeit/Datum + Praeferenzen + Tool-Beschreibung */
+    char system_prompt[6144];
+    {
+        time_t _t = time(NULL); struct tm _tm; localtime_r(&_t, &_tm);
+        char _dt[64]; strftime(_dt, sizeof(_dt), "%A, %d. %B %Y, %H:%M Uhr", &_tm);
+        char _prefs[512] = {0};
+        FILE *_pf = fopen("/etc/flux/prefs.txt", "r");
+        if (_pf) { size_t _n = fread(_prefs, 1, sizeof(_prefs)-1, _pf); _prefs[_n] = '\0'; fclose(_pf); }
+        if (_prefs[0])
+            snprintf(system_prompt, sizeof(system_prompt),
+                     "%s\n\nAktuelles Datum/Uhrzeit: %s\n"
+                     "Nutzerpraeferenzen (beachten):\n%s\n\n%s",
+                     FLUX_SYSTEM_PROMPT_BASE, _dt, _prefs, flux_tools_description());
+        else
+            snprintf(system_prompt, sizeof(system_prompt),
+                     "%s\n\nAktuelles Datum/Uhrzeit: %s\n\n%s",
+                     FLUX_SYSTEM_PROMPT_BASE, _dt, flux_tools_description());
+    }
 
     /* Erster API-Aufruf -- mit Gespraechsverlauf */
     if (!api_call(api_key, model, system_prompt, question, out, out_cap, 1))

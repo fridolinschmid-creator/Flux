@@ -163,6 +163,67 @@ int main(int argc, char *argv[]) {
     flux_ui_draw_assistant(&fb, "wie spaet ist es?", "", "Es ist 14:35 Uhr.", 0);
     save_ppm(&fb, outdir, "18_assistent_blau");
 
+    /* 19 -- Kalender (Juni 2026, Tag 18 ausgewaehlt) */
+    flux_ui_set_accent(0x4FD1C5);
+    {
+        const char *evs[] = {
+            "2026-06-20 14:00 Arzttermin",
+            "2026-06-25 09:00 Meeting mit Team",
+        };
+        flux_ui_draw_calendar(&fb, 2026, 6, 18, 18, evs, 2);
+    }
+    save_ppm(&fb, outdir, "19_kalender");
+
+    /* 20 -- Kontakte */
+    {
+        const char *cnames[] = { "Max Mueller", "Anna Schmidt", "Dr. Weber" };
+        const char *cdetails[] = {
+            "+49 151 12345678, max@example.com",
+            "+49 170 9876543, anna@example.com",
+            "+49 89 123456, weber@klinik.de",
+        };
+        flux_ui_draw_contacts(&fb, cnames, cdetails, 3, 0);
+    }
+    save_ppm(&fb, outdir, "20_kontakte");
+
+    /* 21 -- Fotogalerie (3 Fotos) */
+    {
+        const char *gnames[] = { "IMG_20260618_143022.ppm", "IMG_20260617_091530.ppm", "IMG_20260615_180240.ppm" };
+        const char *gdates[] = { "18.06.2026", "17.06.2026", "15.06.2026" };
+        flux_ui_draw_gallery(&fb, gnames, gdates, 3, 0);
+    }
+    save_ppm(&fb, outdir, "21_fotogalerie");
+
+    /* 22 -- Bild-Betrachter mit KI-Analyse */
+    {
+        /* Test-Bild: Himmel-Gradient als Pixel-Array */
+        const int IW = 480, IH = 380;
+        uint32_t *test_img = malloc((size_t)IW * IH * sizeof(uint32_t));
+        if (test_img) {
+            for (int y = 0; y < IH; y++) {
+                for (int x = 0; x < IW; x++) {
+                    uint32_t r, g, b;
+                    if (y < IH * 2 / 5) {
+                        r = 80  + (uint32_t)y * 60 / (IH * 2 / 5);
+                        g = 140 + (uint32_t)y * 50 / (IH * 2 / 5);
+                        b = 220;
+                    } else {
+                        r = 80; g = 110; b = 40;
+                    }
+                    test_img[y * IW + x] = (r << 16) | (g << 8) | b;
+                }
+            }
+            flux_ui_draw_image_viewer(&fb, "IMG_20260618_143022.ppm",
+                test_img, IW, IH,
+                "Das Bild zeigt einen klaren blauen Himmel\n"
+                "mit gruener Wiese. Aufgenommen im Freien,\n"
+                "vermutlich Mitteleuropa.",
+                0);
+            free(test_img);
+        }
+    }
+    save_ppm(&fb, outdir, "22_bild_betrachter");
+
     flux_fb_close(&fb);
     printf("\nFertig! PPM -> PNG: convert %s/XX.ppm %s/XX.png\n", outdir, outdir);
     return 0;

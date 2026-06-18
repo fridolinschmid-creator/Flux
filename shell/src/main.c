@@ -20,6 +20,7 @@
 #include "ipc.h"
 #include "ui.h"
 #include "action.h"
+#include "camera.h"
 #include "../../common/flux_protocol.h"
 #include "../../common/flux_config.h"
 #include "../../common/flux_sha256.h"
@@ -90,6 +91,57 @@ static void animate_slide_in(flux_fb_t *fb, uint32_t *old_buf) {
     free(new_buf);
 }
 
+/* Animiert einen Expanding-Ring-Effekt beim Tap-Punkt.
+ * Speichert den aktuellen Backbuffer, zeichnet 5 Frames, stellt ihn wieder her. */
+static void animate_ripple(flux_fb_t *fb, int cx, int cy) {
+    if (!fb->mmio) return;
+    size_t npx = (size_t)fb->width * fb->height;
+    uint32_t *saved = malloc(npx * sizeof(uint32_t));
+    if (!saved) return;
+    memcpy(saved, fb->back, npx * sizeof(uint32_t));
+    for (int f = 0; f < 5; f++) {
+        memcpy(fb->back, saved, npx * sizeof(uint32_t));
+        flux_ui_draw_ripple(fb, cx, cy, f);
+        memset(fb->prev, 0xFF, npx * sizeof(uint32_t));
+        flux_fb_present(fb);
+        usleep(45000);
+    }
+    memcpy(fb->back, saved, npx * sizeof(uint32_t));
+    free(saved);
+}
+
+/* Slide-in-von-links fuer Zurueck-Navigationen (neuer Screen kommt von links). */
+static void animate_slide_from_left(flux_fb_t *fb, uint32_t *old_buf) {
+    if (!old_buf || !fb->mmio) return;
+    size_t npx = (size_t)fb->width * fb->height;
+    uint32_t *new_buf = malloc(npx * sizeof(uint32_t));
+    if (!new_buf) return;
+    memcpy(new_buf, fb->back, npx * sizeof(uint32_t));
+
+    int h = fb->height, w = fb->width;
+    /* Negative Werte: neuer Screen kommt von links, bewegt sich nach rechts */
+    int offsets[] = { -w, -w*4/5, -w*3/5, -w*2/5, -w/5, 0, 12, 4, 1, 0 };
+    int nframes = (int)(sizeof(offsets) / sizeof(offsets[0]));
+
+    for (int f = 0; f < nframes; f++) {
+        int off = offsets[f];
+        for (int y = 0; y < h; y++) {
+            uint32_t *dst = fb->back + y * w;
+            for (int x = 0; x < w; x++) {
+                int src_x = x - off;
+                dst[x] = (src_x >= 0 && src_x < w) ? new_buf[y*w + src_x] : old_buf[y*w + x];
+            }
+        }
+        memset(fb->prev, 0xFF, npx * sizeof(uint32_t));
+        flux_fb_present(fb);
+        usleep(14000);
+    }
+    memcpy(fb->back, new_buf, npx * sizeof(uint32_t));
+    memset(fb->prev, 0xFF, npx * sizeof(uint32_t));
+    flux_fb_present(fb);
+    free(new_buf);
+}
+
 /* ---- Sprachausgabe (TTS) --------------------------------------------- */
 
 static void tts_speak(const char *text) {
@@ -146,6 +198,35 @@ static void apply_theme(void) {
     else if (!strcmp(theme, "gruen"))  flux_ui_set_accent(0x22C55E);
     else if (!strcmp(theme, "rot"))    flux_ui_set_accent(0xEF4444);
     /* teal ist default -- kein else noetig */
+}
+
+/* Generiert eine KI-Begruessung asynchron (Fork) wenn noch keine fuer heute existiert. */
+static void maybe_generate_greeting(void) {
+    time_t t = time(NULL); struct tm tmv; localtime_r(&t, &tmv);
+    char flag[64];
+    strftime(flag, sizeof(flag), "/tmp/flux_greet_%Y%m%d.done", &tmv);
+    if (access(flag, F_OK) == 0) return;
+    pid_t p = fork();
+    if (p == 0) {
+        sleep(3); /* Warten bis fluxaid bereit ist */
+        char weather[128] = {0};
+        FILE *wf = fopen("/tmp/flux_weather.txt", "r");
+        if (wf) { if (!fgets(weather, sizeof(weather), wf)) weather[0] = '\0'; fclose(wf); }
+        char q[256];
+        if (weather[0])
+            snprintf(q, sizeof(q), "Kurze freundliche Lockscreen-Begruessung (1 Satz, max 60 Zeichen). Wetter: %.60s", weather);
+        else
+            snprintf(q, sizeof(q), "Kurze freundliche Lockscreen-Begruessung (1 Satz, max 60 Zeichen).");
+        char resp[256] = {0};
+        flux_ipc_ask(q, resp, sizeof(resp));
+        if (resp[0]) {
+            FILE *f = fopen("/tmp/flux_greeting.txt", "w");
+            if (f) { fprintf(f, "%s\n", resp); fclose(f); }
+            FILE *g = fopen(flag, "w"); if (g) { fputc('1', g); fclose(g); }
+        }
+        _exit(0);
+    }
+    if (p > 0) waitpid(p, NULL, WNOHANG);
 }
 
 #define FLUX_PIN_LEN       4
@@ -232,10 +313,190 @@ static int  file_n = 0;
 static int  file_truncated = 0;
 static int  file_selected = -1;   /* markierter Eintrag im Dateibrowser */
 
+/* Kalender */
+static int cal_year  = 2026;
+static int cal_month = 1;
+static int cal_today_day = 0;
+static int cal_selected_day = 0;
+#define CAL_EVENTS_MAX 20
+static char cal_event_strs_buf[CAL_EVENTS_MAX][128];
+static const char *cal_event_strs[CAL_EVENTS_MAX];
+static int  cal_n_events = 0;
+
+static void load_cal_events(int year, int month) {
+    cal_n_events = 0;
+    char prefix[12];
+    snprintf(prefix, sizeof(prefix), "%04d-%02d", year, month);
+    FILE *f = fopen("/etc/flux/calendar.txt", "r");
+    if (!f) return;
+    char line[256];
+    while (fgets(line, sizeof(line), f) && cal_n_events < CAL_EVENTS_MAX) {
+        size_t l = strlen(line);
+        while (l > 0 && (line[l-1] == '\n' || line[l-1] == '\r')) line[--l] = '\0';
+        if (!line[0] || line[0] == '#') continue;
+        if (strncmp(line, prefix, 7) != 0) continue;
+        snprintf(cal_event_strs_buf[cal_n_events], sizeof(cal_event_strs_buf[0]), "%s", line);
+        cal_event_strs[cal_n_events] = cal_event_strs_buf[cal_n_events];
+        cal_n_events++;
+    }
+    fclose(f);
+}
+
+/* Kontakte */
+#define CONTACTS_MAX 50
+static char contact_names_buf[CONTACTS_MAX][64];
+static char contact_details_buf[CONTACTS_MAX][128];
+static const char *contact_names_p[CONTACTS_MAX];
+static const char *contact_details_p[CONTACTS_MAX];
+static int  contact_n = 0;
+static int  contact_selected = -1;
+
+static void load_contacts_list(void) {
+    contact_n = 0;
+    FILE *f = fopen("/etc/flux/contacts.txt", "r");
+    if (!f) return;
+    char line[256];
+    while (fgets(line, sizeof(line), f) && contact_n < CONTACTS_MAX) {
+        size_t l = strlen(line);
+        while (l > 0 && (line[l-1] == '\n' || line[l-1] == '\r')) line[--l] = '\0';
+        if (!line[0] || line[0] == '#') continue;
+        char *sep = strchr(line, ',');
+        if (sep) {
+            *sep = '\0';
+            snprintf(contact_names_buf[contact_n], sizeof(contact_names_buf[0]), "%s", line);
+            snprintf(contact_details_buf[contact_n], sizeof(contact_details_buf[0]), "%s", sep+1);
+        } else {
+            snprintf(contact_names_buf[contact_n], sizeof(contact_names_buf[0]), "%s", line);
+            contact_details_buf[contact_n][0] = '\0';
+        }
+        contact_names_p[contact_n]   = contact_names_buf[contact_n];
+        contact_details_p[contact_n] = contact_details_buf[contact_n];
+        contact_n++;
+    }
+    fclose(f);
+}
+
 /* Datei-Betrachter */
 static char viewer_path[1024] = {0};
 static char viewer_content[VIEWER_CONTENT_MAX] = {0};
 static int  viewer_scroll = 0;
+
+/* Fotogalerie */
+#define GALLERY_MAX 50
+static char gallery_names_buf[GALLERY_MAX][128];
+static char gallery_dates_buf[GALLERY_MAX][32];
+static const char *gallery_names[GALLERY_MAX];
+static const char *gallery_dates[GALLERY_MAX];
+static int gallery_n = 0;
+static int gallery_selected = -1;
+
+/* Bild-Betrachter */
+static char   image_path[512]   = {0};
+static char   image_caption[512] = {0};
+static int    image_analyzing   = 0;
+static uint32_t *image_pixels   = NULL;
+static int    image_w = 0, image_h = 0;
+
+static void load_gallery(void) {
+    gallery_n = 0;
+    DIR *d = opendir(FLUX_PICTURES_DIR);
+    if (!d) { mkdir(FLUX_PICTURES_DIR, 0755); return; }
+    struct dirent *e;
+    while ((e = readdir(d)) != NULL && gallery_n < GALLERY_MAX) {
+        const char *name = e->d_name;
+        size_t nl = strlen(name);
+        if (nl < 4) continue;
+        const char *ext = name + nl - 4;
+        if (strcmp(ext, ".ppm") != 0 && strcmp(ext, ".jpg") != 0 &&
+            strcmp(ext, ".png") != 0) continue;
+        snprintf(gallery_names_buf[gallery_n], sizeof(gallery_names_buf[0]), "%s", name);
+        /* Datum aus Dateinamen lesen (IMG_YYYYMMDD_HHMMSS.ppm) */
+        gallery_dates_buf[gallery_n][0] = '\0';
+        if (nl >= 20 && strncmp(name, "IMG_", 4) == 0) {
+            char tmp[9];
+            strncpy(tmp, name + 4, 8); tmp[8] = '\0';
+            /* YYYYMMDD → TT.MM.JJJJ */
+            snprintf(gallery_dates_buf[gallery_n], sizeof(gallery_dates_buf[0]),
+                     "%.2s.%.2s.%.4s", tmp + 6, tmp + 4, tmp);
+        } else {
+            /* Datum per stat */
+            char full[640];
+            snprintf(full, sizeof(full), "%s/%s", FLUX_PICTURES_DIR, name);
+            struct stat st;
+            if (stat(full, &st) == 0) {
+                struct tm tmv; localtime_r(&st.st_mtime, &tmv);
+                strftime(gallery_dates_buf[gallery_n], sizeof(gallery_dates_buf[0]),
+                         "%d.%m.%Y", &tmv);
+            }
+        }
+        gallery_names[gallery_n] = gallery_names_buf[gallery_n];
+        gallery_dates[gallery_n] = gallery_dates_buf[gallery_n];
+        gallery_n++;
+    }
+    closedir(d);
+}
+
+/* Laedt eine PPM-Datei und skaliert sie per Nearest-Neighbor auf max target_w x target_h.
+ * Gibt einen malloc'd RGB32-Puffer zurueck (Aufrufer muss free() aufrufen).
+ * img_w/img_h: tatsaechliche Ausgabegroesse. */
+static uint32_t *load_ppm_scaled(const char *path, int target_w, int target_h,
+                                   int *out_w, int *out_h) {
+    FILE *f = fopen(path, "rb");
+    if (!f) return NULL;
+    char magic[4]; int W, H, maxval;
+    if (fscanf(f, "%3s %d %d %d", magic, &W, &H, &maxval) != 4 ||
+        strcmp(magic, "P6") != 0 || W <= 0 || H <= 0 || maxval <= 0) {
+        fclose(f); return NULL;
+    }
+    /* Ein weiteres Leerzeichen/Newline nach dem Header */
+    fgetc(f);
+    size_t npx = (size_t)W * H;
+    unsigned char *rgb = malloc(npx * 3);
+    if (!rgb) { fclose(f); return NULL; }
+    if (fread(rgb, 3, npx, f) != npx) { free(rgb); fclose(f); return NULL; }
+    fclose(f);
+
+    /* Skalierung berechnen */
+    float scaleX = (float)target_w / W;
+    float scaleY = (float)target_h / H;
+    float scale  = scaleX < scaleY ? scaleX : scaleY;
+    if (scale > 1.0f) scale = 1.0f; /* nicht vergroessern */
+    int sw = (int)(W * scale);
+    int sh = (int)(H * scale);
+    if (sw < 1) sw = 1;
+    if (sh < 1) sh = 1;
+
+    uint32_t *out = malloc((size_t)sw * sh * sizeof(uint32_t));
+    if (!out) { free(rgb); return NULL; }
+    for (int y = 0; y < sh; y++) {
+        int src_y = (int)(y / scale);
+        if (src_y >= H) src_y = H - 1;
+        for (int x = 0; x < sw; x++) {
+            int src_x = (int)(x / scale);
+            if (src_x >= W) src_x = W - 1;
+            int idx = (src_y * W + src_x) * 3;
+            out[y * sw + x] = ((uint32_t)rgb[idx] << 16)
+                             | ((uint32_t)rgb[idx+1] << 8)
+                             |  (uint32_t)rgb[idx+2];
+        }
+    }
+    free(rgb);
+    *out_w = sw;
+    *out_h = sh;
+    return out;
+}
+
+/* Laedt ein Foto in den Bild-Betrachter. */
+static void open_image(flux_fb_t *fb, const char *name) {
+    snprintf(image_path, sizeof(image_path), "%s/%s", FLUX_PICTURES_DIR, name);
+    image_caption[0] = '\0';
+    image_analyzing  = 0;
+    free(image_pixels);
+    /* Bildbereich: Bildschirmbreite x ~450px */
+    int target_h = fb->height - 40 - 48 - 72 - 56; /* statusbar+header+caption+buttons */
+    if (target_h < 100) target_h = 100;
+    image_pixels = load_ppm_scaled(image_path, fb->width, target_h, &image_w, &image_h);
+}
 
 static void format_size(off_t size, char *out, size_t cap) {
     if (size < 1024) snprintf(out, cap, "%lld B", (long long)size);
@@ -332,6 +593,16 @@ int main(void) {
 
     /* Farbthema vor dem ersten Zeichnen laden */
     apply_theme();
+    maybe_generate_greeting();
+    /* Kalender auf aktuellen Monat initialisieren */
+    {
+        time_t _t = time(NULL); struct tm _tm; localtime_r(&_t, &_tm);
+        cal_year  = _tm.tm_year + 1900;
+        cal_month = _tm.tm_mon + 1;
+        cal_today_day = _tm.tm_mday;
+        cal_selected_day = _tm.tm_mday;
+    }
+    image_pixels = NULL; /* explizit NULL stellen fuer free()-Sicherheit */
 
     flux_input_t in;
     int have_input = (flux_input_open(&in, fb.width, fb.height) == 0);
@@ -583,6 +854,14 @@ int main(void) {
         }
 
         if (screen == FLUX_SCREEN_SETTINGS) {
+            if (ev.type == FLUX_EV_SWIPE_LEFT) {
+                uint32_t *old = capture_frame(&fb);
+                screen = FLUX_SCREEN_ASSISTANT;
+                flux_ui_draw_assistant(&fb, last_q, input_buf, answer_buf, 0);
+                animate_slide_from_left(&fb, old);
+                free(old);
+                continue;
+            }
             if (ev.type != FLUX_EV_TAP) continue;
             int idx, back;
             if (!flux_ui_list_hit(&fb, ev.x, ev.y, FLUX_SETTINGS_N, &idx, &back)) continue;
@@ -617,6 +896,15 @@ int main(void) {
                 else if (screen == FLUX_SCREEN_FILES)
                     flux_ui_draw_files(&fb, files_path, file_names, file_metas,
                                        file_n, file_truncated, file_selected);
+                else if (screen == FLUX_SCREEN_CALENDAR)
+                    flux_ui_draw_calendar(&fb, cal_year, cal_month, cal_today_day,
+                                          cal_selected_day, cal_event_strs, cal_n_events);
+                else if (screen == FLUX_SCREEN_CONTACTS)
+                    flux_ui_draw_contacts(&fb, contact_names_p, contact_details_p,
+                                          contact_n, contact_selected);
+                else if (screen == FLUX_SCREEN_GALLERY)
+                    flux_ui_draw_gallery(&fb, gallery_names, gallery_dates,
+                                         gallery_n, gallery_selected);
                 animate_slide_in(&fb, old);
                 free(old);
             }
@@ -624,6 +912,14 @@ int main(void) {
         }
 
         if (screen == FLUX_SCREEN_FILES) {
+            if (ev.type == FLUX_EV_SWIPE_LEFT) {
+                uint32_t *old = capture_frame(&fb);
+                screen = FLUX_SCREEN_ASSISTANT;
+                flux_ui_draw_assistant(&fb, last_q, input_buf, answer_buf, 0);
+                animate_slide_from_left(&fb, old);
+                free(old);
+                continue;
+            }
             /* "Neuer Ordner"-Knopf */
             if (ev.type == FLUX_EV_TAP && flux_ui_files_new_btn_hit(&fb, ev.x, ev.y)) {
                 edit_buf[0] = '\0';
@@ -705,6 +1001,15 @@ int main(void) {
         }
 
         if (screen == FLUX_SCREEN_FILE_VIEWER) {
+            if (ev.type == FLUX_EV_SWIPE_LEFT) {
+                uint32_t *old = capture_frame(&fb);
+                screen = FLUX_SCREEN_FILES;
+                flux_ui_draw_files(&fb, files_path, file_names, file_metas,
+                                   file_n, file_truncated, file_selected);
+                animate_slide_from_left(&fb, old);
+                free(old);
+                continue;
+            }
             if (ev.type != FLUX_EV_TAP && ev.type != FLUX_EV_SWIPE_UP) continue;
             int scroll_delta = 0, back = 0;
             if (ev.type == FLUX_EV_SWIPE_UP) { scroll_delta = 3; }
@@ -721,6 +1026,211 @@ int main(void) {
                 viewer_scroll += scroll_delta;
                 if (viewer_scroll < 0) viewer_scroll = 0;
                 flux_ui_draw_file_viewer(&fb, viewer_path, viewer_content, viewer_scroll);
+            }
+            continue;
+        }
+
+        if (screen == FLUX_SCREEN_CALENDAR) {
+            if (ev.type == FLUX_EV_SWIPE_LEFT || ev.type == FLUX_EV_SWIPE_DOWN) {
+                pre_notify_screen = FLUX_SCREEN_CALENDAR;
+                if (ev.type == FLUX_EV_SWIPE_DOWN) {
+                    uint32_t *old = capture_frame(&fb);
+                    screen = FLUX_SCREEN_NOTIFY;
+                    flux_ui_draw_notify(&fb);
+                    animate_slide_in(&fb, old);
+                    free(old);
+                } else {
+                    uint32_t *old = capture_frame(&fb);
+                    screen = FLUX_SCREEN_ASSISTANT;
+                    flux_ui_draw_assistant(&fb, last_q, input_buf, answer_buf, 0);
+                    animate_slide_from_left(&fb, old);
+                    free(old);
+                }
+                continue;
+            }
+            if (ev.type != FLUX_EV_TAP) continue;
+
+            /* Zurueck-Leiste (LIST_BACK_H = 64, definiert in ui.c) */
+            if (ev.y >= fb.height - 64) {
+                uint32_t *old = capture_frame(&fb);
+                screen = FLUX_SCREEN_ASSISTANT;
+                flux_ui_draw_assistant(&fb, last_q, input_buf, answer_buf, 0);
+                animate_slide_from_left(&fb, old);
+                free(old);
+                continue;
+            }
+
+            int hit_cell = 0, prev_m = 0, next_m = 0;
+            if (flux_ui_calendar_hit(&fb, ev.x, ev.y, &hit_cell, &prev_m, &next_m)) {
+                if (prev_m) {
+                    if (--cal_month < 1)  { cal_month = 12; cal_year--; }
+                    load_cal_events(cal_year, cal_month);
+                    cal_selected_day = 0;
+                } else if (next_m) {
+                    if (++cal_month > 12) { cal_month = 1;  cal_year++; }
+                    load_cal_events(cal_year, cal_month);
+                    cal_selected_day = 0;
+                } else {
+                    /* Zellenindex → Tagesnummer */
+                    static const int ft[] = {0,3,2,5,0,3,5,1,4,6,2,4};
+                    int y2 = cal_year, m2 = cal_month;
+                    if (m2 < 3) y2--;
+                    int fdow = ((y2 + y2/4 - y2/100 + y2/400 + ft[m2-1] + 1) % 7 + 6) % 7;
+                    static const int dm[] = {31,28,31,30,31,30,31,31,30,31,30,31};
+                    int maxd = dm[cal_month-1];
+                    if (cal_month==2 && ((cal_year%4==0&&cal_year%100!=0)||cal_year%400==0)) maxd=29;
+                    int actual = hit_cell - fdow + 1;
+                    if (actual >= 1 && actual <= maxd) {
+                        cal_selected_day = actual;
+                        load_cal_events(cal_year, cal_month);
+                    }
+                }
+                flux_ui_draw_calendar(&fb, cal_year, cal_month, cal_today_day,
+                                       cal_selected_day, cal_event_strs, cal_n_events);
+            }
+            continue;
+        }
+
+        if (screen == FLUX_SCREEN_CONTACTS) {
+            if (ev.type == FLUX_EV_SWIPE_LEFT) {
+                uint32_t *old = capture_frame(&fb);
+                screen = FLUX_SCREEN_ASSISTANT;
+                flux_ui_draw_assistant(&fb, last_q, input_buf, answer_buf, 0);
+                animate_slide_from_left(&fb, old);
+                free(old);
+                continue;
+            }
+            if (ev.type == FLUX_EV_SWIPE_DOWN) {
+                pre_notify_screen = FLUX_SCREEN_CONTACTS;
+                uint32_t *old = capture_frame(&fb);
+                screen = FLUX_SCREEN_NOTIFY;
+                flux_ui_draw_notify(&fb);
+                animate_slide_in(&fb, old);
+                free(old);
+                continue;
+            }
+            if (ev.type != FLUX_EV_TAP) continue;
+            int idx, back;
+            if (!flux_ui_list_hit(&fb, ev.x, ev.y, contact_n, &idx, &back)) continue;
+            if (back) {
+                uint32_t *old = capture_frame(&fb);
+                screen = FLUX_SCREEN_ASSISTANT;
+                flux_ui_draw_assistant(&fb, last_q, input_buf, answer_buf, 0);
+                animate_slide_from_left(&fb, old);
+                free(old);
+            } else if (idx < contact_n) {
+                contact_selected = (idx == contact_selected) ? -1 : idx;
+                flux_ui_draw_contacts(&fb, contact_names_p, contact_details_p,
+                                       contact_n, contact_selected);
+            }
+            continue;
+        }
+
+        if (screen == FLUX_SCREEN_GALLERY) {
+            if (ev.type == FLUX_EV_SWIPE_LEFT) {
+                uint32_t *old = capture_frame(&fb);
+                screen = FLUX_SCREEN_ASSISTANT;
+                flux_ui_draw_assistant(&fb, last_q, input_buf, answer_buf, 0);
+                animate_slide_from_left(&fb, old);
+                free(old);
+                continue;
+            }
+            if (ev.type != FLUX_EV_TAP) continue;
+
+            /* Kamera-Knopf */
+            if (flux_ui_gallery_camera_hit(&fb, ev.x, ev.y)) {
+                animate_ripple(&fb, ev.x, ev.y);
+                char photo_path[256];
+                time_t _t = time(NULL); struct tm _tm; localtime_r(&_t, &_tm);
+                strftime(photo_path, sizeof(photo_path),
+                         FLUX_PICTURES_DIR "/IMG_%Y%m%d_%H%M%S.ppm", &_tm);
+                flux_camera_capture(photo_path);
+                load_gallery();
+                flux_ui_draw_gallery(&fb, gallery_names, gallery_dates,
+                                     gallery_n, gallery_selected);
+                continue;
+            }
+
+            int idx, back;
+            if (!flux_ui_list_hit(&fb, ev.x, ev.y, gallery_n, &idx, &back)) continue;
+            if (back) {
+                uint32_t *old = capture_frame(&fb);
+                screen = FLUX_SCREEN_ASSISTANT;
+                flux_ui_draw_assistant(&fb, last_q, input_buf, answer_buf, 0);
+                animate_slide_from_left(&fb, old);
+                free(old);
+            } else if (idx < gallery_n) {
+                animate_ripple(&fb, ev.x, ev.y);
+                open_image(&fb, gallery_names[idx]);
+                uint32_t *old = capture_frame(&fb);
+                screen = FLUX_SCREEN_IMAGE_VIEWER;
+                flux_ui_draw_image_viewer(&fb, gallery_names[idx],
+                    image_pixels, image_w, image_h, "", 0);
+                animate_slide_in(&fb, old);
+                free(old);
+            }
+            continue;
+        }
+
+        if (screen == FLUX_SCREEN_IMAGE_VIEWER) {
+            if (ev.type == FLUX_EV_SWIPE_LEFT) {
+                uint32_t *old = capture_frame(&fb);
+                screen = FLUX_SCREEN_GALLERY;
+                flux_ui_draw_gallery(&fb, gallery_names, gallery_dates,
+                                     gallery_n, gallery_selected);
+                animate_slide_from_left(&fb, old);
+                free(old);
+                continue;
+            }
+            if (ev.type != FLUX_EV_TAP) continue;
+
+            int iv_back = 0, iv_analyze = 0, iv_del = 0;
+            if (!flux_ui_image_viewer_hit(&fb, ev.x, ev.y,
+                                           &iv_back, &iv_analyze, &iv_del)) continue;
+
+            if (iv_back) {
+                uint32_t *old = capture_frame(&fb);
+                screen = FLUX_SCREEN_GALLERY;
+                flux_ui_draw_gallery(&fb, gallery_names, gallery_dates,
+                                     gallery_n, gallery_selected);
+                animate_slide_from_left(&fb, old);
+                free(old);
+            } else if (iv_analyze) {
+                /* KI-Bildanalyse: zeige Lade-Indikator, frage fluxaid */
+                const char *fname = image_path;
+                size_t plen = strlen(FLUX_PICTURES_DIR) + 1;
+                if (strncmp(fname, FLUX_PICTURES_DIR "/", plen) == 0)
+                    fname += plen;
+                image_analyzing = 1;
+                flux_ui_draw_image_viewer(&fb, fname,
+                    image_pixels, image_w, image_h, "", 1);
+                /* Analyseauftrag an fluxaid */
+                char q[600];
+                snprintf(q, sizeof(q), "Analysiere das Foto: %s", image_path);
+                char resp[512] = {0};
+                flux_ipc_ask(q, resp, sizeof(resp));
+                /* Antwort bereinigen: ACTION:-Preamble entfernen falls noetig */
+                if (strncmp(resp, "ACTION:", 7) == 0) {
+                    snprintf(image_caption, sizeof(image_caption), "%s", image_path);
+                } else if (resp[0]) {
+                    snprintf(image_caption, sizeof(image_caption), "%s", resp);
+                } else {
+                    snprintf(image_caption, sizeof(image_caption),
+                             "Keine Antwort vom KI-Assistenten.");
+                }
+                image_analyzing = 0;
+                flux_ui_draw_image_viewer(&fb, fname,
+                    image_pixels, image_w, image_h, image_caption, 0);
+            } else if (iv_del) {
+                unlink(image_path);
+                free(image_pixels); image_pixels = NULL; image_w = image_h = 0;
+                load_gallery();
+                uint32_t *old = capture_frame(&fb);
+                screen = FLUX_SCREEN_GALLERY;
+                flux_ui_draw_gallery(&fb, gallery_names, gallery_dates,
+                                     gallery_n, gallery_selected);
+                animate_slide_from_left(&fb, old);
+                free(old);
             }
             continue;
         }
@@ -743,6 +1253,7 @@ int main(void) {
             int quick = flux_ui_quickrow_hit(&fb, ev.x, ev.y);
             if (quick == 1) {
                 load_settings_values();
+                animate_ripple(&fb, ev.x, ev.y);
                 uint32_t *old = capture_frame(&fb);
                 screen = FLUX_SCREEN_SETTINGS;
                 flux_ui_draw_settings(&fb, setting_labels, setting_values, FLUX_SETTINGS_N);
@@ -753,9 +1264,32 @@ int main(void) {
                 strcpy(files_path, "/");
                 file_selected = -1;
                 load_files(files_path);
+                animate_ripple(&fb, ev.x, ev.y);
                 uint32_t *old = capture_frame(&fb);
                 screen = FLUX_SCREEN_FILES;
-                flux_ui_draw_files(&fb, files_path, file_names, file_metas, file_n, file_truncated, file_selected);
+                flux_ui_draw_files(&fb, files_path, file_names, file_metas,
+                                   file_n, file_truncated, file_selected);
+                animate_slide_in(&fb, old);
+                free(old);
+                continue;
+            } else if (quick == 3) {
+                load_cal_events(cal_year, cal_month);
+                animate_ripple(&fb, ev.x, ev.y);
+                uint32_t *old = capture_frame(&fb);
+                screen = FLUX_SCREEN_CALENDAR;
+                flux_ui_draw_calendar(&fb, cal_year, cal_month, cal_today_day,
+                                       cal_selected_day, cal_event_strs, cal_n_events);
+                animate_slide_in(&fb, old);
+                free(old);
+                continue;
+            } else if (quick == 4) {
+                load_contacts_list();
+                contact_selected = -1;
+                animate_ripple(&fb, ev.x, ev.y);
+                uint32_t *old = capture_frame(&fb);
+                screen = FLUX_SCREEN_CONTACTS;
+                flux_ui_draw_contacts(&fb, contact_names_p, contact_details_p,
+                                       contact_n, contact_selected);
                 animate_slide_in(&fb, old);
                 free(old);
                 continue;
@@ -853,6 +1387,60 @@ int main(void) {
                 free(old);
                 continue;
             }
+            if (strcasecmp(input_buf, "kalender") == 0 || strcasecmp(input_buf, "calendar") == 0) {
+                input_buf[0] = '\0';
+                load_cal_events(cal_year, cal_month);
+                uint32_t *old = capture_frame(&fb);
+                screen = FLUX_SCREEN_CALENDAR;
+                flux_ui_draw_calendar(&fb, cal_year, cal_month, cal_today_day,
+                                       cal_selected_day, cal_event_strs, cal_n_events);
+                animate_slide_in(&fb, old);
+                free(old);
+                continue;
+            }
+            if (strcasecmp(input_buf, "kontakte") == 0 || strcasecmp(input_buf, "contacts") == 0) {
+                input_buf[0] = '\0';
+                load_contacts_list();
+                contact_selected = -1;
+                uint32_t *old = capture_frame(&fb);
+                screen = FLUX_SCREEN_CONTACTS;
+                flux_ui_draw_contacts(&fb, contact_names_p, contact_details_p,
+                                       contact_n, contact_selected);
+                animate_slide_in(&fb, old);
+                free(old);
+                continue;
+            }
+            if (strcasecmp(input_buf, "fotos") == 0 || strcasecmp(input_buf, "galerie") == 0 ||
+                strcasecmp(input_buf, "gallery") == 0 || strcasecmp(input_buf, "bilder") == 0) {
+                input_buf[0] = '\0';
+                load_gallery();
+                gallery_selected = -1;
+                uint32_t *old = capture_frame(&fb);
+                screen = FLUX_SCREEN_GALLERY;
+                flux_ui_draw_gallery(&fb, gallery_names, gallery_dates,
+                                     gallery_n, gallery_selected);
+                animate_slide_in(&fb, old);
+                free(old);
+                continue;
+            }
+            if (strcasecmp(input_buf, "kamera") == 0 || strcasecmp(input_buf, "camera") == 0 ||
+                strcasecmp(input_buf, "foto") == 0) {
+                input_buf[0] = '\0';
+                char photo_path[256];
+                time_t _t2 = time(NULL); struct tm _tm2; localtime_r(&_t2, &_tm2);
+                strftime(photo_path, sizeof(photo_path),
+                         FLUX_PICTURES_DIR "/IMG_%Y%m%d_%H%M%S.ppm", &_tm2);
+                flux_camera_capture(photo_path);
+                load_gallery();
+                open_image(&fb, gallery_names_buf[0]);
+                uint32_t *old = capture_frame(&fb);
+                screen = FLUX_SCREEN_IMAGE_VIEWER;
+                flux_ui_draw_image_viewer(&fb, gallery_names[0],
+                    image_pixels, image_w, image_h, "", 0);
+                animate_slide_in(&fb, old);
+                free(old);
+                continue;
+            }
 
             snprintf(last_q, sizeof(last_q), "%s", input_buf);
             flux_ui_draw_assistant(&fb, last_q, "", answer_buf, 1);
@@ -876,6 +1464,7 @@ int main(void) {
     }
 
     flux_input_close(&in);
+    free(image_pixels);
     flux_fb_close(&fb);
     return 0;
 }

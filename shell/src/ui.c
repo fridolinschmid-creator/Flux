@@ -301,6 +301,33 @@ void flux_ui_draw_lock(flux_fb_t *fb) {
         flux_fb_fill_rect(fb, ax - w / 2, ay - i * 8, w, 5, COL_ACCENT);
     }
 
+    /* Wetter-Info aus Cache (falls vorhanden) */
+    {
+        char wline[160] = {0};
+        FILE *wf = fopen("/tmp/flux_weather.txt", "r");
+        if (wf) { if (!fgets(wline, sizeof(wline), wf)) wline[0] = '\0'; fclose(wf); }
+        size_t wl = strlen(wline);
+        while (wl > 0 && (wline[wl-1] == '\n' || wline[wl-1] == '\r')) wline[--wl] = '\0';
+        if (wline[0]) {
+            int ww = flux_fb_text_width(wline, 2);
+            if (ww > fb->width - 24) ww = fb->width - 24;
+            flux_fb_text(fb, (fb->width - flux_fb_text_width(wline, 2)) / 2,
+                         fb->height / 3 + scale_clock * 11 + 30, wline, COL_DIM, 2);
+        }
+    }
+    /* Begruessung (von KI generiert, falls /tmp/flux_greeting.txt vorhanden) */
+    {
+        char gline[120] = {0};
+        FILE *gf = fopen("/tmp/flux_greeting.txt", "r");
+        if (gf) { if (!fgets(gline, sizeof(gline), gf)) gline[0] = '\0'; fclose(gf); }
+        size_t gl = strlen(gline);
+        while (gl > 0 && (gline[gl-1] == '\n' || gline[gl-1] == '\r')) gline[--gl] = '\0';
+        if (gline[0]) {
+            int gw = flux_fb_text_width(gline, 2);
+            flux_fb_text(fb, (fb->width - gw) / 2,
+                         fb->height / 3 + scale_clock * 11 + 56, gline, COL_ACCENT, 2);
+        }
+    }
     flux_fb_present(fb);
 }
 
@@ -396,21 +423,20 @@ int flux_ui_pin_hit(const flux_fb_t *fb, int x, int y, char *out_digit, int *out
 
 static void draw_quickrow(flux_fb_t *fb) {
     int y = STATUSBAR_H;
-    int half = fb->width / 2;
-    flux_fb_fill_rect(fb, 2, y + 2, half - 4, QUICKROW_H - 4, COL_KEY);
-    flux_fb_fill_rect(fb, half + 2, y + 2, half - 4, QUICKROW_H - 4, COL_KEY);
-
-    const char *l1 = "Einstellungen";
-    const char *l2 = "Dateien";
-    int w1 = flux_fb_text_width(l1, 2);
-    int w2 = flux_fb_text_width(l2, 2);
-    flux_fb_text(fb, (half - w1) / 2, y + (QUICKROW_H - 16) / 2, l1, COL_TEXT, 2);
-    flux_fb_text(fb, half + (half - w2) / 2, y + (QUICKROW_H - 16) / 2, l2, COL_TEXT, 2);
+    int bw = fb->width / 4;
+    static const char *labels[4] = { "Einst.", "Dateien", "Kalender", "Kontakte" };
+    for (int i = 0; i < 4; i++) {
+        int bx = i * bw;
+        flux_fb_fill_rect(fb, bx + 2, y + 2, bw - 4, QUICKROW_H - 4, COL_KEY);
+        int tw = flux_fb_text_width(labels[i], 2);
+        flux_fb_text(fb, bx + (bw - tw) / 2, y + (QUICKROW_H - 16) / 2, labels[i], COL_TEXT, 2);
+    }
 }
 
 int flux_ui_quickrow_hit(const flux_fb_t *fb, int x, int y) {
     if (y < STATUSBAR_H || y >= STATUSBAR_H + QUICKROW_H) return 0;
-    return (x < fb->width / 2) ? 1 : 2;
+    int bw = fb->width / 4;
+    return (x / bw) + 1; /* 1=Einst, 2=Dateien, 3=Kalender, 4=Kontakte */
 }
 
 /* ---- Wetter-Widget ---------------------------------------------------- */
@@ -733,8 +759,15 @@ void flux_ui_draw_assistant(flux_fb_t *fb, const char *last_q,
 
         /* KI-Blase links (dunkelblau) oder Lade-Animation */
         if (thinking) {
-            flux_fb_fill_rect(fb, 10, cy, bubble_max_w, 40, COL_BUBBLE_AI);
-            flux_fb_text(fb, 10 + BUBBLE_PAD_X, cy + 12, "Denke nach ...", COL_DIM, 2);
+            /* Animierter Denke-Indikator: Blase mit 3 Springpunkten */
+            flux_fb_fill_rect(fb, 10, cy, bubble_max_w, 52, COL_BUBBLE_AI);
+            flux_fb_text(fb, 10 + BUBBLE_PAD_X, cy + 8, "Flux denkt nach", COL_DIM, 2);
+            int ddx = 10 + BUBBLE_PAD_X;
+            int dot_y_off[] = {0, -6, -3}; /* verschiedene Hoehen = Bewegung */
+            for (int d = 0; d < 3; d++) {
+                int dy_dot = cy + 30 + dot_y_off[d];
+                flux_fb_fill_rect(fb, ddx + d * 14, dy_dot, 8, 8, COL_ACCENT);
+            }
         } else if (has_a) {
             draw_bubble(fb, answer, cy, bubble_max_w, COL_BUBBLE_AI, 2, 24, 0);
         }
@@ -1209,7 +1242,370 @@ void flux_ui_draw_notify(flux_fb_t *fb) {
     flux_fb_present(fb);
 }
 
+/* ---- Tap-Ripple-Animation ------------------------------------------- */
+
+void flux_ui_draw_ripple(flux_fb_t *fb, int cx, int cy, int frame) {
+    /* Expanding square outline, fading from accent to dim */
+    static const int sizes[5] = {14, 28, 42, 58, 74};
+    static const uint32_t colors[5] = {
+        0xFFFFFF, 0xB0E0DC, 0x7FB8B0, 0x4D8F88, 0x2A6060
+    };
+    int s = sizes[frame < 5 ? frame : 4];
+    uint32_t col = colors[frame < 5 ? frame : 4];
+    int x = cx - s/2, y = cy - s/2;
+    int thick = 3 - frame/2;
+    if (thick < 1) thick = 1;
+    /* Top */
+    flux_fb_fill_rect(fb, x, y, s, thick, col);
+    /* Bottom */
+    flux_fb_fill_rect(fb, x, y + s - thick, s, thick, col);
+    /* Left */
+    flux_fb_fill_rect(fb, x, y, thick, s, col);
+    /* Right */
+    flux_fb_fill_rect(fb, x + s - thick, y, thick, s, col);
+}
+
+/* ---- Kalender -------------------------------------------------------- */
+
+#define CAL_HEADER_H    52
+#define CAL_DAYROW_H    32
+#define CAL_CELL_W(fb)  ((fb)->width / 7)
+#define CAL_CELL_H      58
+#define CAL_GRID_TOP(fb) (STATUSBAR_H + CAL_HEADER_H + CAL_DAYROW_H)
+
+static int days_in_month(int y, int m) {
+    static const int d[] = {31,28,31,30,31,30,31,31,30,31,30,31};
+    int days = d[m-1];
+    if (m == 2 && ((y % 4 == 0 && y % 100 != 0) || y % 400 == 0)) days = 29;
+    return days;
+}
+
+/* Returns 0=Mon .. 6=Sun for the 1st of month m in year y */
+static int first_weekday(int y, int m) {
+    static const int t[] = {0,3,2,5,0,3,5,1,4,6,2,4};
+    if (m < 3) y--;
+    int dow = (y + y/4 - y/100 + y/400 + t[m-1] + 1) % 7;
+    return (dow + 6) % 7; /* 0=Mon */
+}
+
+static const char *month_name(int m) {
+    static const char *names[] = {
+        "Januar","Februar","Maerz","April","Mai","Juni",
+        "Juli","August","September","Oktober","November","Dezember"
+    };
+    return (m >= 1 && m <= 12) ? names[m-1] : "?";
+}
+
+void flux_ui_draw_calendar(flux_fb_t *fb, int year, int month,
+                            int today_day, int selected_day,
+                            const char **event_strs, int n_events) {
+    flux_fb_clear(fb, COL_BG);
+    draw_statusbar(fb);
+
+    int cw = CAL_CELL_W(fb);
+    int grid_top = CAL_GRID_TOP(fb);
+
+    /* --- Header: < Monat Jahr > --------------------------------------- */
+    int hdr_y = STATUSBAR_H + (CAL_HEADER_H - 21) / 2;
+    /* "<" Pfeil links */
+    flux_fb_fill_rect(fb, 4, STATUSBAR_H + 6, 40, CAL_HEADER_H - 12, COL_KEY);
+    flux_fb_text(fb, 14, hdr_y, "<", COL_ACCENT, 3);
+    /* ">" Pfeil rechts */
+    flux_fb_fill_rect(fb, fb->width - 44, STATUSBAR_H + 6, 40, CAL_HEADER_H - 12, COL_KEY);
+    flux_fb_text(fb, fb->width - 34, hdr_y, ">", COL_ACCENT, 3);
+    /* Monat + Jahr zentriert */
+    char title[32];
+    snprintf(title, sizeof(title), "%s %d", month_name(month), year);
+    int tw = flux_fb_text_width(title, 3);
+    flux_fb_text(fb, (fb->width - tw) / 2, hdr_y, title, COL_TEXT, 3);
+
+    /* --- Wochentag-Kopfzeile ------------------------------------------ */
+    static const char *dow_labels[] = {"Mo","Di","Mi","Do","Fr","Sa","So"};
+    for (int i = 0; i < 7; i++) {
+        int bx = i * cw;
+        int lw = flux_fb_text_width(dow_labels[i], 2);
+        uint32_t col = (i >= 5) ? 0xEE8855 : COL_DIM; /* Sa/So in orange */
+        flux_fb_text(fb, bx + (cw - lw) / 2,
+                     STATUSBAR_H + CAL_HEADER_H + (CAL_DAYROW_H - 16) / 2,
+                     dow_labels[i], col, 2);
+    }
+
+    /* --- Datumsraster ------------------------------------------------- */
+    int first_dow = first_weekday(year, month);
+    int dim = days_in_month(year, month);
+
+    for (int day = 1; day <= dim; day++) {
+        int cell_idx = first_dow + day - 1; /* 0-based cell in grid */
+        int row = cell_idx / 7;
+        int col_idx = cell_idx % 7;
+        int cx2 = col_idx * cw;
+        int cy = grid_top + row * CAL_CELL_H;
+
+        /* Cell background */
+        uint32_t bg = COL_BG;
+        if (day == selected_day) bg = 0x1E3A5A;
+        else if (day == today_day) bg = 0x152A1E;
+        if (bg != COL_BG)
+            flux_fb_fill_rect(fb, cx2 + 1, cy + 1, cw - 2, CAL_CELL_H - 2, bg);
+
+        /* Accent border for today/selected */
+        if (day == selected_day)
+            flux_fb_fill_rect(fb, cx2, cy, 3, CAL_CELL_H, COL_ACCENT);
+        else if (day == today_day)
+            flux_fb_fill_rect(fb, cx2, cy, 3, CAL_CELL_H, 0x22C55E);
+
+        /* Day number */
+        char daystr[4]; snprintf(daystr, sizeof(daystr), "%d", day);
+        int dw = flux_fb_text_width(daystr, 2);
+        uint32_t tcol = (day == selected_day) ? COL_TEXT :
+                        (day == today_day)     ? 0x22C55E : COL_DIM;
+        flux_fb_text(fb, cx2 + (cw - dw) / 2, cy + (CAL_CELL_H - 16) / 2, daystr, tcol, 2);
+    }
+
+    /* --- Ereignisse fuer ausgewaehlten Tag ------------------------------ */
+    int ev_y = grid_top + ((first_dow + dim - 1) / 7 + 1) * CAL_CELL_H + 8;
+    if (ev_y > fb->height - LIST_BACK_H - 8) ev_y = grid_top + 6 * CAL_CELL_H + 8;
+
+    if (n_events > 0) {
+        const char *ev_title = "Termine:";
+        flux_fb_text(fb, 12, ev_y, ev_title, COL_ACCENT, 2);
+        ev_y += 24;
+        for (int i = 0; i < n_events && ev_y < fb->height - LIST_BACK_H - 20; i++) {
+            draw_wrapped(fb, 20, ev_y, fb->width - 32, event_strs[i], COL_TEXT, 2, 24);
+            ev_y += 28;
+        }
+    } else if (selected_day > 0) {
+        flux_fb_text(fb, 12, ev_y, "(Keine Termine)", COL_DIM, 2);
+    }
+
+    draw_back_bar(fb, "Zurueck");
+    flux_fb_present(fb);
+}
+
+int flux_ui_calendar_hit(const flux_fb_t *fb, int x, int y,
+                          int *day, int *prev_month, int *next_month) {
+    *day = 0; *prev_month = 0; *next_month = 0;
+
+    if (y >= fb->height - LIST_BACK_H) return 0; /* back bar handled by caller */
+
+    /* Navigation arrows */
+    if (y >= STATUSBAR_H && y < STATUSBAR_H + CAL_HEADER_H) {
+        if (x >= 4 && x < 44) { *prev_month = 1; return 1; }
+        if (x >= fb->width - 44 && x < fb->width - 4) { *next_month = 1; return 1; }
+        return 0;
+    }
+
+    /* Day cells */
+    if (y < CAL_GRID_TOP(fb)) return 0;
+    int row = (y - CAL_GRID_TOP(fb)) / CAL_CELL_H;
+    int col_idx = x / CAL_CELL_W(fb);
+    int cell_idx = row * 7 + col_idx;
+    /* We need year/month to compute first_dow; pass dummy -- caller knows */
+    /* Actually we need the caller to pass day_offset. Let's embed it here.
+     * We return the cell index and let the caller map to day. */
+    *day = cell_idx; /* raw cell index -- caller adjusts by first_weekday */
+    return 1;
+}
+
+/* ---- Kontakte -------------------------------------------------------- */
+
+void flux_ui_draw_contacts(flux_fb_t *fb, const char **names,
+                            const char **details, int n, int selected_idx) {
+    flux_fb_clear(fb, COL_BG);
+    draw_statusbar(fb);
+    flux_fb_text(fb, 16, STATUSBAR_H + 12, "Kontakte", COL_ACCENT, 3);
+
+    if (n == 0) {
+        flux_fb_text(fb, 16, STATUSBAR_H + TITLE_AREA_H + 12,
+                     "Keine Kontakte. KI: \"Speichere Max, +49 151 ..., max@mail.de\"",
+                     COL_DIM, 2);
+    } else {
+        list_row_geom_t rows[LIST_MAX_ROWS];
+        int rn = build_list_rows(fb, n, rows);
+        for (int i = 0; i < rn; i++) {
+            uint32_t row_col = (i == selected_idx) ? 0x1E3A5A : COL_ROW;
+            flux_fb_fill_rect(fb, rows[i].x, rows[i].y, rows[i].w, rows[i].h, row_col);
+            if (i == selected_idx)
+                flux_fb_fill_rect(fb, rows[i].x, rows[i].y, 4, rows[i].h, COL_ACCENT);
+            flux_fb_text(fb, rows[i].x + 12, rows[i].y + 8, names[i], COL_TEXT, 2);
+            if (details && details[i])
+                flux_fb_text(fb, rows[i].x + 12, rows[i].y + rows[i].h - 24,
+                             details[i], COL_DIM, 2);
+        }
+    }
+
+    draw_back_bar(fb, "Zurueck");
+    flux_fb_present(fb);
+}
+
 int flux_ui_notify_hit(const flux_fb_t *fb, int x, int y) {
     (void)fb; (void)x; (void)y;
     return 1; /* beliebiger Tap schliesst den Overlay */
+}
+
+/* ---- Fotogalerie ----------------------------------------------------- */
+
+#define GALLERY_CAM_BTN_W 120
+#define GALLERY_CAM_BTN_H  48
+
+/* Kamera-Knopf: rechts unten in der Titelzeile. */
+static void draw_gallery_cam_btn(flux_fb_t *fb) {
+    int bx = fb->width - GALLERY_CAM_BTN_W - 8;
+    int by = STATUSBAR_H + (TITLE_AREA_H - GALLERY_CAM_BTN_H) / 2;
+    flux_fb_fill_rect(fb, bx, by, GALLERY_CAM_BTN_W, GALLERY_CAM_BTN_H, COL_ACCENT);
+    int tw = flux_fb_text_width("Kamera", 2);
+    flux_fb_text(fb, bx + (GALLERY_CAM_BTN_W - tw) / 2,
+                 by + (GALLERY_CAM_BTN_H - 14) / 2, "Kamera", COL_BG, 2);
+}
+
+void flux_ui_draw_gallery(flux_fb_t *fb, const char **names, const char **dates,
+                           int n, int selected_idx) {
+    flux_fb_clear(fb, COL_BG);
+    draw_statusbar(fb);
+    flux_fb_text(fb, 16, STATUSBAR_H + 12, "Fotos", COL_ACCENT, 3);
+    draw_gallery_cam_btn(fb);
+
+    if (n == 0) {
+        flux_fb_text(fb, 16, STATUSBAR_H + TITLE_AREA_H + 20,
+                     "Noch keine Fotos.", COL_DIM, 2);
+        flux_fb_text(fb, 16, STATUSBAR_H + TITLE_AREA_H + 42,
+                     "Tippe \"Kamera\" oben rechts.", COL_DIM, 2);
+    } else {
+        list_row_geom_t rows[LIST_MAX_ROWS];
+        int rn = build_list_rows(fb, n, rows);
+        for (int i = 0; i < rn; i++) {
+            uint32_t row_col = (i == selected_idx) ? 0x1E3A5A : COL_ROW;
+            flux_fb_fill_rect(fb, rows[i].x, rows[i].y, rows[i].w, rows[i].h, row_col);
+            if (i == selected_idx)
+                flux_fb_fill_rect(fb, rows[i].x, rows[i].y, 4, rows[i].h, COL_ACCENT);
+            /* Kamera-Icon (kleines Quadrat als Symbol) */
+            flux_fb_fill_rect(fb, rows[i].x + 12, rows[i].y + 12, 28, 22, 0x2A3850);
+            flux_fb_fill_rect(fb, rows[i].x + 17, rows[i].y + 16, 18, 14, 0x334466);
+            /* Dateiname */
+            flux_fb_text(fb, rows[i].x + 52, rows[i].y + 8, names[i], COL_TEXT, 2);
+            if (dates && dates[i])
+                flux_fb_text(fb, rows[i].x + 52, rows[i].y + rows[i].h - 24,
+                             dates[i], COL_DIM, 2);
+        }
+    }
+
+    draw_back_bar(fb, "Zurueck");
+    flux_fb_present(fb);
+}
+
+int flux_ui_gallery_camera_hit(const flux_fb_t *fb, int x, int y) {
+    int bx = fb->width - GALLERY_CAM_BTN_W - 8;
+    int by = STATUSBAR_H + (TITLE_AREA_H - GALLERY_CAM_BTN_H) / 2;
+    return (x >= bx && x < bx + GALLERY_CAM_BTN_W &&
+            y >= by && y < by + GALLERY_CAM_BTN_H);
+}
+
+/* ---- Bild-Betrachter ------------------------------------------------- */
+
+#define IV_HEADER_H   48     /* Titelzeile oben */
+#define IV_BTN_H      56     /* Button-Leiste unten */
+#define IV_BTN_COUNT  3      /* Zurueck | KI analysieren | Loeschen */
+
+void flux_ui_draw_image_viewer(flux_fb_t *fb, const char *filename,
+                                const uint32_t *pixels, int img_w, int img_h,
+                                const char *ai_caption, int analyzing) {
+    flux_fb_clear(fb, 0x080A10);
+    draw_statusbar(fb);
+
+    /* Header mit Dateiname und X-Schliessen-Symbol */
+    flux_fb_fill_rect(fb, 0, STATUSBAR_H, fb->width, IV_HEADER_H, COL_STATUSBAR);
+    flux_fb_text(fb, 12, STATUSBAR_H + (IV_HEADER_H - 14) / 2, filename, COL_TEXT, 2);
+
+    /* Bildbereich berechnen */
+    int img_area_y = STATUSBAR_H + IV_HEADER_H;
+
+    /* Untere Bereich: Caption + Buttons */
+    int caption_h = 0;
+    if (ai_caption && ai_caption[0]) {
+        /* Mehrzeiliger Text: ca. 14px pro Zeile, max 4 Zeilen */
+        caption_h = 72;
+    } else if (analyzing) {
+        caption_h = 32;
+    }
+    int btn_area_y = fb->height - IV_BTN_H;
+    int cap_area_y = btn_area_y - caption_h;
+    int img_area_h = cap_area_y - img_area_y;
+
+    /* Bild zentriert zeichnen */
+    if (pixels && img_w > 0 && img_h > 0) {
+        int off_x = (fb->width  - img_w) / 2;
+        int off_y = img_area_y + (img_area_h - img_h) / 2;
+        if (off_x < 0) off_x = 0;
+        if (off_y < img_area_y) off_y = img_area_y;
+        for (int iy = 0; iy < img_h; iy++) {
+            int fy = off_y + iy;
+            if (fy < img_area_y || fy >= cap_area_y) continue;
+            for (int ix = 0; ix < img_w; ix++) {
+                int fx = off_x + ix;
+                if (fx < 0 || fx >= fb->width) continue;
+                fb->back[fy * fb->width + fx] = pixels[iy * img_w + ix];
+            }
+        }
+    } else {
+        /* Platzhalter -- dunkelgraues Feld mit Kamera-Symbol */
+        int px = (fb->width - 80) / 2, py = img_area_y + (img_area_h - 60) / 2;
+        flux_fb_fill_rect(fb, px, py, 80, 60, 0x1A2535);
+        flux_fb_fill_rect(fb, px + 15, py + 10, 50, 40, 0x243450);
+        flux_fb_fill_rect(fb, px + 28, py + 18, 24, 24, 0x2A3D60);
+    }
+
+    /* Caption / Analysiere-Text */
+    if (analyzing) {
+        int cw = flux_fb_text_width("KI analysiert Bild ...", 2);
+        flux_fb_text(fb, (fb->width - cw) / 2, cap_area_y + 8,
+                     "KI analysiert Bild ...", COL_ACCENT, 2);
+    } else if (ai_caption && ai_caption[0]) {
+        flux_fb_fill_rect(fb, 0, cap_area_y, fb->width, caption_h, 0x0E1520);
+        /* Bis zu 3 Zeilen a 40 Zeichen */
+        char line[48];
+        const char *p = ai_caption;
+        int cy = cap_area_y + 6;
+        for (int li = 0; li < 4 && *p; li++) {
+            int len = 0;
+            while (p[len] && p[len] != '\n' && len < 42) len++;
+            if (len > 42) len = 42;
+            memcpy(line, p, (size_t)len);
+            line[len] = '\0';
+            flux_fb_text(fb, 10, cy, line, COL_TEXT, 2);
+            cy += 17;
+            p += len;
+            if (*p == '\n') p++;
+        }
+    }
+
+    /* Button-Leiste: [Zurueck] [KI analysieren] [Loeschen] */
+    flux_fb_fill_rect(fb, 0, btn_area_y, fb->width, IV_BTN_H, COL_STATUSBAR);
+    int bw = fb->width / IV_BTN_COUNT;
+    const char *btn_labels[] = { "< Zurueck", "KI analyse", "Loeschen" };
+    uint32_t btn_cols[] = { COL_KEY_SPEC, COL_ACCENT, COL_DANGER };
+    for (int i = 0; i < IV_BTN_COUNT; i++) {
+        int bx = i * bw + 4;
+        int byw = btn_area_y + 6;
+        int bww = bw - 8;
+        int bhh = IV_BTN_H - 12;
+        flux_fb_fill_rect(fb, bx, byw, bww, bhh, btn_cols[i]);
+        int tw = flux_fb_text_width(btn_labels[i], 2);
+        uint32_t tc = (i == 1) ? COL_BG : COL_TEXT;
+        flux_fb_text(fb, bx + (bww - tw) / 2, byw + (bhh - 14) / 2, btn_labels[i], tc, 2);
+    }
+
+    flux_fb_present(fb);
+}
+
+int flux_ui_image_viewer_hit(const flux_fb_t *fb, int x, int y,
+                              int *back, int *analyze, int *del) {
+    *back = *analyze = *del = 0;
+    int btn_area_y = fb->height - IV_BTN_H;
+    if (y < btn_area_y) return 0;
+    int bw = fb->width / IV_BTN_COUNT;
+    int btn = x / bw;
+    if (btn == 0) { *back    = 1; return 1; }
+    if (btn == 1) { *analyze = 1; return 1; }
+    if (btn == 2) { *del     = 1; return 1; }
+    return 0;
 }
