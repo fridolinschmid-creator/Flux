@@ -14,6 +14,9 @@ typedef enum {
     FLUX_EV_ENTER,
     FLUX_EV_TAP,         /* x, y gesetzt (Bildschirmkoordinaten) */
     FLUX_EV_SWIPE_UP,    /* schneller Wisch nach oben (z.B. zum Entsperren) */
+    FLUX_EV_SWIPE_DOWN,  /* schneller Wisch nach unten */
+    FLUX_EV_SWIPE_LEFT,  /* schneller Wisch nach links */
+    FLUX_EV_SWIPE_RIGHT, /* schneller Wisch nach rechts */
 } flux_event_type_t;
 
 typedef struct {

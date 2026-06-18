@@ -32,6 +32,8 @@
 #include <dirent.h>
 #include <sys/stat.h>
 #include <sys/select.h>
+#include <sys/wait.h>
+#include <time.h>
 
 /* ---- Uebergangs-Animation (Einblenden von unten) --------------------- */
 
@@ -88,25 +90,95 @@ static void animate_slide_in(flux_fb_t *fb, uint32_t *old_buf) {
     free(new_buf);
 }
 
+/* ---- Sprachausgabe (TTS) --------------------------------------------- */
+
+static void tts_speak(const char *text) {
+    char enabled[8] = {0};
+    flux_config_get("tts", enabled, sizeof(enabled));
+    if (enabled[0] != '1') return;
+    if (!text || !*text) return;
+
+    pid_t p = fork();
+    if (p == 0) {
+        /* espeak bevorzugt (Embedded Linux), dann flite als Fallback */
+        execlp("espeak", "espeak", "-v", "de", "-s", "160", text, NULL);
+        execlp("flite",  "flite",  "-t", text, NULL);
+        _exit(0);
+    }
+    if (p > 0) waitpid(p, NULL, WNOHANG); /* Zombie sofort abraeumen */
+}
+
+/* ---- Screenshot --------------------------------------------------------- */
+
+static void save_screenshot(const flux_fb_t *fb, char *msg_out, size_t msg_cap) {
+    mkdir("/home/user", 0755);
+    mkdir("/home/user/Screenshots", 0755);
+    time_t t = time(NULL);
+    struct tm tmv;
+    localtime_r(&t, &tmv);
+    char path[256];
+    strftime(path, sizeof(path),
+             "/home/user/Screenshots/flux_%Y%m%d_%H%M%S.ppm", &tmv);
+    FILE *f = fopen(path, "wb");
+    if (!f) {
+        snprintf(msg_out, msg_cap, "Screenshot-Fehler: %s", path);
+        return;
+    }
+    fprintf(f, "P6\n%d %d\n255\n", fb->width, fb->height);
+    for (int i = 0; i < fb->width * fb->height; i++) {
+        uint32_t px = fb->back[i];
+        fputc((px >> 16) & 0xff, f);
+        fputc((px >>  8) & 0xff, f);
+        fputc( px        & 0xff, f);
+    }
+    fclose(f);
+    snprintf(msg_out, msg_cap, "Screenshot gespeichert: %s", path);
+}
+
+/* ---- Farbthema ---------------------------------------------------------- */
+
+static void apply_theme(void) {
+    char theme[32] = {0};
+    flux_config_get("theme", theme, sizeof(theme));
+    if      (!strcmp(theme, "blau"))   flux_ui_set_accent(0x3B82F6);
+    else if (!strcmp(theme, "lila"))   flux_ui_set_accent(0xA855F7);
+    else if (!strcmp(theme, "orange")) flux_ui_set_accent(0xF97316);
+    else if (!strcmp(theme, "gruen"))  flux_ui_set_accent(0x22C55E);
+    else if (!strcmp(theme, "rot"))    flux_ui_set_accent(0xEF4444);
+    /* teal ist default -- kein else noetig */
+}
+
 #define FLUX_PIN_LEN       4
 #define FLUX_FILES_MAX     12
-#define FLUX_SETTINGS_N    7
+#define FLUX_SETTINGS_N    10   /* 7 bestehende + theme + auto_lock + tts */
 #define VIEWER_CONTENT_MAX 32768
 
-typedef enum { EDIT_NONE = 0, EDIT_ACTION_BODY, EDIT_SETTING_FIELD } edit_target_t;
+typedef enum {
+    EDIT_NONE = 0,
+    EDIT_ACTION_BODY,
+    EDIT_SETTING_FIELD,
+    EDIT_NEW_FOLDER,
+} edit_target_t;
 
 /* ---- Einstellungen: Feldliste -------------------------------------
  * main.c maskiert Geheimnisse, bevor sie an ui.c gehen (siehe ui.h) --
  * ui.c/draw_settings weiss nichts von der Konfigurationsdatei. */
 
 static const char *setting_keys[FLUX_SETTINGS_N] = {
-    "pin_hash", "smtp_host", "smtp_port", "smtp_user", "smtp_pass", "smtp_from", "api_key",
+    "pin_hash", "smtp_host", "smtp_port", "smtp_user", "smtp_pass",
+    "smtp_from", "api_key",
+    "theme",    /* teal|blau|lila|orange|gruen|rot */
+    "auto_lock",/* 0=aus, 30, 60, 120, 300 Sekunden */
+    "tts",      /* 0=aus, 1=ein */
 };
 static const char *setting_labels[FLUX_SETTINGS_N] = {
     "PIN-Code", "SMTP-Server", "SMTP-Port", "SMTP-Benutzer",
     "SMTP-Passwort", "Absender-Adresse", "Cloud-API-Key",
+    "Farbthema",    /* teal/blau/lila/orange/gruen/rot */
+    "Auto-Sperre",  /* 0=aus */
+    "Sprache (TTS)",/* 0=aus, 1=ein */
 };
-static const int setting_secret[FLUX_SETTINGS_N] = { 1, 0, 0, 0, 1, 0, 1 };
+static const int setting_secret[FLUX_SETTINGS_N] = { 1, 0, 0, 0, 1, 0, 1, 0, 0, 0 };
 
 static char setting_values_buf[FLUX_SETTINGS_N][200];
 static const char *setting_values[FLUX_SETTINGS_N];
@@ -141,6 +213,9 @@ static void apply_setting_edit(int index, const char *value) {
     } else {
         flux_config_set(setting_keys[index], value);
     }
+    /* Farbthema sofort anwenden */
+    if (strcmp(setting_keys[index], "theme") == 0)
+        apply_theme();
 }
 
 /* ---- Dateien: einfacher Read-Only-Browser --------------------------
@@ -255,12 +330,17 @@ int main(void) {
         return 1;
     }
 
+    /* Farbthema vor dem ersten Zeichnen laden */
+    apply_theme();
+
     flux_input_t in;
     int have_input = (flux_input_open(&in, fb.width, fb.height) == 0);
     if (!have_input)
         fprintf(stderr, "flux-shell: keine Eingabegeraete gefunden, nur Uhr wird angezeigt.\n");
 
     flux_screen_t screen = FLUX_SCREEN_LOCK;
+    time_t last_event_time = time(NULL);
+    flux_screen_t pre_notify_screen = FLUX_SCREEN_ASSISTANT; /* Rueckkehr-Ziel fuer Notify */
     char input_buf[256] = {0};
     char answer_buf[FLUX_MAX_RESPONSE] = {0};
     char edit_buf[4096] = {0};
@@ -287,11 +367,24 @@ int main(void) {
         int ready = (maxfd >= 0) ? select(maxfd + 1, &rfds, NULL, NULL, &tv) : (sleep(1), 0);
 
         if (ready <= 0) {
-            /* Kein Input -- nur die Uhr auf dem Lockscreen weiterlaufen lassen. */
-            if (screen == FLUX_SCREEN_LOCK)
+            /* Kein Input -- Uhr auf dem Lockscreen, Auto-Sperre pruefen. */
+            if (screen == FLUX_SCREEN_LOCK) {
                 flux_ui_draw_lock(&fb);
+            } else {
+                char auto_lock_s[16] = {0};
+                flux_config_get("auto_lock", auto_lock_s, sizeof(auto_lock_s));
+                int timeout = atoi(auto_lock_s);
+                if (timeout > 0 && time(NULL) - last_event_time >= (time_t)timeout) {
+                    screen = FLUX_SCREEN_LOCK;
+                    flux_ui_draw_lock(&fb);
+                }
+            }
+            /* Zombie-Kinder (TTS-Prozesse) aufraumen */
+            while (waitpid(-1, NULL, WNOHANG) > 0) {}
             continue;
         }
+        /* Jedes verarbeitete Event setzt den Inaktivitaets-Timer zurueck */
+        last_event_time = time(NULL);
 
         flux_event_t ev = flux_input_poll(&in);
         if (ev.type == FLUX_EV_NONE) continue;
@@ -458,6 +551,24 @@ int main(void) {
                                           pending_action.to, pending_action.subject, pending_action.body);
                     animate_slide_in(&fb, old);
                     free(old);
+                } else if (edit_target == EDIT_NEW_FOLDER) {
+                    if (edit_buf[0]) {
+                        char new_dir[1280];
+                        size_t plen = strlen(files_path);
+                        if (plen > 1)
+                            snprintf(new_dir, sizeof(new_dir), "%s/%s", files_path, edit_buf);
+                        else
+                            snprintf(new_dir, sizeof(new_dir), "/%s", edit_buf);
+                        mkdir(new_dir, 0755);
+                    }
+                    file_selected = -1;
+                    load_files(files_path);
+                    uint32_t *old = capture_frame(&fb);
+                    screen = FLUX_SCREEN_FILES;
+                    flux_ui_draw_files(&fb, files_path, file_names, file_metas,
+                                       file_n, file_truncated, file_selected);
+                    animate_slide_in(&fb, old);
+                    free(old);
                 } else {
                     apply_setting_edit(edit_setting_index, edit_buf);
                     load_settings_values();
@@ -495,7 +606,36 @@ int main(void) {
             continue;
         }
 
+        if (screen == FLUX_SCREEN_NOTIFY) {
+            /* Jeder Tap oder Wisch schliesst den Overlay */
+            if (ev.type == FLUX_EV_TAP || ev.type == FLUX_EV_SWIPE_UP ||
+                ev.type == FLUX_EV_SWIPE_DOWN) {
+                uint32_t *old = capture_frame(&fb);
+                screen = pre_notify_screen;
+                if (screen == FLUX_SCREEN_ASSISTANT)
+                    flux_ui_draw_assistant(&fb, last_q, input_buf, answer_buf, 0);
+                else if (screen == FLUX_SCREEN_FILES)
+                    flux_ui_draw_files(&fb, files_path, file_names, file_metas,
+                                       file_n, file_truncated, file_selected);
+                animate_slide_in(&fb, old);
+                free(old);
+            }
+            continue;
+        }
+
         if (screen == FLUX_SCREEN_FILES) {
+            /* "Neuer Ordner"-Knopf */
+            if (ev.type == FLUX_EV_TAP && flux_ui_files_new_btn_hit(&fb, ev.x, ev.y)) {
+                edit_buf[0] = '\0';
+                edit_target = EDIT_NEW_FOLDER;
+                uint32_t *old = capture_frame(&fb);
+                screen = FLUX_SCREEN_EDIT_BODY;
+                flux_ui_draw_edit_body(&fb, edit_buf);
+                animate_slide_in(&fb, old);
+                free(old);
+                continue;
+            }
+
             if (ev.type != FLUX_EV_TAP) continue;
 
             /* Loeschen-Knopf (nur sichtbar wenn Datei ausgewaehlt) */
@@ -585,6 +725,17 @@ int main(void) {
             continue;
         }
 
+        /* FLUX_SCREEN_ASSISTANT -- Wisch nach unten oeffnet den Notify-Overlay. */
+        if (ev.type == FLUX_EV_SWIPE_DOWN) {
+            pre_notify_screen = FLUX_SCREEN_ASSISTANT;
+            uint32_t *old = capture_frame(&fb);
+            screen = FLUX_SCREEN_NOTIFY;
+            flux_ui_draw_notify(&fb);
+            animate_slide_in(&fb, old);
+            free(old);
+            continue;
+        }
+
         /* FLUX_SCREEN_ASSISTANT -- Quickrow/Mikrofon-Knopf zuerst pruefen,
          * sonst Taps auf die Bildschirmtastatur wie Hardware-Eingaben
          * behandeln (gemeinsamer Verarbeitungspfad). */
@@ -645,7 +796,7 @@ int main(void) {
             if (tap_backspace) kind = FLUX_EV_BACKSPACE;
             else if (tap_enter) kind = FLUX_EV_ENTER;
             else { kind = FLUX_EV_CHAR; ch = tap_ch; }
-        } else if (kind == FLUX_EV_SWIPE_UP) {
+        } else if (kind == FLUX_EV_SWIPE_UP || kind == FLUX_EV_SWIPE_LEFT || kind == FLUX_EV_SWIPE_RIGHT) {
             continue; /* auf dem Assistenten-Bildschirm ohne Bedeutung */
         }
 
@@ -686,11 +837,30 @@ int main(void) {
                 free(old);
                 continue;
             }
+            if (strcasecmp(input_buf, "screenshot") == 0) {
+                input_buf[0] = '\0';
+                save_screenshot(&fb, answer_buf, sizeof(answer_buf));
+                flux_ui_draw_assistant(&fb, last_q, input_buf, answer_buf, 0);
+                continue;
+            }
+            if (strcasecmp(input_buf, "benachrichtigungen") == 0 || strcasecmp(input_buf, "notify") == 0) {
+                input_buf[0] = '\0';
+                pre_notify_screen = FLUX_SCREEN_ASSISTANT;
+                uint32_t *old = capture_frame(&fb);
+                screen = FLUX_SCREEN_NOTIFY;
+                flux_ui_draw_notify(&fb);
+                animate_slide_in(&fb, old);
+                free(old);
+                continue;
+            }
 
-            snprintf(last_q, sizeof(last_q), "%s", input_buf); /* Frage als Nutzer-Blase sichern */
+            snprintf(last_q, sizeof(last_q), "%s", input_buf);
             flux_ui_draw_assistant(&fb, last_q, "", answer_buf, 1);
             flux_ipc_ask(last_q, answer_buf, sizeof(answer_buf));
             input_buf[0] = '\0';
+
+            /* TTS: KI-Antwort vorlesen (wenn aktiviert) */
+            tts_speak(answer_buf);
 
             if (flux_action_parse(answer_buf, &pending_action)) {
                 uint32_t *old = capture_frame(&fb);

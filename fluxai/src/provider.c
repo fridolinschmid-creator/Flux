@@ -32,6 +32,24 @@
     "<Text>\n" \
     "Falls Empfaenger oder Inhalt unklar sind, frage nach. "
 
+/* --- Conversation context (last CTX_MAX turns) --- */
+#define CTX_MAX 3
+typedef struct { char q[256]; char a[512]; } ctx_turn_t;
+static ctx_turn_t ctx_history[CTX_MAX];
+static int        ctx_n = 0;
+
+static void ctx_add(const char *q, const char *a) {
+    if (ctx_n < CTX_MAX) {
+        snprintf(ctx_history[ctx_n].q, sizeof(ctx_history[0].q), "%s", q);
+        snprintf(ctx_history[ctx_n].a, sizeof(ctx_history[0].a), "%s", a);
+        ctx_n++;
+    } else {
+        memmove(ctx_history, ctx_history + 1, (CTX_MAX - 1) * sizeof(ctx_turn_t));
+        snprintf(ctx_history[CTX_MAX-1].q, sizeof(ctx_history[0].q), "%s", q);
+        snprintf(ctx_history[CTX_MAX-1].a, sizeof(ctx_history[0].a), "%s", a);
+    }
+}
+
 struct membuf {
     char  *data;
     size_t len;
@@ -99,18 +117,34 @@ static int extract_text(const char *json, char *out, size_t out_cap) {
     return o > 0;
 }
 
-/* Sendet einen einzelnen API-Request. system_prompt und user_msg werden
- * JSON-escaped. Gibt 1 bei Erfolg. */
+/* Sendet einen API-Request. system_prompt und final_q werden JSON-escaped.
+ * Fuegt die letzten ctx_n Gespraechsrunden als Kontext ein.
+ * use_ctx steuert ob der globale Gespraechsverlauf eingebettet wird.
+ * Gibt 1 bei Erfolg. */
 static int api_call(const char *api_key, const char *model,
-                    const char *system_prompt, const char *user_msg,
-                    char *out, size_t out_cap) {
-    char body[16384];
+                    const char *system_prompt, const char *final_q,
+                    char *out, size_t out_cap, int use_ctx) {
+    char body[24576];
     snprintf(body, sizeof(body),
              "{\"model\":\"%s\",\"max_tokens\":600,\"system\":\"", model);
     json_escape_append(body, sizeof(body), system_prompt);
-    strncat(body, "\",\"messages\":[{\"role\":\"user\",\"content\":\"",
+    strncat(body, "\",\"messages\":[", sizeof(body) - strlen(body) - 1);
+
+    if (use_ctx) {
+        for (int i = 0; i < ctx_n; i++) {
+            strncat(body, "{\"role\":\"user\",\"content\":\"",
+                    sizeof(body) - strlen(body) - 1);
+            json_escape_append(body, sizeof(body), ctx_history[i].q);
+            strncat(body, "\"},{\"role\":\"assistant\",\"content\":\"",
+                    sizeof(body) - strlen(body) - 1);
+            json_escape_append(body, sizeof(body), ctx_history[i].a);
+            strncat(body, "\"},", sizeof(body) - strlen(body) - 1);
+        }
+    }
+
+    strncat(body, "{\"role\":\"user\",\"content\":\"",
             sizeof(body) - strlen(body) - 1);
-    json_escape_append(body, sizeof(body), user_msg);
+    json_escape_append(body, sizeof(body), final_q);
     strncat(body, "\"}]}", sizeof(body) - strlen(body) - 1);
 
     CURL *curl = curl_easy_init();
@@ -208,15 +242,18 @@ void flux_provider_ask(const char *question, char *out, size_t out_cap) {
     snprintf(system_prompt, sizeof(system_prompt),
              "%s\n\n%s", FLUX_SYSTEM_PROMPT_BASE, flux_tools_description());
 
-    /* Erster API-Aufruf */
-    if (!api_call(api_key, model, system_prompt, question, out, out_cap))
+    /* Erster API-Aufruf -- mit Gespraechsverlauf */
+    if (!api_call(api_key, model, system_prompt, question, out, out_cap, 1))
         return;
 
     /* Tool-Aufruf? */
     char tool_name[64], tool_arg[1024];
     if (!parse_tool_call(out, tool_name, sizeof(tool_name),
-                              tool_arg, sizeof(tool_arg)))
-        return; /* Normale Antwort -- fertig */
+                              tool_arg, sizeof(tool_arg))) {
+        /* Normale Antwort -- Austausch im Verlauf speichern */
+        ctx_add(question, out);
+        return;
+    }
 
     /* Tool ausfuehren */
     char tool_result[4096];
@@ -224,7 +261,9 @@ void flux_provider_ask(const char *question, char *out, size_t out_cap) {
              "Fehler: unbekanntes Tool '%s'", tool_name);
     flux_tool_exec(tool_name, tool_arg, tool_result, sizeof(tool_result));
 
-    /* Zweiter API-Aufruf mit Tool-Ergebnis als Kontext */
+    /* Zweiter API-Aufruf mit Tool-Ergebnis als Kontext.
+     * Kein Gespraechsverlauf einbetten -- der followup-Text enthaelt
+     * bereits die urspruengliche Frage als Kontext. */
     char followup[8192];
     snprintf(followup, sizeof(followup),
              "Urspruengliche Frage: \"%s\"\n"
@@ -234,5 +273,6 @@ void flux_provider_ask(const char *question, char *out, size_t out_cap) {
              "Antworte auf Deutsch, kurz und klar.",
              question, tool_name, tool_arg, tool_result);
 
-    api_call(api_key, model, system_prompt, followup, out, out_cap);
+    if (api_call(api_key, model, system_prompt, followup, out, out_cap, 0))
+        ctx_add(question, out);
 }

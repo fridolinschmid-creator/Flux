@@ -154,6 +154,15 @@ int main(int argc, char *argv[]) {
         0);
     save_ppm(&fb, outdir, "16_datei_betrachter");
 
+    /* 17 -- Benachrichtigungs-Overlay */
+    flux_ui_draw_notify(&fb);
+    save_ppm(&fb, outdir, "17_benachrichtigungen");
+
+    /* 18 -- Assistenten-Bildschirm mit blauem Farbthema */
+    flux_ui_set_accent(0x3B82F6);
+    flux_ui_draw_assistant(&fb, "wie spaet ist es?", "", "Es ist 14:35 Uhr.", 0);
+    save_ppm(&fb, outdir, "18_assistent_blau");
+
     flux_fb_close(&fb);
     printf("\nFertig! PPM -> PNG: convert %s/XX.ppm %s/XX.png\n", outdir, outdir);
     return 0;

@@ -1,16 +1,20 @@
 /* tools.c -- Implementierung der KI-Tools fuer fluxaid.
  *
  * Verfuegbare Tools:
- *   date_time   -- aktuelles Datum und Uhrzeit
- *   weather     -- Wetter via wttr.in (kein API-Key noetig), ARG: Stadtname
- *   file_read   -- Datei lesen, ARG: Pfad
- *   file_list   -- Verzeichnis auflisten, ARG: Pfad
- *   file_create -- Datei erstellen, ARG: Pfad|Inhalt (\n fuer Zeilenumbruch)
- *   file_delete -- Datei loeschen (nur /home/user/), ARG: Pfad
- *   calculate   -- Mathematischen Ausdruck auswerten, ARG: Ausdruck
- *   note_save   -- Notiz speichern, ARG: Text
- *   note_list   -- Gespeicherte Notizen anzeigen, ARG: (leer)
- *   sys_info    -- Systeminfo (Speicher, OS), ARG: (leer)
+ *   date_time        -- aktuelles Datum und Uhrzeit
+ *   weather          -- Wetter via wttr.in (kein API-Key noetig), ARG: Stadtname
+ *   file_read        -- Datei lesen, ARG: Pfad
+ *   file_list        -- Verzeichnis auflisten, ARG: Pfad
+ *   file_create      -- Datei erstellen, ARG: Pfad|Inhalt (\n fuer Zeilenumbruch)
+ *   file_delete      -- Datei loeschen (nur /home/user/), ARG: Pfad
+ *   calculate        -- Mathematischen Ausdruck auswerten, ARG: Ausdruck
+ *   note_save        -- Notiz speichern, ARG: Text
+ *   note_list        -- Gespeicherte Notizen anzeigen, ARG: (leer)
+ *   sys_info         -- Systeminfo (Speicher, OS), ARG: (leer)
+ *   brightness_get   -- Bildschirmhelligkeit lesen, ARG: (leer)
+ *   brightness_set   -- Bildschirmhelligkeit setzen, ARG: 0-100 (Prozent)
+ *   wifi_info        -- WLAN-Signalstaerke und Interface, ARG: (leer)
+ *   vibrate          -- Geraet vibrieren lassen, ARG: Dauer in ms (z.B. 300)
  */
 #include "tools.h"
 #include "../../common/flux_config.h"
@@ -552,6 +556,198 @@ static int tool_contacts_search(const char *arg, char *out, size_t cap) {
     return 1;
 }
 
+/* ---- brightness_get -------------------------------------------------- */
+
+/*
+ * Hilfsfunktion: erstes Backlight-Verzeichnis unter /sys/class/backlight/
+ * suchen und den Pfad ohne trailing '/' in buf schreiben.
+ * Gibt 1 zurueck wenn gefunden, 0 sonst.
+ */
+static int find_backlight_dir(char *buf, size_t cap) {
+    /* Bevorzugte Namen in Reihenfolge probieren */
+    static const char *known[] = {
+        "/sys/class/backlight/backlight",
+        "/sys/class/backlight/lcd-backlight",
+        "/sys/class/backlight/intel_backlight",
+        NULL
+    };
+    for (int i = 0; known[i]; i++) {
+        char probe[256];
+        snprintf(probe, sizeof(probe), "%s/brightness", known[i]);
+        FILE *f = fopen(probe, "r");
+        if (f) {
+            fclose(f);
+            snprintf(buf, cap, "%s", known[i]);
+            return 1;
+        }
+    }
+    /* Fallback: ersten Eintrag aus opendir nehmen */
+    DIR *d = opendir("/sys/class/backlight");
+    if (!d) return 0;
+    struct dirent *e;
+    while ((e = readdir(d)) != NULL) {
+        if (e->d_name[0] == '.') continue;
+        snprintf(buf, cap, "/sys/class/backlight/%s", e->d_name);
+        closedir(d);
+        return 1;
+    }
+    closedir(d);
+    return 0;
+}
+
+static int tool_brightness_get(const char *arg, char *out, size_t cap) {
+    (void)arg;
+    char dir[256];
+    if (!find_backlight_dir(dir, sizeof(dir))) {
+        snprintf(out, cap, "Helligkeitssteuerung nicht verfuegbar auf diesem Geraet");
+        return 1;
+    }
+    char path_cur[280], path_max[280];
+    snprintf(path_cur, sizeof(path_cur), "%s/brightness",     dir);
+    snprintf(path_max, sizeof(path_max), "%s/max_brightness", dir);
+
+    long cur = 0, max = 0;
+    FILE *f = fopen(path_cur, "r");
+    if (f) { fscanf(f, "%ld", &cur); fclose(f); }
+    else {
+        snprintf(out, cap, "Fehler: brightness-Datei nicht lesbar (%s)", path_cur);
+        return 1;
+    }
+    f = fopen(path_max, "r");
+    if (f) { fscanf(f, "%ld", &max); fclose(f); }
+
+    if (max <= 0) {
+        snprintf(out, cap, "Aktuelle Helligkeit: %ld (max unbekannt)", cur);
+        return 1;
+    }
+    int pct = (int)(cur * 100 / max);
+    snprintf(out, cap, "Helligkeit: %d%% (Rohwert %ld von %ld, Quelle: %s)",
+             pct, cur, max, dir);
+    return 1;
+}
+
+/* ---- brightness_set -------------------------------------------------- */
+
+static int tool_brightness_set(const char *arg, char *out, size_t cap) {
+    if (!arg || !*arg) {
+        snprintf(out, cap, "Fehler: kein Wert angegeben (0-100)");
+        return 1;
+    }
+    char *end;
+    long pct = strtol(arg, &end, 10);
+    if (end == arg || pct < 0 || pct > 100) {
+        snprintf(out, cap, "Fehler: Wert muss zwischen 0 und 100 liegen (angegeben: '%s')", arg);
+        return 1;
+    }
+    char dir[256];
+    if (!find_backlight_dir(dir, sizeof(dir))) {
+        snprintf(out, cap, "Helligkeitssteuerung nicht verfuegbar auf diesem Geraet");
+        return 1;
+    }
+    char path_cur[280], path_max[280];
+    snprintf(path_cur, sizeof(path_cur), "%s/brightness",     dir);
+    snprintf(path_max, sizeof(path_max), "%s/max_brightness", dir);
+
+    long max = 0;
+    FILE *f = fopen(path_max, "r");
+    if (f) { fscanf(f, "%ld", &max); fclose(f); }
+    if (max <= 0) {
+        snprintf(out, cap, "Fehler: max_brightness nicht lesbar (%s)", path_max);
+        return 1;
+    }
+    long raw = (long)(pct * max / 100);
+    f = fopen(path_cur, "w");
+    if (!f) {
+        snprintf(out, cap, "Fehler: brightness-Datei nicht schreibbar (%s) -- Root-Rechte noetig?", path_cur);
+        return 1;
+    }
+    fprintf(f, "%ld\n", raw);
+    fclose(f);
+    snprintf(out, cap, "Helligkeit auf %ld%% gesetzt (Rohwert %ld von %ld)", pct, raw, max);
+    return 1;
+}
+
+/* ---- wifi_info ------------------------------------------------------- */
+
+static int tool_wifi_info(const char *arg, char *out, size_t cap) {
+    (void)arg;
+    FILE *f = fopen("/proc/net/wireless", "r");
+    if (!f) {
+        snprintf(out, cap, "Kein WLAN verfuegbar (oder /proc/net/wireless nicht lesbar)");
+        return 1;
+    }
+    /* Die ersten zwei Zeilen sind Header, danach kommt eine Zeile pro Interface:
+     *   wlan0: 0000   65.  -45.  -95.   0.      0      0    0     0     0
+     * Felder: status, link, level, noise, ... */
+    char line[256];
+    int lineno = 0;
+    char tmp[1024];
+    size_t pos = 0;
+    int found = 0;
+    while (fgets(line, sizeof(line), f)) {
+        lineno++;
+        if (lineno <= 2) continue; /* Header ueberspringen */
+        /* Interface-Name endet mit ':' */
+        char iface[64] = {0};
+        int status = 0;
+        int link = 0;
+        int level = 0, noise = 0;
+        /* Format: "  wlan0: 0000   65.  -45.  -95." */
+        if (sscanf(line, " %63[^:]: %d %d. %d. %d.",
+                   iface, &status, &link, &level, &noise) >= 3) {
+            pos += snprintf(tmp + pos, sizeof(tmp) - pos,
+                            "Interface: %s  Verbindungsqualitaet: %d%%  "
+                            "Signalpegel: %d dBm  Rauschen: %d dBm\n",
+                            iface, link, level, noise);
+            found++;
+        }
+    }
+    fclose(f);
+    if (!found) {
+        snprintf(out, cap, "Kein WLAN-Interface aktiv");
+    } else {
+        tmp[pos > 0 ? pos - 1 : 0] = '\0'; /* letztes \n entfernen */
+        snprintf(out, cap, "%s", tmp);
+    }
+    return 1;
+}
+
+/* ---- vibrate --------------------------------------------------------- */
+
+static int tool_vibrate(const char *arg, char *out, size_t cap) {
+    long ms = 300; /* Standardwert */
+    if (arg && *arg) {
+        char *end;
+        long v = strtol(arg, &end, 10);
+        if (end != arg && v > 0) ms = v;
+    }
+
+    /* Sysfs-Knoten in bevorzugter Reihenfolge probieren */
+    struct { const char *path; const char *value_fmt; } nodes[] = {
+        /* Android-Kernel: Wert = Dauer in ms */
+        { "/sys/class/timed_output/vibrator/enable",  "%ld"  },
+        /* Neuere Kernels: "1" schreiben zum Aktivieren */
+        { "/sys/class/leds/vibrator/activate",        "1"    },
+        { NULL, NULL }
+    };
+
+    for (int i = 0; nodes[i].path; i++) {
+        FILE *f = fopen(nodes[i].path, "w");
+        if (!f) continue;
+        if (strcmp(nodes[i].value_fmt, "%ld") == 0)
+            fprintf(f, "%ld\n", ms);
+        else
+            fprintf(f, "%s\n", nodes[i].value_fmt);
+        fclose(f);
+        snprintf(out, cap, "Vibration ausgeloest fuer %ld ms (Knoten: %s)",
+                 ms, nodes[i].path);
+        return 1;
+    }
+
+    snprintf(out, cap, "Vibration nicht verfuegbar auf diesem Geraet");
+    return 1;
+}
+
 /* ---- Dispatch -------------------------------------------------------- */
 
 int flux_tool_exec(const char *name, const char *arg,
@@ -569,6 +765,10 @@ int flux_tool_exec(const char *name, const char *arg,
     if (strcmp(name, "alarm_set")        == 0) return tool_alarm_set(arg, out, out_cap);
     if (strcmp(name, "reminder_set")     == 0) return tool_reminder_set(arg, out, out_cap);
     if (strcmp(name, "contacts_search")  == 0) return tool_contacts_search(arg, out, out_cap);
+    if (strcmp(name, "brightness_get")   == 0) return tool_brightness_get(arg, out, out_cap);
+    if (strcmp(name, "brightness_set")   == 0) return tool_brightness_set(arg, out, out_cap);
+    if (strcmp(name, "wifi_info")        == 0) return tool_wifi_info(arg, out, out_cap);
+    if (strcmp(name, "vibrate")          == 0) return tool_vibrate(arg, out, out_cap);
     return 0; /* unbekanntes Tool */
 }
 
@@ -592,6 +792,10 @@ const char *flux_tools_description(void) {
         "  alarm_set        -- Alarm setzen. ARG: HH:MM Beschreibung\n"
         "  reminder_set     -- Erinnerung setzen. ARG: Erinnerungstext\n"
         "  contacts_search  -- Kontakt suchen. ARG: Name oder Nummer\n"
+        "  brightness_get   -- Bildschirmhelligkeit lesen. ARG: (leer)\n"
+        "  brightness_set   -- Bildschirmhelligkeit setzen. ARG: 0-100 (Prozent)\n"
+        "  wifi_info        -- WLAN-Signalstaerke und Interface. ARG: (leer)\n"
+        "  vibrate          -- Geraet vibrieren lassen. ARG: Dauer in ms (z.B. 300)\n"
         "Verwende Tools NUR wenn Echtzeitdaten benoetigt werden (Wetter, Dateien, Berechnung usw.). "
         "Normale Fragen beantworte ohne Tools.";
 }

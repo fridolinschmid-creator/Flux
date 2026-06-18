@@ -5,8 +5,12 @@
 #include <time.h>
 #include <stdlib.h>
 
+/* Dynamische Akzentfarbe -- aenderbar via flux_ui_set_accent(). */
+static uint32_t g_accent = 0x4FD1C5;
+void flux_ui_set_accent(uint32_t rgb) { g_accent = rgb; }
+
 #define COL_BG       0x0B0E14
-#define COL_ACCENT   0x4FD1C5
+#define COL_ACCENT   g_accent   /* immer den dynamischen Wert lesen */
 #define COL_TEXT     0xE6E6E6
 #define COL_DIM      0x6B7280
 #define COL_STATUSBAR 0x161B26
@@ -33,6 +37,66 @@
 
 /* ---- Statusleiste (oben, fast alle Bildschirme) -------------------- */
 
+/* Liest Batteriefuellstand aus sysfs (0-100, oder -1 wenn nicht verfuegbar). */
+static int read_battery_pct(void) {
+    const char *paths[] = {
+        "/sys/class/power_supply/BAT0/capacity",
+        "/sys/class/power_supply/BAT1/capacity",
+        "/sys/class/power_supply/battery/capacity",
+        "/sys/class/power_supply/BAT/capacity",
+    };
+    for (int i = 0; i < 4; i++) {
+        FILE *f = fopen(paths[i], "r");
+        if (!f) continue;
+        int pct = -1;
+        fscanf(f, "%d", &pct);
+        fclose(f);
+        if (pct >= 0) return pct;
+    }
+    return -1;
+}
+
+/* Liest WLAN-Linkqualitaet (0-70 typisch) aus /proc/net/wireless,
+ * oder -1 wenn kein WLAN aktiv. */
+static int read_wifi_quality(void) {
+    FILE *f = fopen("/proc/net/wireless", "r");
+    if (!f) return -1;
+    char line[128];
+    fgets(line, sizeof(line), f); /* Header 1 */
+    fgets(line, sizeof(line), f); /* Header 2 */
+    int quality = -1;
+    if (fgets(line, sizeof(line), f)) {
+        char iface[64];
+        int status, link;
+        if (sscanf(line, " %63[^:]: %d %d.", iface, &status, &link) >= 3)
+            quality = link;
+    }
+    fclose(f);
+    return quality;
+}
+
+/* Zeichnet ein kleines Batterie-Symbol (20x12) bei (x,y). */
+static void draw_battery_icon(flux_fb_t *fb, int x, int y, int pct) {
+    /* Rahmen */
+    flux_fb_fill_rect(fb, x,    y,    18, 12, 0x445566);
+    flux_fb_fill_rect(fb, x+18, y+3,   2,  6, 0x445566); /* Plus-Pol */
+    /* Fuellung (gruen bis 50%, gelb bis 20%, rot darunter) */
+    int fill_w = 14 * pct / 100;
+    if (fill_w < 1 && pct > 0) fill_w = 1;
+    uint32_t col = (pct > 50) ? 0x22CC55 : (pct > 20) ? 0xFFCC00 : 0xFF4444;
+    if (fill_w > 0)
+        flux_fb_fill_rect(fb, x+2, y+2, fill_w, 8, col);
+}
+
+/* Zeichnet WLAN-Balken (3 Balken bei x,y). quality: 0-70 */
+static void draw_wifi_icon(flux_fb_t *fb, int x, int y, int quality) {
+    int bars = (quality >= 55) ? 3 : (quality >= 30) ? 2 : 1;
+    uint32_t hi = COL_ACCENT, lo = 0x334455;
+    flux_fb_fill_rect(fb, x,    y+8,  4, 4, bars >= 1 ? hi : lo);
+    flux_fb_fill_rect(fb, x+5,  y+4,  4, 8, bars >= 2 ? hi : lo);
+    flux_fb_fill_rect(fb, x+10, y,    4, 12, bars >= 3 ? hi : lo);
+}
+
 static void draw_statusbar(flux_fb_t *fb) {
     flux_fb_fill_rect(fb, 0, 0, fb->width, STATUSBAR_H, COL_STATUSBAR);
 
@@ -43,9 +107,35 @@ static void draw_statusbar(flux_fb_t *fb) {
     strftime(buf, sizeof(buf), "%H:%M", &tmv);
     flux_fb_text(fb, 12, 10, buf, COL_TEXT, 3);
 
+    /* Rechts: [Wifi] [Bat] Flux */
+    int rx = fb->width - 12;
+
     const char *label = "Flux";
-    int lw = flux_fb_text_width(label, 3);
-    flux_fb_text(fb, fb->width - lw - 12, 10, label, COL_DIM, 3);
+    int lw = flux_fb_text_width(label, 2);
+    rx -= lw;
+    flux_fb_text(fb, rx, 12, label, COL_DIM, 2);
+    rx -= 8;
+
+    int bat = read_battery_pct();
+    if (bat >= 0) {
+        rx -= 20;
+        draw_battery_icon(fb, rx, (STATUSBAR_H - 12) / 2, bat);
+        rx -= 6;
+        /* Prozentzahl */
+        char pbuf[8];
+        snprintf(pbuf, sizeof(pbuf), "%d%%", bat);
+        int pw = flux_fb_text_width(pbuf, 2);
+        rx -= pw;
+        flux_fb_text(fb, rx, 12, pbuf, COL_DIM, 2);
+        rx -= 8;
+    }
+
+    int wifi = read_wifi_quality();
+    if (wifi >= 0) {
+        rx -= 14;
+        draw_wifi_icon(fb, rx, (STATUSBAR_H - 12) / 2, wifi);
+        rx -= 6;
+    }
 }
 
 static void draw_back_bar(flux_fb_t *fb, const char *label) {
@@ -897,8 +987,26 @@ void flux_ui_draw_files(flux_fb_t *fb, const char *path, const char **names,
                      del_y + (FILES_DELETE_BTN_H - 16) / 2, dlabel, 0xFFFFFF, 2);
     }
 
+    /* "Neuer Ordner"-Knopf oben rechts im Titelbereich */
+    {
+        int bw = 100, bh = 32;
+        int bx = fb->width - bw - 8;
+        int by = STATUSBAR_H + (TITLE_AREA_H - bh) / 2;
+        flux_fb_fill_rect(fb, bx, by, bw, bh, COL_KEY_SPEC);
+        const char *nl = "+ Ordner";
+        int nlw = flux_fb_text_width(nl, 2);
+        flux_fb_text(fb, bx + (bw - nlw) / 2, by + (bh - 16) / 2, nl, COL_ACCENT, 2);
+    }
+
     draw_back_bar(fb, "Zurueck");
     flux_fb_present(fb);
+}
+
+int flux_ui_files_new_btn_hit(const flux_fb_t *fb, int x, int y) {
+    int bw = 100, bh = 32;
+    int bx = fb->width - bw - 8;
+    int by = STATUSBAR_H + (TITLE_AREA_H - bh) / 2;
+    return (x >= bx && x < bx + bw && y >= by && y < by + bh);
 }
 
 int flux_ui_files_delete_hit(const flux_fb_t *fb, int x, int y) {
@@ -979,4 +1087,129 @@ int flux_ui_viewer_hit(const flux_fb_t *fb, int x, int y,
     if (y < mid - 20) { *scroll_delta = -3; return 1; }
     if (y > mid + 20) { *scroll_delta =  3; return 1; }
     return 0;
+}
+
+/* ---- Benachrichtigungs-Overlay --------------------------------------- */
+
+void flux_ui_draw_notify(flux_fb_t *fb) {
+    flux_fb_fill_rect(fb, 0, 0, fb->width, fb->height, 0x080C14);
+
+    int y = 24;
+
+    /* --- Grosse Uhrzeit + Datum ---------------------------------------- */
+    time_t t = time(NULL);
+    struct tm tmv;
+    localtime_r(&t, &tmv);
+    char clock_buf[16], date_buf[64];
+    strftime(clock_buf, sizeof(clock_buf), "%H:%M", &tmv);
+    strftime(date_buf, sizeof(date_buf), "%A, %d. %B %Y", &tmv);
+
+    int cw = flux_fb_text_width(clock_buf, 7);
+    flux_fb_text(fb, (fb->width - cw) / 2, y, clock_buf, COL_TEXT, 7);
+    y += 7 * 11 + 8;
+
+    int dw = flux_fb_text_width(date_buf, 3);
+    flux_fb_text(fb, (fb->width - dw) / 2, y, date_buf, COL_DIM, 3);
+    y += 36;
+
+    /* Trennlinie */
+    flux_fb_fill_rect(fb, 20, y, fb->width - 40, 1, COL_DIVIDER);
+    y += 12;
+
+    /* --- Batterie + WLAN ------------------------------------------------ */
+    int bat = read_battery_pct();
+    int wifi = read_wifi_quality();
+
+    if (bat >= 0) {
+        draw_battery_icon(fb, 24, y + 2, bat);
+        char pbuf[16];
+        snprintf(pbuf, sizeof(pbuf), "  Batterie: %d%%", bat);
+        flux_fb_text(fb, 48, y, pbuf, COL_TEXT, 2);
+        y += 28;
+    }
+    if (wifi >= 0) {
+        draw_wifi_icon(fb, 24, y + 2, wifi);
+        char wbuf[32];
+        snprintf(wbuf, sizeof(wbuf), "  WLAN: %d/70", wifi);
+        flux_fb_text(fb, 38, y, wbuf, COL_TEXT, 2);
+        y += 28;
+    }
+
+    /* Trennlinie */
+    flux_fb_fill_rect(fb, 20, y, fb->width - 40, 1, COL_DIVIDER);
+    y += 12;
+
+    /* --- Wetter --------------------------------------------------------- */
+    {
+        char weather[256] = {0};
+        FILE *f = fopen(WEATHER_CACHE, "r");
+        if (f) {
+            if (!fgets(weather, sizeof(weather), f)) weather[0] = '\0';
+            size_t l = strlen(weather);
+            while (l > 0 && (weather[l-1] == '\n' || weather[l-1] == '\r'))
+                weather[--l] = '\0';
+            fclose(f);
+        }
+        if (weather[0]) {
+            weather_cond_t cond = classify_weather(weather);
+            draw_weather_icon(fb, 16, y, cond);
+            draw_wrapped(fb, 50, y, fb->width - 66, weather, COL_DIM, 2, 26);
+            y += 52;
+        }
+    }
+
+    /* --- Alarme --------------------------------------------------------- */
+    {
+        FILE *f = fopen("/tmp/flux_alarms.txt", "r");
+        if (f) {
+            flux_fb_text(fb, 16, y, "Alarme:", COL_ACCENT, 2);
+            y += 24;
+            char line[128];
+            int shown = 0;
+            while (fgets(line, sizeof(line), f) && shown < 3) {
+                size_t l = strlen(line);
+                while (l > 0 && (line[l-1] == '\n' || line[l-1] == '\r'))
+                    line[--l] = '\0';
+                if (!line[0]) continue;
+                flux_fb_text(fb, 24, y, line, COL_TEXT, 2);
+                y += 24; shown++;
+            }
+            fclose(f);
+            if (!shown) { flux_fb_text(fb, 24, y, "(keine)", COL_DIM, 2); y += 24; }
+        }
+    }
+
+    /* --- Erinnerungen --------------------------------------------------- */
+    {
+        FILE *f = fopen("/tmp/flux_reminders.txt", "r");
+        if (f) {
+            flux_fb_text(fb, 16, y, "Erinnerungen:", COL_ACCENT, 2);
+            y += 24;
+            char line[128];
+            int shown = 0;
+            while (fgets(line, sizeof(line), f) && shown < 2) {
+                size_t l = strlen(line);
+                while (l > 0 && (line[l-1] == '\n' || line[l-1] == '\r'))
+                    line[--l] = '\0';
+                if (!line[0]) continue;
+                flux_fb_text(fb, 24, y, line, COL_TEXT, 2);
+                y += 24; shown++;
+            }
+            fclose(f);
+        }
+    }
+
+    /* Hinweis zum Schliessen */
+    {
+        const char *hint = "Tippen zum Schliessen";
+        int hw = flux_fb_text_width(hint, 2);
+        flux_fb_text(fb, (fb->width - hw) / 2, fb->height - 32, hint, COL_DIM, 2);
+    }
+
+    flux_fb_present(fb);
+}
+
+int flux_ui_notify_hit(const flux_fb_t *fb, int x, int y) {
+    (void)fb; (void)x; (void)y;
+    return 1; /* beliebiger Tap schliesst den Overlay */
 }

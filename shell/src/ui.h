@@ -22,6 +22,7 @@ typedef enum {
     FLUX_SCREEN_SETTINGS,
     FLUX_SCREEN_FILES,
     FLUX_SCREEN_FILE_VIEWER,
+    FLUX_SCREEN_NOTIFY,      /* Benachrichtigungs-Overlay (Wisch nach unten) */
 } flux_screen_t;
 
 typedef enum {
@@ -110,5 +111,24 @@ int flux_ui_viewer_hit(const flux_fb_t *fb, int x, int y, int *scroll_delta, int
  * Sichtbar wenn selected_idx >= 0. Gibt 1 wenn der Loeschen-Knopf
  * getroffen wurde. */
 int flux_ui_files_delete_hit(const flux_fb_t *fb, int x, int y);
+
+/* "Neuer Ordner"-Knopf oben rechts im Dateibrowser. */
+int flux_ui_files_new_btn_hit(const flux_fb_t *fb, int x, int y);
+
+/* ---- Benachrichtigungs-Overlay ------------------------------------- */
+
+/* Zeigt Uhrzeit, Batterie, WLAN, Wetter, Alarme und Erinnerungen.
+ * Wird durch Wisch nach unten auf dem Assistenten-Bildschirm geoeffnet. */
+void flux_ui_draw_notify(flux_fb_t *fb);
+
+/* Gibt 1 wenn der Bildschirm per Tap geschlossen werden soll. */
+int flux_ui_notify_hit(const flux_fb_t *fb, int x, int y);
+
+/* ---- Farbthema ----------------------------------------------------- */
+
+/* Setzt die Akzentfarbe fuer alle Bildschirme.
+ * Vordefinierte Werte: 0x4FD1C5 (Teal), 0x3B82F6 (Blau),
+ * 0xA855F7 (Lila), 0xF97316 (Orange), 0x22C55E (Gruen). */
+void flux_ui_set_accent(uint32_t rgb);
 
 #endif

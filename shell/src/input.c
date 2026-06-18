@@ -172,6 +172,12 @@ static flux_event_t poll_touch(flux_input_t *in) {
             int dx    = in->cur_x - in->down_x;
             if (up_dy > SWIPE_UP_THRESHOLD_PX && abs(dx) < SWIPE_UP_THRESHOLD_PX * 2) {
                 out.type = FLUX_EV_SWIPE_UP;
+            } else if (up_dy < -SWIPE_UP_THRESHOLD_PX && abs(dx) < SWIPE_UP_THRESHOLD_PX * 2) {
+                out.type = FLUX_EV_SWIPE_DOWN;
+            } else if (dx < -SWIPE_UP_THRESHOLD_PX && abs(up_dy) < SWIPE_UP_THRESHOLD_PX * 2) {
+                out.type = FLUX_EV_SWIPE_LEFT;
+            } else if (dx > SWIPE_UP_THRESHOLD_PX && abs(up_dy) < SWIPE_UP_THRESHOLD_PX * 2) {
+                out.type = FLUX_EV_SWIPE_RIGHT;
             } else {
                 out.type = FLUX_EV_TAP;
                 out.x = in->cur_x;
