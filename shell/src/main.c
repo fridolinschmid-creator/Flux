@@ -33,9 +33,65 @@
 #include <sys/stat.h>
 #include <sys/select.h>
 
-#define FLUX_PIN_LEN     4
-#define FLUX_FILES_MAX   12
-#define FLUX_SETTINGS_N  7
+/* ---- Uebergangs-Animation (Einblenden von unten) --------------------- */
+
+/* Speichert den aktuellen Backbuffer-Zustand. Muss mit free() freigegeben
+ * werden. Gibt NULL bei Speicherfehler. */
+static uint32_t *capture_frame(const flux_fb_t *fb) {
+    size_t npx = (size_t)fb->width * fb->height;
+    uint32_t *buf = malloc(npx * sizeof(uint32_t));
+    if (buf) memcpy(buf, fb->back, npx * sizeof(uint32_t));
+    return buf;
+}
+
+/* Animiert den Uebergang vom gespeicherten Bild im old_buf zum aktuellen
+ * Inhalt des Backbuffers (neuer Bildschirm).
+ * Slide-in von unten mit leichtem Spring-Overshoot ("babbeln"). */
+static void animate_slide_in(flux_fb_t *fb, uint32_t *old_buf) {
+    if (!old_buf || !fb->mmio) return; /* kein echter Framebuffer */
+
+    size_t npx = (size_t)fb->width * fb->height;
+    uint32_t *new_buf = malloc(npx * sizeof(uint32_t));
+    if (!new_buf) return;
+    memcpy(new_buf, fb->back, npx * sizeof(uint32_t));
+
+    int h = fb->height, w = fb->width;
+
+    /* Offsets: positive = neuer Screen beginnt weiter unten (noch nicht voll da)
+     * Negative = Overshoot (neuer Screen leicht ueber Ziel -- "federt") */
+    int offsets[] = { h, h*4/5, h*3/5, h*2/5, h/5, 0, -18, -7, -2, 0 };
+    int nframes = (int)(sizeof(offsets) / sizeof(offsets[0]));
+
+    for (int f = 0; f < nframes; f++) {
+        int off = offsets[f]; /* y-Position des Tops des neuen Screens */
+
+        for (int y = 0; y < h; y++) {
+            int src_new = y - off; /* Quellzeile im neuen Screen */
+            uint32_t *dst = fb->back + y * w;
+            if (src_new < 0 || src_new >= h) {
+                /* Ausserhalb des neuen Screens: alten Screen zeigen */
+                memcpy(dst, old_buf + y * w, (size_t)w * sizeof(uint32_t));
+            } else {
+                memcpy(dst, new_buf + src_new * w, (size_t)w * sizeof(uint32_t));
+            }
+        }
+        /* Alle Zeilen als dirty markieren */
+        memset(fb->prev, 0xFF, npx * sizeof(uint32_t));
+        flux_fb_present(fb);
+        usleep(14000); /* ~70 fps */
+    }
+
+    /* Backbuffer auf Endzustand restaurieren */
+    memcpy(fb->back, new_buf, npx * sizeof(uint32_t));
+    memset(fb->prev, 0xFF, npx * sizeof(uint32_t));
+    flux_fb_present(fb);
+    free(new_buf);
+}
+
+#define FLUX_PIN_LEN       4
+#define FLUX_FILES_MAX     12
+#define FLUX_SETTINGS_N    7
+#define VIEWER_CONTENT_MAX 32768
 
 typedef enum { EDIT_NONE = 0, EDIT_ACTION_BODY, EDIT_SETTING_FIELD } edit_target_t;
 
@@ -99,6 +155,12 @@ static const char *file_names[FLUX_FILES_MAX];
 static const char *file_metas[FLUX_FILES_MAX];
 static int  file_n = 0;
 static int  file_truncated = 0;
+static int  file_selected = -1;   /* markierter Eintrag im Dateibrowser */
+
+/* Datei-Betrachter */
+static char viewer_path[1024] = {0};
+static char viewer_content[VIEWER_CONTENT_MAX] = {0};
+static int  viewer_scroll = 0;
 
 static void format_size(off_t size, char *out, size_t cap) {
     if (size < 1024) snprintf(out, cap, "%lld B", (long long)size);
@@ -155,12 +217,35 @@ static void files_go_parent(void) {
     char *slash = strrchr(files_path, '/');
     if (slash && slash != files_path) *slash = '\0';
     else strcpy(files_path, "/");
+    file_selected = -1;
 }
 
 static void files_enter(const char *name) {
     size_t len = strlen(files_path);
     if (len > 1) snprintf(files_path + len, sizeof(files_path) - len, "/%s", name);
     else snprintf(files_path, sizeof(files_path), "/%s", name);
+    file_selected = -1;
+}
+
+static void load_file_content(const char *path) {
+    snprintf(viewer_path, sizeof(viewer_path), "%s", path);
+    viewer_scroll = 0;
+    viewer_content[0] = '\0';
+    FILE *f = fopen(path, "r");
+    if (!f) {
+        snprintf(viewer_content, sizeof(viewer_content),
+                 "(Datei konnte nicht geoeffnet werden)");
+        return;
+    }
+    size_t n = fread(viewer_content, 1, sizeof(viewer_content) - 1, f);
+    viewer_content[n] = '\0';
+    fclose(f);
+    /* Nicht-druckbare Bytes (ausser \n \t) ersetzen */
+    for (size_t i = 0; i < n; i++) {
+        unsigned char c = (unsigned char)viewer_content[i];
+        if (c < 0x20 && c != '\n' && c != '\t')
+            viewer_content[i] = '.';
+    }
 }
 
 int main(void) {
@@ -218,12 +303,18 @@ int main(void) {
                     screen = FLUX_SCREEN_PIN;
                     pin_len = 0;
                     pin_error = 0;
+                    uint32_t *old = capture_frame(&fb);
                     flux_ui_draw_pin(&fb, pin_len, pin_error);
+                    animate_slide_in(&fb, old);
+                    free(old);
                 } else {
                     screen = FLUX_SCREEN_ASSISTANT;
                     input_buf[0] = '\0';
                     answer_buf[0] = '\0';
+                    uint32_t *old = capture_frame(&fb);
                     flux_ui_draw_assistant(&fb, last_q, input_buf, answer_buf, 0);
+                    animate_slide_in(&fb, old);
+                    free(old);
                 }
             }
             continue;
@@ -263,7 +354,10 @@ int main(void) {
                     screen = FLUX_SCREEN_ASSISTANT;
                     input_buf[0] = '\0';
                     answer_buf[0] = '\0';
+                    uint32_t *old = capture_frame(&fb);
                     flux_ui_draw_assistant(&fb, last_q, input_buf, answer_buf, 0);
+                    animate_slide_in(&fb, old);
+                    free(old);
                 } else {
                     pin_error = 1;
                     flux_ui_draw_pin(&fb, pin_len, pin_error);
@@ -278,20 +372,29 @@ int main(void) {
             if (ev.type != FLUX_EV_TAP) continue;
             flux_confirm_hit_t hit = flux_ui_confirm_hit(&fb, ev.x, ev.y);
             if (hit == FLUX_CONFIRM_CANCEL) {
+                uint32_t *old = capture_frame(&fb);
                 screen = FLUX_SCREEN_ASSISTANT;
                 snprintf(answer_buf, sizeof(answer_buf), "Abgebrochen.");
                 flux_ui_draw_assistant(&fb, last_q, input_buf, answer_buf, 0);
+                animate_slide_in(&fb, old);
+                free(old);
             } else if (hit == FLUX_CONFIRM_EDIT) {
                 snprintf(edit_buf, sizeof(edit_buf), "%s", pending_action.body);
                 edit_target = EDIT_ACTION_BODY;
+                uint32_t *old = capture_frame(&fb);
                 screen = FLUX_SCREEN_EDIT_BODY;
                 flux_ui_draw_edit_body(&fb, edit_buf);
+                animate_slide_in(&fb, old);
+                free(old);
             } else if (hit == FLUX_CONFIRM_SEND) {
                 char req[FLUX_MAX_LINE];
                 flux_action_build_request(&pending_action, req, sizeof(req));
                 flux_ipc_send_raw(req, answer_buf, sizeof(answer_buf));
+                uint32_t *old = capture_frame(&fb);
                 screen = FLUX_SCREEN_ASSISTANT;
                 flux_ui_draw_assistant(&fb, last_q, input_buf, answer_buf, 0);
+                animate_slide_in(&fb, old);
+                free(old);
             }
             continue;
         }
@@ -349,14 +452,20 @@ int main(void) {
                 edit_body_enter:
                 if (edit_target == EDIT_ACTION_BODY) {
                     snprintf(pending_action.body, sizeof(pending_action.body), "%s", edit_buf);
+                    uint32_t *old = capture_frame(&fb);
                     screen = FLUX_SCREEN_CONFIRM;
                     flux_ui_draw_confirm(&fb, flux_action_type_label(pending_action.type),
                                           pending_action.to, pending_action.subject, pending_action.body);
+                    animate_slide_in(&fb, old);
+                    free(old);
                 } else {
                     apply_setting_edit(edit_setting_index, edit_buf);
                     load_settings_values();
+                    uint32_t *old = capture_frame(&fb);
                     screen = FLUX_SCREEN_SETTINGS;
                     flux_ui_draw_settings(&fb, setting_labels, setting_values, FLUX_SETTINGS_N);
+                    animate_slide_in(&fb, old);
+                    free(old);
                 }
             }
             continue;
@@ -367,31 +476,111 @@ int main(void) {
             int idx, back;
             if (!flux_ui_list_hit(&fb, ev.x, ev.y, FLUX_SETTINGS_N, &idx, &back)) continue;
             if (back) {
+                uint32_t *old = capture_frame(&fb);
                 screen = FLUX_SCREEN_ASSISTANT;
                 flux_ui_draw_assistant(&fb, last_q, input_buf, answer_buf, 0);
+                animate_slide_in(&fb, old);
+                free(old);
             } else {
                 edit_target = EDIT_SETTING_FIELD;
                 edit_setting_index = idx;
                 if (setting_secret[idx]) edit_buf[0] = '\0';
                 else flux_config_get(setting_keys[idx], edit_buf, sizeof(edit_buf));
+                uint32_t *old = capture_frame(&fb);
                 screen = FLUX_SCREEN_EDIT_BODY;
                 flux_ui_draw_edit_body(&fb, edit_buf);
+                animate_slide_in(&fb, old);
+                free(old);
             }
             continue;
         }
 
         if (screen == FLUX_SCREEN_FILES) {
             if (ev.type != FLUX_EV_TAP) continue;
+
+            /* Loeschen-Knopf (nur sichtbar wenn Datei ausgewaehlt) */
+            if (file_selected >= 0 && flux_ui_files_delete_hit(&fb, ev.x, ev.y)) {
+                /* Nur Dateien loeschen, nicht Ordner oder ".." */
+                if (file_selected < file_n && !file_is_dir[file_selected]) {
+                    char full_path[1280];
+                    size_t plen = strlen(files_path);
+                    if (plen > 1)
+                        snprintf(full_path, sizeof(full_path), "%s/%s",
+                                 files_path, file_names_buf[file_selected]);
+                    else
+                        snprintf(full_path, sizeof(full_path), "/%s",
+                                 file_names_buf[file_selected]);
+
+                    /* Sicherheit: nur /home/user/ loeschen */
+                    if (strncmp(full_path, "/home/user/", 11) == 0)
+                        remove(full_path);
+                }
+                file_selected = -1;
+                load_files(files_path);
+                flux_ui_draw_files(&fb, files_path, file_names, file_metas,
+                                   file_n, file_truncated, file_selected);
+                continue;
+            }
+
             int idx, back;
             if (!flux_ui_list_hit(&fb, ev.x, ev.y, file_n, &idx, &back)) continue;
             if (back) {
+                uint32_t *old = capture_frame(&fb);
                 screen = FLUX_SCREEN_ASSISTANT;
                 flux_ui_draw_assistant(&fb, last_q, input_buf, answer_buf, 0);
-            } else if (idx < file_n && file_is_dir[idx]) {
-                if (strcmp(file_names_buf[idx], "..") == 0) files_go_parent();
-                else files_enter(file_names_buf[idx]);
-                load_files(files_path);
-                flux_ui_draw_files(&fb, files_path, file_names, file_metas, file_n, file_truncated);
+                animate_slide_in(&fb, old);
+                free(old);
+            } else if (idx < file_n) {
+                if (file_is_dir[idx]) {
+                    /* Ordner betreten */
+                    if (strcmp(file_names_buf[idx], "..") == 0) files_go_parent();
+                    else files_enter(file_names_buf[idx]);
+                    load_files(files_path);
+                    flux_ui_draw_files(&fb, files_path, file_names, file_metas,
+                                       file_n, file_truncated, file_selected);
+                } else if (idx == file_selected) {
+                    /* Zweites Tippen auf dieselbe Datei -> oeffnen */
+                    char full_path[1280];
+                    size_t plen = strlen(files_path);
+                    if (plen > 1)
+                        snprintf(full_path, sizeof(full_path), "%s/%s",
+                                 files_path, file_names_buf[idx]);
+                    else
+                        snprintf(full_path, sizeof(full_path), "/%s",
+                                 file_names_buf[idx]);
+                    load_file_content(full_path);
+                    uint32_t *old = capture_frame(&fb);
+                    screen = FLUX_SCREEN_FILE_VIEWER;
+                    flux_ui_draw_file_viewer(&fb, viewer_path, viewer_content, viewer_scroll);
+                    animate_slide_in(&fb, old);
+                    free(old);
+                } else {
+                    /* Erstes Tippen: Datei markieren */
+                    file_selected = idx;
+                    flux_ui_draw_files(&fb, files_path, file_names, file_metas,
+                                       file_n, file_truncated, file_selected);
+                }
+            }
+            continue;
+        }
+
+        if (screen == FLUX_SCREEN_FILE_VIEWER) {
+            if (ev.type != FLUX_EV_TAP && ev.type != FLUX_EV_SWIPE_UP) continue;
+            int scroll_delta = 0, back = 0;
+            if (ev.type == FLUX_EV_SWIPE_UP) { scroll_delta = 3; }
+            else flux_ui_viewer_hit(&fb, ev.x, ev.y, &scroll_delta, &back);
+
+            if (back) {
+                uint32_t *old = capture_frame(&fb);
+                screen = FLUX_SCREEN_FILES;
+                flux_ui_draw_files(&fb, files_path, file_names, file_metas,
+                                   file_n, file_truncated, file_selected);
+                animate_slide_in(&fb, old);
+                free(old);
+            } else if (scroll_delta) {
+                viewer_scroll += scroll_delta;
+                if (viewer_scroll < 0) viewer_scroll = 0;
+                flux_ui_draw_file_viewer(&fb, viewer_path, viewer_content, viewer_scroll);
             }
             continue;
         }
@@ -403,14 +592,21 @@ int main(void) {
             int quick = flux_ui_quickrow_hit(&fb, ev.x, ev.y);
             if (quick == 1) {
                 load_settings_values();
+                uint32_t *old = capture_frame(&fb);
                 screen = FLUX_SCREEN_SETTINGS;
                 flux_ui_draw_settings(&fb, setting_labels, setting_values, FLUX_SETTINGS_N);
+                animate_slide_in(&fb, old);
+                free(old);
                 continue;
             } else if (quick == 2) {
                 strcpy(files_path, "/");
+                file_selected = -1;
                 load_files(files_path);
+                uint32_t *old = capture_frame(&fb);
                 screen = FLUX_SCREEN_FILES;
-                flux_ui_draw_files(&fb, files_path, file_names, file_metas, file_n, file_truncated);
+                flux_ui_draw_files(&fb, files_path, file_names, file_metas, file_n, file_truncated, file_selected);
+                animate_slide_in(&fb, old);
+                free(old);
                 continue;
             }
             if (flux_ui_mic_hit(&fb, ev.x, ev.y)) {
@@ -470,16 +666,24 @@ int main(void) {
             if (strcasecmp(input_buf, "einstellungen") == 0 || strcasecmp(input_buf, "settings") == 0) {
                 input_buf[0] = '\0';
                 load_settings_values();
+                uint32_t *old = capture_frame(&fb);
                 screen = FLUX_SCREEN_SETTINGS;
                 flux_ui_draw_settings(&fb, setting_labels, setting_values, FLUX_SETTINGS_N);
+                animate_slide_in(&fb, old);
+                free(old);
                 continue;
             }
             if (strcasecmp(input_buf, "dateien") == 0 || strcasecmp(input_buf, "files") == 0) {
                 input_buf[0] = '\0';
                 strcpy(files_path, "/");
+                file_selected = -1;
                 load_files(files_path);
+                uint32_t *old = capture_frame(&fb);
                 screen = FLUX_SCREEN_FILES;
-                flux_ui_draw_files(&fb, files_path, file_names, file_metas, file_n, file_truncated);
+                flux_ui_draw_files(&fb, files_path, file_names, file_metas,
+                                   file_n, file_truncated, file_selected);
+                animate_slide_in(&fb, old);
+                free(old);
                 continue;
             }
 
@@ -489,9 +693,12 @@ int main(void) {
             input_buf[0] = '\0';
 
             if (flux_action_parse(answer_buf, &pending_action)) {
+                uint32_t *old = capture_frame(&fb);
                 screen = FLUX_SCREEN_CONFIRM;
                 flux_ui_draw_confirm(&fb, flux_action_type_label(pending_action.type),
                                       pending_action.to, pending_action.subject, pending_action.body);
+                animate_slide_in(&fb, old);
+                free(old);
             } else {
                 flux_ui_draw_assistant(&fb, last_q, input_buf, answer_buf, 0);
             }

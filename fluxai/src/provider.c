@@ -1,4 +1,5 @@
 #include "provider.h"
+#include "tools.h"
 #include "../../common/flux_config.h"
 
 #include <curl/curl.h>
@@ -11,26 +12,25 @@
 
 /* Erlaubt der KI, statt einer normalen Textantwort eine konkrete
  * Aktion vorzuschlagen (Mail/SMS/Anruf). flux-shell zeigt dafuer einen
- * Bestaetigungs-Dialog (Senden/Bearbeiten/Abbrechen) -- die KI fuehrt
- * also nie direkt etwas aus, sie schlaegt nur vor (siehe
+ * Bestaetigungs-Dialog -- die KI fuehrt nie direkt etwas aus (siehe
  * shell/src/action.h fuer den Parser, fluxai/src/exec.c fuer die
- * tatsaechliche Ausfuehrung nach Bestaetigung). */
-#define FLUX_SYSTEM_PROMPT \
+ * Ausfuehrung nach Bestaetigung).
+ *
+ * Zusaetzlich kann die KI Tools aufrufen: TOOL:<name>\nARG:<wert>
+ * Der Daemon fuehrt das Tool aus und sendet das Ergebnis in einem
+ * zweiten API-Aufruf zurueck. Maximal ein Tool-Aufruf pro Anfrage. */
+#define FLUX_SYSTEM_PROMPT_BASE \
     "Du bist der KI-Assistent des Telefon-Betriebssystems Flux. " \
     "Antworte normalerweise kurz und klar auf Deutsch in normalem Text. " \
     "WENN der Nutzer eindeutig eine E-Mail senden, eine SMS senden oder " \
-    "einen Anruf taetigen moechte UND du Empfaenger und Inhalt sicher aus " \
-    "der Nachricht ableiten kannst, antworte AUSSCHLIESSLICH in folgendem " \
-    "Format, ohne zusaetzlichen Text davor oder danach:\n" \
+    "einen Anruf taetigen moechte UND du Empfaenger und Inhalt sicher " \
+    "ableiten kannst, antworte AUSSCHLIESSLICH in diesem Format:\n" \
     "ACTION:<mail|sms|call>\n" \
-    "TO:<E-Mail-Adresse, Telefonnummer oder Name>\n" \
-    "SUBJECT:<Betreff, nur bei mail, sonst leer lassen>\n" \
+    "TO:<Empfaenger>\n" \
+    "SUBJECT:<Betreff, nur bei mail>\n" \
     "BODY:\n" \
-    "<Nachrichtentext, bei call ein kurzer Anrufgrund>\n" \
-    "Falls Empfaenger oder Inhalt unklar sind, frage stattdessen ganz " \
-    "normal nach den fehlenden Angaben (kein ACTION-Format). Wenn der " \
-    "Nutzer offensichtlich keine Nachricht/keinen Anruf will, antworte " \
-    "immer ganz normal in Text."
+    "<Text>\n" \
+    "Falls Empfaenger oder Inhalt unklar sind, frage nach. "
 
 struct membuf {
     char  *data;
@@ -42,7 +42,7 @@ static size_t curl_write_cb(void *ptr, size_t size, size_t nmemb, void *userdata
     struct membuf *mb = userdata;
     size_t add = size * nmemb;
     if (mb->len + add + 1 > mb->cap)
-        return 0; /* Antwort zu gross fuer den Demo-Puffer -> abbrechen */
+        return 0;
     memcpy(mb->data + mb->len, ptr, add);
     mb->len += add;
     mb->data[mb->len] = '\0';
@@ -53,7 +53,6 @@ void flux_provider_init(void) {
     curl_global_init(CURL_GLOBAL_DEFAULT);
 }
 
-/* Haengt s JSON-escaped an out an (begrenzt durch cap). */
 static void json_escape_append(char *out, size_t cap, const char *s) {
     size_t len = strlen(out);
     for (; *s && len + 2 < cap; s++) {
@@ -73,10 +72,7 @@ static void json_escape_append(char *out, size_t cap, const char *s) {
     out[len] = '\0';
 }
 
-/* Sucht "text":"..." in der Anthropic-Antwort und entschluesselt die
- * gaengigen JSON-Escapes. Bewusst kein vollwertiger JSON-Parser --
- * fuer eine einzelne erwartete Antwortform reicht das fuer den
- * Prototyp; ein echter Parser ist ein klarer Folgeschritt. */
+/* Sucht "text":"..." in der Anthropic-Antwort und entschluesselt JSON-Escapes. */
 static int extract_text(const char *json, char *out, size_t out_cap) {
     const char *key = "\"text\":\"";
     const char *p = strstr(json, key);
@@ -103,38 +99,24 @@ static int extract_text(const char *json, char *out, size_t out_cap) {
     return o > 0;
 }
 
-void flux_provider_ask(const char *question, char *out, size_t out_cap) {
-    char key_buf[256];
-    const char *api_key = NULL;
-    if (flux_config_get("api_key", key_buf, sizeof(key_buf)) && key_buf[0])
-        api_key = key_buf;
-    else
-        api_key = getenv("FLUX_AI_API_KEY");
-
-    if (!api_key || !*api_key) {
-        snprintf(out, out_cap,
-            "Kein Cloud-Zugang konfiguriert. Trage einen API-Key in den "
-            "Einstellungen ein (oder setze FLUX_AI_API_KEY), um Fragen zu "
-            "stellen, die ich nicht lokal beantworten kann.");
-        return;
-    }
-
-    const char *model = getenv("FLUX_AI_MODEL");
-    if (!model || !*model) model = FLUX_DEFAULT_MODEL;
-
-    char body[8192];
+/* Sendet einen einzelnen API-Request. system_prompt und user_msg werden
+ * JSON-escaped. Gibt 1 bei Erfolg. */
+static int api_call(const char *api_key, const char *model,
+                    const char *system_prompt, const char *user_msg,
+                    char *out, size_t out_cap) {
+    char body[16384];
     snprintf(body, sizeof(body),
-             "{\"model\":\"%s\",\"max_tokens\":500,\"system\":\"", model);
-    json_escape_append(body, sizeof(body), FLUX_SYSTEM_PROMPT);
+             "{\"model\":\"%s\",\"max_tokens\":600,\"system\":\"", model);
+    json_escape_append(body, sizeof(body), system_prompt);
     strncat(body, "\",\"messages\":[{\"role\":\"user\",\"content\":\"",
             sizeof(body) - strlen(body) - 1);
-    json_escape_append(body, sizeof(body), question);
+    json_escape_append(body, sizeof(body), user_msg);
     strncat(body, "\"}]}", sizeof(body) - strlen(body) - 1);
 
     CURL *curl = curl_easy_init();
     if (!curl) {
         snprintf(out, out_cap, "Interner Fehler: curl_easy_init() fehlgeschlagen.");
-        return;
+        return 0;
     }
 
     char respbuf[16384];
@@ -157,12 +139,100 @@ void flux_provider_ask(const char *question, char *out, size_t out_cap) {
     curl_easy_setopt(curl, CURLOPT_TIMEOUT, 20L);
 
     CURLcode res = curl_easy_perform(curl);
+    int ok = 0;
     if (res != CURLE_OK) {
         snprintf(out, out_cap, "Netzwerkfehler: %s", curl_easy_strerror(res));
     } else if (!extract_text(respbuf, out, out_cap)) {
         snprintf(out, out_cap, "Antwort konnte nicht gelesen werden.");
+    } else {
+        ok = 1;
     }
 
     curl_slist_free_all(headers);
     curl_easy_cleanup(curl);
+    return ok;
+}
+
+/* Prueft ob die KI-Antwort ein Tool-Aufruf ist und parst ihn.
+ * Erwartet: "TOOL:<name>\nARG:<arg>" */
+static int parse_tool_call(const char *response,
+                            char *tool_name, size_t name_cap,
+                            char *tool_arg,  size_t arg_cap) {
+    if (strncmp(response, "TOOL:", 5) != 0) return 0;
+    const char *p = response + 5;
+
+    /* Tool-Name bis zum Newline */
+    const char *nl = strchr(p, '\n');
+    if (!nl) return 0;
+    size_t nlen = (size_t)(nl - p);
+    if (nlen >= name_cap) nlen = name_cap - 1;
+    memcpy(tool_name, p, nlen);
+    tool_name[nlen] = '\0';
+
+    /* ARG: */
+    p = nl + 1;
+    if (strncmp(p, "ARG:", 4) != 0) {
+        tool_arg[0] = '\0';
+        return 1;
+    }
+    p += 4;
+    size_t alen = strlen(p);
+    /* Trailing Newline entfernen */
+    while (alen > 0 && (p[alen-1] == '\n' || p[alen-1] == '\r')) alen--;
+    if (alen >= arg_cap) alen = arg_cap - 1;
+    memcpy(tool_arg, p, alen);
+    tool_arg[alen] = '\0';
+    return 1;
+}
+
+void flux_provider_ask(const char *question, char *out, size_t out_cap) {
+    char key_buf[256];
+    const char *api_key = NULL;
+    if (flux_config_get("api_key", key_buf, sizeof(key_buf)) && key_buf[0])
+        api_key = key_buf;
+    else
+        api_key = getenv("FLUX_AI_API_KEY");
+
+    if (!api_key || !*api_key) {
+        snprintf(out, out_cap,
+            "Kein Cloud-Zugang konfiguriert. Trage einen API-Key in den "
+            "Einstellungen ein (oder setze FLUX_AI_API_KEY).");
+        return;
+    }
+
+    const char *model = getenv("FLUX_AI_MODEL");
+    if (!model || !*model) model = FLUX_DEFAULT_MODEL;
+
+    /* System-Prompt = Basis + Tool-Beschreibung */
+    char system_prompt[4096];
+    snprintf(system_prompt, sizeof(system_prompt),
+             "%s\n\n%s", FLUX_SYSTEM_PROMPT_BASE, flux_tools_description());
+
+    /* Erster API-Aufruf */
+    if (!api_call(api_key, model, system_prompt, question, out, out_cap))
+        return;
+
+    /* Tool-Aufruf? */
+    char tool_name[64], tool_arg[1024];
+    if (!parse_tool_call(out, tool_name, sizeof(tool_name),
+                              tool_arg, sizeof(tool_arg)))
+        return; /* Normale Antwort -- fertig */
+
+    /* Tool ausfuehren */
+    char tool_result[4096];
+    snprintf(tool_result, sizeof(tool_result),
+             "Fehler: unbekanntes Tool '%s'", tool_name);
+    flux_tool_exec(tool_name, tool_arg, tool_result, sizeof(tool_result));
+
+    /* Zweiter API-Aufruf mit Tool-Ergebnis als Kontext */
+    char followup[8192];
+    snprintf(followup, sizeof(followup),
+             "Urspruengliche Frage: \"%s\"\n"
+             "Du hast Tool '%s' mit Argument '%s' aufgerufen.\n"
+             "Ergebnis des Tools:\n%s\n\n"
+             "Beantworte jetzt die urspruengliche Frage mit diesen Daten. "
+             "Antworte auf Deutsch, kurz und klar.",
+             question, tool_name, tool_arg, tool_result);
+
+    api_call(api_key, model, system_prompt, followup, out, out_cap);
 }

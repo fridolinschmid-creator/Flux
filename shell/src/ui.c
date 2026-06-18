@@ -3,6 +3,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <time.h>
+#include <stdlib.h>
 
 #define COL_BG       0x0B0E14
 #define COL_ACCENT   0x4FD1C5
@@ -322,6 +323,160 @@ int flux_ui_quickrow_hit(const flux_fb_t *fb, int x, int y) {
     return (x < fb->width / 2) ? 1 : 2;
 }
 
+/* ---- Wetter-Widget ---------------------------------------------------- */
+
+#define WEATHER_BAR_H  52
+#define WEATHER_CACHE  "/tmp/flux_weather.txt"
+
+/* Pixel-Art-Ikone (28x28) fuer verschiedene Wetterbedingungen */
+typedef enum {
+    WCOND_SUNNY = 0,
+    WCOND_PARTLY_CLOUDY,
+    WCOND_CLOUDY,
+    WCOND_RAINY,
+    WCOND_SNOWY,
+    WCOND_STORMY,
+    WCOND_FOGGY,
+    WCOND_UNKNOWN,
+} weather_cond_t;
+
+static weather_cond_t classify_weather(const char *desc) {
+    /* Entscheidet anhand von Schlagworten im ASCII-Beschreibungstext */
+    char low[256];
+    int i;
+    for (i = 0; desc[i] && i < 255; i++)
+        low[i] = (desc[i] >= 'A' && desc[i] <= 'Z') ? desc[i] + 32 : desc[i];
+    low[i] = '\0';
+    if (strstr(low, "thunder") || strstr(low, "storm") || strstr(low, "gewitter"))
+        return WCOND_STORMY;
+    if (strstr(low, "snow")   || strstr(low, "sleet") || strstr(low, "schnee"))
+        return WCOND_SNOWY;
+    if (strstr(low, "rain")   || strstr(low, "drizzle") || strstr(low, "regen"))
+        return WCOND_RAINY;
+    if (strstr(low, "fog")    || strstr(low, "mist") || strstr(low, "nebel"))
+        return WCOND_FOGGY;
+    if (strstr(low, "overcast") || strstr(low, "bedeckt"))
+        return WCOND_CLOUDY;
+    if (strstr(low, "cloud") || strstr(low, "wolke") || strstr(low, "partly"))
+        return WCOND_PARTLY_CLOUDY;
+    if (strstr(low, "sun") || strstr(low, "clear") || strstr(low, "sonne") || strstr(low, "klar"))
+        return WCOND_SUNNY;
+    return WCOND_UNKNOWN;
+}
+
+/* Zeichnet eine 28x28 Wetter-Pixel-Ikone bei (ox,oy). */
+static void draw_weather_icon(flux_fb_t *fb, int ox, int oy, weather_cond_t cond) {
+    /* Farben */
+    uint32_t sun    = 0xFFDD44;
+    uint32_t cloud  = 0xA8B8C8;
+    uint32_t rain   = 0x5599DD;
+    uint32_t snow   = 0xDDEEFF;
+    uint32_t storm  = 0xDD9922;
+    uint32_t fog    = 0x889AA8;
+    (void)fog;
+
+    switch (cond) {
+    case WCOND_SUNNY:
+        /* Sonne: Kreis (approximiert) + Strahlen */
+        flux_fb_fill_rect(fb, ox+10, oy+4,  8, 2, sun);  /* oben */
+        flux_fb_fill_rect(fb, ox+10, oy+22, 8, 2, sun);  /* unten */
+        flux_fb_fill_rect(fb, ox+4,  oy+10, 2, 8, sun);  /* links */
+        flux_fb_fill_rect(fb, ox+22, oy+10, 2, 8, sun);  /* rechts */
+        flux_fb_fill_rect(fb, ox+6,  oy+6,  2, 2, sun);  /* diag TL */
+        flux_fb_fill_rect(fb, ox+20, oy+6,  2, 2, sun);  /* diag TR */
+        flux_fb_fill_rect(fb, ox+6,  oy+20, 2, 2, sun);  /* diag BL */
+        flux_fb_fill_rect(fb, ox+20, oy+20, 2, 2, sun);  /* diag BR */
+        /* Kern */
+        flux_fb_fill_rect(fb, ox+8,  oy+10, 12, 8, sun);
+        flux_fb_fill_rect(fb, ox+10, oy+8,  8,  12, sun);
+        break;
+    case WCOND_PARTLY_CLOUDY:
+        /* Sonne halb verdeckt */
+        flux_fb_fill_rect(fb, ox+14, oy+2,  6, 2, sun);
+        flux_fb_fill_rect(fb, ox+20, oy+8,  2, 6, sun);
+        flux_fb_fill_rect(fb, ox+16, oy+2,  4, 8, sun);
+        flux_fb_fill_rect(fb, ox+14, oy+4,  8, 6, sun);
+        /* Wolke vorne */
+        flux_fb_fill_rect(fb, ox+2,  oy+12, 18, 8, cloud);
+        flux_fb_fill_rect(fb, ox+4,  oy+10, 10, 4, cloud);
+        flux_fb_fill_rect(fb, ox+12, oy+9,  6,  4, cloud);
+        break;
+    case WCOND_CLOUDY:
+        flux_fb_fill_rect(fb, ox+4,  oy+12, 20, 10, cloud);
+        flux_fb_fill_rect(fb, ox+6,  oy+9,  12, 5,  cloud);
+        flux_fb_fill_rect(fb, ox+14, oy+8,  8,  5,  cloud);
+        break;
+    case WCOND_RAINY:
+        /* Wolke + Regentropfen */
+        flux_fb_fill_rect(fb, ox+4,  oy+8,  20, 9,  cloud);
+        flux_fb_fill_rect(fb, ox+6,  oy+6,  12, 4,  cloud);
+        flux_fb_fill_rect(fb, ox+14, oy+5,  8,  4,  cloud);
+        flux_fb_fill_rect(fb, ox+6,  oy+19, 2,  5,  rain);
+        flux_fb_fill_rect(fb, ox+11, oy+20, 2,  5,  rain);
+        flux_fb_fill_rect(fb, ox+16, oy+19, 2,  5,  rain);
+        flux_fb_fill_rect(fb, ox+21, oy+20, 2,  5,  rain);
+        break;
+    case WCOND_SNOWY:
+        /* Wolke + Schnee-Punkte */
+        flux_fb_fill_rect(fb, ox+4,  oy+8,  20, 9,  cloud);
+        flux_fb_fill_rect(fb, ox+6,  oy+6,  12, 4,  cloud);
+        flux_fb_fill_rect(fb, ox+14, oy+5,  8,  4,  cloud);
+        flux_fb_fill_rect(fb, ox+6,  oy+19, 3,  3,  snow);
+        flux_fb_fill_rect(fb, ox+12, oy+20, 3,  3,  snow);
+        flux_fb_fill_rect(fb, ox+18, oy+19, 3,  3,  snow);
+        break;
+    case WCOND_STORMY:
+        /* Dunkle Wolke + Blitz */
+        flux_fb_fill_rect(fb, ox+4,  oy+6,  20, 10, 0x445566);
+        flux_fb_fill_rect(fb, ox+6,  oy+4,  12, 4,  0x445566);
+        /* Blitz */
+        flux_fb_fill_rect(fb, ox+12, oy+17, 5,  2,  storm);
+        flux_fb_fill_rect(fb, ox+10, oy+19, 8,  2,  storm);
+        flux_fb_fill_rect(fb, ox+8,  oy+21, 5,  4,  storm);
+        break;
+    case WCOND_FOGGY:
+        /* Horizontale Nebel-Linien */
+        flux_fb_fill_rect(fb, ox+2,  oy+8,  24, 3, 0x778899);
+        flux_fb_fill_rect(fb, ox+4,  oy+13, 20, 3, 0x889AAA);
+        flux_fb_fill_rect(fb, ox+2,  oy+18, 24, 3, 0x778899);
+        break;
+    case WCOND_UNKNOWN:
+    default:
+        flux_fb_fill_rect(fb, ox+8,  oy+12, 12, 4, COL_DIM);
+        break;
+    }
+}
+
+/* Liest den Wetter-Cache und zeichnet die Leiste.
+ * Gibt die y-Koordinate unterhalb der Leiste zurueck. */
+static int draw_weather_bar(flux_fb_t *fb, int y) {
+    char line[256];
+    line[0] = '\0';
+
+    FILE *f = fopen(WEATHER_CACHE, "r");
+    if (f) {
+        if (!fgets(line, sizeof(line), f)) line[0] = '\0';
+        /* trailing newline entfernen */
+        size_t l = strlen(line);
+        while (l > 0 && (line[l-1] == '\n' || line[l-1] == '\r')) { line[--l] = '\0'; }
+        fclose(f);
+    }
+
+    if (!line[0]) return y; /* kein Cache -- Leiste weglassen */
+
+    flux_fb_fill_rect(fb, 0, y, fb->width, WEATHER_BAR_H, 0x0D1420);
+    /* Trennlinie oben */
+    flux_fb_fill_rect(fb, 0, y, fb->width, 1, COL_DIVIDER);
+
+    weather_cond_t cond = classify_weather(line);
+    draw_weather_icon(fb, 6, y + (WEATHER_BAR_H - 28) / 2, cond);
+
+    /* Text rechts neben Ikone */
+    flux_fb_text(fb, 42, y + (WEATHER_BAR_H - 16) / 2, line, COL_DIM, 2);
+
+    return y + WEATHER_BAR_H;
+}
+
 /* ---- Assistenten-Bildschirm ------------------------------------------ */
 
 static int draw_wrapped(flux_fb_t *fb, int x, int y, int max_w, const char *s,
@@ -462,7 +617,9 @@ void flux_ui_draw_assistant(flux_fb_t *fb, const char *last_q,
 
     int kbd_top   = flux_ui_kbd_top(fb);
     int input_y   = kbd_top - INPUT_BAR_H;
-    int chat_top  = STATUSBAR_H + QUICKROW_H + 8;
+    /* Wetter-Widget (nur wenn Cache-Datei vorhanden) */
+    int weather_end = draw_weather_bar(fb, STATUSBAR_H + QUICKROW_H);
+    int chat_top  = weather_end + 8;
 
     int bubble_max_w = fb->width * 3 / 4;
     int cy = chat_top;
@@ -698,13 +855,13 @@ void flux_ui_draw_settings(flux_fb_t *fb, const char **labels, const char **valu
     flux_fb_present(fb);
 }
 
-/* ---- Dateien ------------------------------------------------------------
- * Bewusst nur ein Browser (Ordner ansehen, hinein/hinaus navigieren),
- * kein Loeschen/Umbenennen -- ein erster, sicherer Schritt; siehe
- * README-Roadmap fuer den Ausbau. */
+/* ---- Dateien ------------------------------------------------------------ */
+
+#define FILES_DELETE_BTN_H  56
+#define FILES_DELETE_BTN_W  120
 
 void flux_ui_draw_files(flux_fb_t *fb, const char *path, const char **names,
-                         const char **metas, int n, int truncated) {
+                         const char **metas, int n, int truncated, int selected_idx) {
     flux_fb_clear(fb, COL_BG);
     draw_statusbar(fb);
     flux_fb_text(fb, 16, STATUSBAR_H + 8, "Dateien", COL_ACCENT, 3);
@@ -720,11 +877,106 @@ void flux_ui_draw_files(flux_fb_t *fb, const char *path, const char **names,
         list_row_geom_t rows[LIST_MAX_ROWS];
         int rn = build_list_rows(fb, n, rows);
         for (int i = 0; i < rn; i++) {
-            flux_fb_fill_rect(fb, rows[i].x, rows[i].y, rows[i].w, rows[i].h, COL_ROW);
+            uint32_t row_col = (i == selected_idx) ? 0x1E3A5A : COL_ROW;
+            flux_fb_fill_rect(fb, rows[i].x, rows[i].y, rows[i].w, rows[i].h, row_col);
+            if (i == selected_idx)
+                flux_fb_fill_rect(fb, rows[i].x, rows[i].y, 4, rows[i].h, COL_ACCENT);
             flux_fb_text(fb, rows[i].x + 12, rows[i].y + 8, names[i], COL_TEXT, 2);
             flux_fb_text(fb, rows[i].x + 12, rows[i].y + rows[i].h - 24, metas[i], COL_DIM, 2);
         }
     }
+
+    /* Loeschen-Knopf (nur sichtbar wenn ein nicht-Ordner ausgewaehlt) */
+    if (selected_idx >= 0 && selected_idx < n) {
+        int del_y = fb->height - LIST_BACK_H - FILES_DELETE_BTN_H - 4;
+        int del_x = fb->width - FILES_DELETE_BTN_W - 8;
+        flux_fb_fill_rect(fb, del_x, del_y, FILES_DELETE_BTN_W, FILES_DELETE_BTN_H, COL_DANGER);
+        const char *dlabel = "Loeschen";
+        int dlw = flux_fb_text_width(dlabel, 2);
+        flux_fb_text(fb, del_x + (FILES_DELETE_BTN_W - dlw) / 2,
+                     del_y + (FILES_DELETE_BTN_H - 16) / 2, dlabel, 0xFFFFFF, 2);
+    }
+
     draw_back_bar(fb, "Zurueck");
     flux_fb_present(fb);
+}
+
+int flux_ui_files_delete_hit(const flux_fb_t *fb, int x, int y) {
+    int del_y = fb->height - LIST_BACK_H - FILES_DELETE_BTN_H - 4;
+    int del_x = fb->width - FILES_DELETE_BTN_W - 8;
+    return (x >= del_x && x < del_x + FILES_DELETE_BTN_W &&
+            y >= del_y && y < del_y + FILES_DELETE_BTN_H);
+}
+
+/* ---- Datei-Betrachter -------------------------------------------------- */
+
+#define VIEWER_LINE_H    28
+#define VIEWER_LINES_MAX 200
+
+void flux_ui_draw_file_viewer(flux_fb_t *fb, const char *path,
+                               const char *content, int scroll_line) {
+    flux_fb_clear(fb, COL_BG);
+    draw_statusbar(fb);
+
+    /* Titel: Dateiname */
+    const char *slash = strrchr(path, '/');
+    const char *fname = slash ? slash + 1 : path;
+    flux_fb_text(fb, 16, STATUSBAR_H + 10, fname, COL_ACCENT, 3);
+
+    /* Pfad kleiner darunter */
+    flux_fb_text(fb, 16, STATUSBAR_H + 38, path, COL_DIM, 2);
+
+    int text_top = STATUSBAR_H + TITLE_AREA_H;
+    int text_bottom = fb->height - LIST_BACK_H - 4;
+    int avail_lines = (text_bottom - text_top) / VIEWER_LINE_H;
+
+    /* Inhalt zeilenweise ausgeben */
+    const char *p = content;
+    int cur_line = 0;
+    int visible = 0;
+    while (*p && visible < avail_lines) {
+        const char *eol = p;
+        while (*eol && *eol != '\n') eol++;
+
+        if (cur_line >= scroll_line) {
+            char linebuf[256];
+            size_t len = (size_t)(eol - p);
+            if (len >= sizeof(linebuf)) len = sizeof(linebuf) - 1;
+            memcpy(linebuf, p, len);
+            linebuf[len] = '\0';
+            flux_fb_text(fb, 12, text_top + visible * VIEWER_LINE_H,
+                         linebuf, COL_TEXT, 2);
+            visible++;
+        }
+        cur_line++;
+        if (*eol) eol++;
+        p = eol;
+        if (!*p) break;
+    }
+
+    if (visible == 0 && cur_line == 0) {
+        flux_fb_text(fb, 16, text_top + 12, "(Datei leer)", COL_DIM, 2);
+    }
+
+    /* Scroll-Hinweis */
+    if (scroll_line > 0) {
+        const char *up = "^ Hoch";
+        flux_fb_text(fb, fb->width - flux_fb_text_width(up, 2) - 12,
+                     text_bottom - 20, up, COL_DIM, 2);
+    }
+
+    draw_back_bar(fb, "Zurueck");
+    flux_fb_present(fb);
+}
+
+int flux_ui_viewer_hit(const flux_fb_t *fb, int x, int y,
+                       int *scroll_delta, int *back) {
+    (void)x;
+    *scroll_delta = 0;
+    *back = 0;
+    if (y >= fb->height - LIST_BACK_H) { *back = 1; return 1; }
+    int mid = fb->height / 2;
+    if (y < mid - 20) { *scroll_delta = -3; return 1; }
+    if (y > mid + 20) { *scroll_delta =  3; return 1; }
+    return 0;
 }

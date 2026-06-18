@@ -133,11 +133,26 @@ int main(int argc, char *argv[]) {
     flux_ui_draw_settings(&fb, setting_labels, setting_values, 7);
     save_ppm(&fb, outdir, "13_einstellungen");
 
-    /* 14 -- Dateibrowser */
+    /* 14 -- Dateibrowser (keine Auswahl) */
     const char *names[] = { "..", "Documents", "Pictures", "Music", "Videos", "flux.conf" };
     const char *metas[] = { "Ordner", "Ordner", "Ordner", "Ordner", "Ordner", "1.2 KB" };
-    flux_ui_draw_files(&fb, "/home/user", names, metas, 6, 0);
+    flux_ui_draw_files(&fb, "/home/user", names, metas, 6, 0, -1);
     save_ppm(&fb, outdir, "14_dateien");
+
+    /* 15 -- Dateibrowser mit markierter Datei */
+    flux_ui_draw_files(&fb, "/home/user", names, metas, 6, 0, 5);
+    save_ppm(&fb, outdir, "15_dateien_ausgewaehlt");
+
+    /* 16 -- Datei-Betrachter */
+    flux_ui_draw_file_viewer(&fb, "/home/user/notizen.txt",
+        "Einkaufliste:\n"
+        "- Milch\n- Brot\n- Kaese\n- Aepfel\n\n"
+        "TODO:\n"
+        "- Arzt anrufen\n"
+        "- Mail an Chef schreiben\n"
+        "- Auto in Werkstatt\n",
+        0);
+    save_ppm(&fb, outdir, "16_datei_betrachter");
 
     flux_fb_close(&fb);
     printf("\nFertig! PPM -> PNG: convert %s/XX.ppm %s/XX.png\n", outdir, outdir);

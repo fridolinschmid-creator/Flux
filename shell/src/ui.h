@@ -21,6 +21,7 @@ typedef enum {
     FLUX_SCREEN_EDIT_BODY,
     FLUX_SCREEN_SETTINGS,
     FLUX_SCREEN_FILES,
+    FLUX_SCREEN_FILE_VIEWER,
 } flux_screen_t;
 
 typedef enum {
@@ -88,9 +89,26 @@ int flux_ui_list_hit(const flux_fb_t *fb, int x, int y, int n, int *out_index, i
 
 /* ---- Dateien --------------------------------------------------------
  * names/metas (z.B. "Ordner" oder "12 KB") parallel zu names, n darf
- * 0 sein (leeres Verzeichnis). path wird oben angezeigt. */
+ * 0 sein (leeres Verzeichnis). path wird oben angezeigt.
+ * selected_idx: markierter Eintrag (-1 = keiner). */
 
 void flux_ui_draw_files(flux_fb_t *fb, const char *path, const char **names,
-                         const char **metas, int n, int truncated);
+                         const char **metas, int n, int truncated, int selected_idx);
+
+/* ---- Datei-Betrachter -----------------------------------------------
+ * Zeigt den Textinhalt einer Datei an. scroll_y gibt die erste sichtbare
+ * Zeile an (fuer vertikales Scrollen). */
+
+void flux_ui_draw_file_viewer(flux_fb_t *fb, const char *path,
+                               const char *content, int scroll_line);
+
+/* Gibt 1 wenn der "Zurueck"-Bereich getroffen, 0 sonst.
+ * scroll_delta gibt Anzahl Zeilen hoch (<0) oder runter (>0) an. */
+int flux_ui_viewer_hit(const flux_fb_t *fb, int x, int y, int *scroll_delta, int *back);
+
+/* ---- Loeschen-Knopf in der Dateien-Ansicht -------------------------
+ * Sichtbar wenn selected_idx >= 0. Gibt 1 wenn der Loeschen-Knopf
+ * getroffen wurde. */
+int flux_ui_files_delete_hit(const flux_fb_t *fb, int x, int y);
 
 #endif
