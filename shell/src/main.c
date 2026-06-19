@@ -1792,6 +1792,27 @@ int main(void) {
                 free(old);
                 continue;
             }
+            if (strcasecmp(input_buf, "notizen") == 0 || strcasecmp(input_buf, "notes") == 0) {
+                input_buf[0] = '\0';
+                /* Open notes file directly in file viewer */
+                const char *npath = "/etc/flux/notes.txt";
+                snprintf(viewer_path, sizeof(viewer_path), "%s", npath);
+                viewer_content[0] = '\0'; viewer_scroll = 0;
+                FILE *nf = fopen(npath, "r");
+                if (nf) {
+                    size_t nn = fread(viewer_content, 1, VIEWER_CONTENT_MAX - 1, nf);
+                    viewer_content[nn] = '\0';
+                    fclose(nf);
+                } else {
+                    snprintf(viewer_content, sizeof(viewer_content), "(Noch keine Notizen vorhanden.)");
+                }
+                uint32_t *old = capture_frame(&fb);
+                screen = FLUX_SCREEN_FILE_VIEWER;
+                flux_ui_draw_file_viewer(&fb, viewer_path, viewer_content, viewer_scroll);
+                animate_slide_in(&fb, old);
+                free(old);
+                continue;
+            }
             if (strcasecmp(input_buf, "meeting") == 0 || strcasecmp(input_buf, "besprechung") == 0 ||
                 strcasecmp(input_buf, "aufnahme") == 0 || strcasecmp(input_buf, "mitschrift") == 0) {
                 input_buf[0] = '\0';
