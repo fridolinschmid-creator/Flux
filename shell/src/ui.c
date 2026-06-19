@@ -1986,3 +1986,220 @@ int flux_ui_ai_overlay_hit(const flux_fb_t *fb, int x, int y,
         return 0; /* Tap in der Karte, aber nicht auf einem Button */
     *cancel = 1; return 1;
 }
+
+/* ---- Semantische KI-Suche ------------------------------------------ */
+
+#define SRCH_INPUT_H   56
+#define SRCH_ROW_H     72
+#define SRCH_MAX_ROWS  8
+
+/* Source-Farben: Gedaechtnis, Kalender, Kontakte, Dateien, Foto, Notiz */
+static uint32_t srch_source_color(const char *line) {
+    if (strncmp(line, "Gedaechtnis:", 12) == 0 || strncmp(line, "Memory:", 7) == 0)
+        return 0x4FD1C5; /* Teal */
+    if (strncmp(line, "Kalender:", 9) == 0)
+        return 0x3B82F6; /* Blau */
+    if (strncmp(line, "Kontakt:", 8) == 0)
+        return 0xA855F7; /* Lila */
+    if (strncmp(line, "Foto:", 5) == 0)
+        return 0xF97316; /* Orange */
+    if (strncmp(line, "Notiz:", 6) == 0)
+        return 0x22C55E; /* Gruen */
+    return 0x6B7280;     /* Grau (Datei / allgemein) */
+}
+
+void flux_ui_draw_search(flux_fb_t *fb, const char *query,
+                          const char **results, int n, int searching) {
+    flux_fb_fill_rect(fb, 0, 0, fb->width, fb->height, COL_BG);
+    draw_statusbar(fb);
+
+    int iy = STATUSBAR_H + 8;
+
+    /* Suchfeld */
+    flux_fb_fill_rect(fb, 8, iy, fb->width - 16, SRCH_INPUT_H, COL_KEY);
+    flux_fb_fill_rect(fb, 8, iy + SRCH_INPUT_H - 2, fb->width - 16, 2, g_accent);
+
+    /* Lupe-Icon (einfaches L) */
+    flux_fb_fill_rect(fb, 18, iy + 18, 16, 16, 0x3A4A5A);
+    flux_fb_fill_rect(fb, 20, iy + 20, 12, 12, COL_BG);
+    flux_fb_fill_rect(fb, 27, iy + 30, 4, 8, 0x6B7280);
+
+    if (query && query[0]) {
+        /* Anzeige-Text auf Breite kuerzen */
+        char disp[56]; int dlen = 0;
+        while (query[dlen] && dlen < 50) dlen++;
+        memcpy(disp, query, (size_t)dlen); disp[dlen] = '\0';
+        flux_fb_text(fb, 44, iy + (SRCH_INPUT_H - 16) / 2, disp, COL_TEXT, 2);
+        /* Cursor */
+        int cw = flux_fb_text_width(disp, 2);
+        flux_fb_fill_rect(fb, 44 + cw + 2, iy + 14, 2, 24, g_accent);
+    } else {
+        flux_fb_text(fb, 44, iy + (SRCH_INPUT_H - 16) / 2,
+                     "Alles durchsuchen...", COL_DIM, 2);
+    }
+
+    int list_y = iy + SRCH_INPUT_H + 10;
+    int kbd_top = flux_ui_kbd_top(fb);
+
+    if (searching) {
+        /* Lade-Animation */
+        flux_fb_text(fb, 24, list_y + 20, "KI sucht...", g_accent, 2);
+        flux_fb_text(fb, 24, list_y + 46,
+                     "Durchsucht Gedaechtnis, Kalender,", COL_DIM, 2);
+        flux_fb_text(fb, 24, list_y + 66,
+                     "Kontakte, Dateien und Fotos.", COL_DIM, 2);
+        draw_keyboard(fb);
+        flux_fb_present(fb);
+        return;
+    }
+
+    if (n == 0 && query && query[0]) {
+        flux_fb_text(fb, 24, list_y + 24, "Keine Treffer gefunden.", COL_DIM, 2);
+    } else if (n == 0) {
+        /* Intro-Text */
+        flux_fb_text(fb, 24, list_y + 16, "Einfach tippen und Enter druecken.", COL_DIM, 2);
+        flux_fb_text(fb, 24, list_y + 38, "Die KI durchsucht alles auf dem Geraet:", COL_DIM, 2);
+        const char *examples[] = {
+            "  Gedaechtnis & persoenliche Infos",
+            "  Kalender & Termine",
+            "  Kontakte",
+            "  Dateien & Notizen",
+            "  Fotos",
+        };
+        int ey = list_y + 68;
+        for (int i = 0; i < 5 && ey < kbd_top - 10; i++) {
+            flux_fb_fill_rect(fb, 14, ey + 3, 4, 12, g_accent);
+            flux_fb_text(fb, 26, ey, examples[i], COL_TEXT, 2);
+            ey += 24;
+        }
+        draw_keyboard(fb);
+        flux_fb_present(fb);
+        return;
+    }
+
+    /* Ergebnisliste */
+    int max_show = (kbd_top - list_y) / SRCH_ROW_H;
+    if (max_show > SRCH_MAX_ROWS) max_show = SRCH_MAX_ROWS;
+    if (n > max_show) n = max_show;
+
+    for (int i = 0; i < n; i++) {
+        int ry = list_y + i * SRCH_ROW_H;
+        uint32_t sc = srch_source_color(results[i]);
+
+        /* Zeilen-Hintergrund */
+        flux_fb_fill_rect(fb, 0, ry, fb->width, SRCH_ROW_H - 2,
+                          i % 2 == 0 ? 0x111820 : COL_BG);
+
+        /* Farbiger Akzent-Streifen links */
+        flux_fb_fill_rect(fb, 0, ry + 4, 5, SRCH_ROW_H - 12, sc);
+
+        /* Source-Label (vor dem Doppelpunkt) */
+        const char *colon = strchr(results[i], ':');
+        if (colon) {
+            char src[32]; size_t sl = (size_t)(colon - results[i]);
+            if (sl >= sizeof(src)) sl = sizeof(src)-1;
+            memcpy(src, results[i], sl); src[sl] = '\0';
+            flux_fb_text(fb, 14, ry + 6, src, sc, 1);
+            /* Inhalt (nach dem Doppelpunkt) */
+            const char *content = colon + 1;
+            while (*content == ' ') content++;
+            char line1[52], line2[52]; int l1=0, l2=0;
+            while (content[l1] && content[l1]!='\n' && l1<46) l1++;
+            memcpy(line1, content, (size_t)l1); line1[l1]='\0';
+            flux_fb_text(fb, 14, ry + 20, line1, COL_TEXT, 2);
+            content += l1; if (*content=='\n') content++;
+            if (*content) {
+                while (content[l2] && content[l2]!='\n' && l2<46) l2++;
+                memcpy(line2, content, (size_t)l2); line2[l2]='\0';
+                flux_fb_text(fb, 14, ry + 42, line2, COL_DIM, 2);
+            }
+        } else {
+            /* Kein Doppelpunkt -- direkt Text */
+            flux_fb_text(fb, 14, ry + 24, results[i], COL_TEXT, 2);
+        }
+
+        /* Trennlinie */
+        flux_fb_fill_rect(fb, 0, ry + SRCH_ROW_H - 2, fb->width, 1, 0x1E2840);
+    }
+
+    draw_keyboard(fb);
+    flux_fb_present(fb);
+}
+
+int flux_ui_search_hit(const flux_fb_t *fb, int x, int y,
+                       int *back, int *result_idx) {
+    *back = 0; *result_idx = -1;
+    /* Tastaturbereich wird von flux_ui_kbd_hit() behandelt */
+    if (y >= flux_ui_kbd_top(fb)) return 0;
+    int list_y = STATUSBAR_H + 8 + SRCH_INPUT_H + 10;
+    int idx = (y - list_y) / SRCH_ROW_H;
+    if (idx >= 0 && idx < SRCH_MAX_ROWS && y >= list_y) {
+        *result_idx = idx;
+        return 1;
+    }
+    (void)x;
+    return 0;
+}
+
+/* ---- Spracheingabe-Overlay ----------------------------------------- */
+
+void flux_ui_draw_voice_overlay(flux_fb_t *fb, int elapsed_s) {
+    int w = fb->width, h = fb->height;
+
+    /* Halbdurchsichtiger Schleier */
+    for (int i = 0; i < w * h; i++) {
+        uint32_t px = fb->back[i];
+        fb->back[i] = ((px >> 1) & 0x7F7F7F) | 0x060010;
+    }
+
+    /* Pulsierender Ring -- Radius abhaengig von Zeit */
+    int pulse = elapsed_s % 2; /* 0 oder 1 */
+    int cx = w / 2, cy = h / 2;
+    int outer_r = 72 + pulse * 8;
+    int inner_r = 52;
+
+    for (int dy = -outer_r; dy <= outer_r; dy++) {
+        for (int dx = -outer_r; dx <= outer_r; dx++) {
+            int d2 = dx*dx + dy*dy;
+            if (d2 <= outer_r*outer_r && d2 > inner_r*inner_r) {
+                int px = cx+dx, py = cy+dy;
+                if (px>=0 && px<w && py>=0 && py<h) {
+                    /* Rot mit leichter Transparenz */
+                    uint32_t old = fb->back[py*w+px];
+                    uint32_t r = 0xE0, g = 0x30, b = 0x30;
+                    /* Blend 70% rot + 30% background */
+                    uint32_t br = (old >> 16) & 0xFF;
+                    uint32_t bg = (old >>  8) & 0xFF;
+                    uint32_t bb =  old        & 0xFF;
+                    fb->back[py*w+px] = (((r*7+br*3)/10) << 16) |
+                                        (((g*7+bg*3)/10) <<  8) |
+                                         ((b*7+bb*3)/10);
+                }
+            }
+        }
+    }
+
+    /* Mikrofon-Punkt in der Mitte */
+    int dot_r = 22;
+    for (int dy = -dot_r; dy <= dot_r; dy++)
+        for (int dx = -dot_r; dx <= dot_r; dx++)
+            if (dx*dx+dy*dy <= dot_r*dot_r) {
+                int px=cx+dx, py=cy+dy;
+                if (px>=0 && px<w && py>=0 && py<h)
+                    fb->back[py*w+px] = 0xE05252;
+            }
+
+    /* Timer */
+    char timer_buf[16];
+    int m = elapsed_s / 60, s = elapsed_s % 60;
+    snprintf(timer_buf, sizeof(timer_buf), "%02d:%02d", m, s);
+    int tw = flux_fb_text_width(timer_buf, 4);
+    flux_fb_text(fb, (w-tw)/2, cy + outer_r + 14, timer_buf, 0xE05252, 4);
+
+    /* Anweisung */
+    const char *hint = "Sprich jetzt -- nochmal tippen zum Stoppen";
+    tw = flux_fb_text_width(hint, 2);
+    flux_fb_text(fb, (w-tw)/2, cy + outer_r + 58, hint, COL_DIM, 2);
+
+    flux_fb_present(fb);
+}

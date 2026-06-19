@@ -8,6 +8,7 @@
 #include "provider.h"
 #include "proactive.h"
 #include "journal.h"
+#include "habits.h"
 #include "exec.h"
 #include "../../common/flux_protocol.h"
 #include "../../common/flux_config.h"
@@ -53,6 +54,10 @@ static void handle_client(int cfd) {
         const char *question = line + 2;
         if (!flux_actions_try(question, answer, sizeof(answer)))
             flux_provider_ask(question, answer, sizeof(answer));
+        /* Nutzungsgewohnheiten loggen (ersten 80 Zeichen der Frage) */
+        char topic[84];
+        snprintf(topic, sizeof(topic), "%.80s", question);
+        flux_habits_log("assistant", topic);
     } else if (strncmp(line, "X:", 2) == 0) {
         /* Eine bestaetigte Aktion ist mehrzeilig (TO:/SUBJECT:/BODY:)
          * -- NICHT am ersten Newline abschneiden. */
@@ -107,6 +112,7 @@ int main(void) {
             if (k && *k) {
                 flux_proactive_check(k, m);
                 flux_journal_check(k, m);
+                flux_habits_morning_briefing(k, m);
             }
             continue;
         }

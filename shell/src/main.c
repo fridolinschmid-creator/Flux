@@ -21,6 +21,7 @@
 #include "ui.h"
 #include "action.h"
 #include "camera.h"
+#include "voice.h"
 #include "../../common/flux_protocol.h"
 #include "../../common/flux_config.h"
 #include "../../common/flux_sha256.h"
@@ -418,6 +419,18 @@ static const char *memory_entries[MEMORY_MAX];
 static int  memory_n     = 0;
 static int  memory_scroll = 0;
 
+/* Spracheingabe */
+static int    voice_active  = 0;   /* 1 = Aufnahme laeuft, Overlay sichtbar */
+static time_t voice_start_t = 0;
+
+/* Semantische KI-Suche */
+#define SRCH_MAX 8
+static char        search_query[256]         = {0};
+static char        search_results_buf[SRCH_MAX][128];
+static const char *search_results_p[SRCH_MAX];
+static int         search_n                  = 0;
+static int         search_searching          = 0;
+
 static void load_memory(void) {
     memory_n = 0;
     FILE *f = fopen("/etc/flux/memory.txt", "r");
@@ -523,6 +536,87 @@ static uint32_t *load_ppm_scaled(const char *path, int target_w, int target_h,
     return out;
 }
 
+/* Sammelt suchbaren Geraete-Inhalt fuer die semantische KI-Suche. */
+static void collect_search_context(const char *query, char *out, size_t cap) {
+    size_t pos = 0;
+    pos += snprintf(out + pos, cap - pos,
+                    "Suche nach: '%s'\n\nVerfuegbare Daten:\n", query);
+
+    /* Gedaechtnis */
+    FILE *mf = fopen("/etc/flux/memory.txt", "r");
+    if (mf) {
+        pos += snprintf(out + pos, cap - pos, "\n[Gedaechtnis]\n");
+        char ln[128]; int cnt = 0;
+        while (fgets(ln, sizeof(ln), mf) && cnt < 30 && pos < cap - 200) {
+            pos += snprintf(out + pos, cap - pos, "%s", ln);
+            cnt++;
+        }
+        fclose(mf);
+    }
+
+    /* Kalender */
+    FILE *cf = fopen("/etc/flux/calendar.txt", "r");
+    if (cf) {
+        pos += snprintf(out + pos, cap - pos, "\n[Kalender]\n");
+        char ln[256]; int cnt = 0;
+        while (fgets(ln, sizeof(ln), cf) && cnt < 30 && pos < cap - 200) {
+            if (ln[0] != '#' && ln[0] != '\n') {
+                pos += snprintf(out + pos, cap - pos, "%s", ln);
+                cnt++;
+            }
+        }
+        fclose(cf);
+    }
+
+    /* Kontakte */
+    FILE *kf = fopen("/etc/flux/contacts.txt", "r");
+    if (kf) {
+        pos += snprintf(out + pos, cap - pos, "\n[Kontakte]\n");
+        char ln[256]; int cnt = 0;
+        while (fgets(ln, sizeof(ln), kf) && cnt < 30 && pos < cap - 200) {
+            if (ln[0] != '#' && ln[0] != '\n') {
+                pos += snprintf(out + pos, cap - pos, "%s", ln);
+                cnt++;
+            }
+        }
+        fclose(kf);
+    }
+
+    /* Notizen */
+    FILE *nf = fopen("/etc/flux/notes.txt", "r");
+    if (nf) {
+        pos += snprintf(out + pos, cap - pos, "\n[Notizen]\n");
+        char ln[256]; int cnt = 0;
+        while (fgets(ln, sizeof(ln), nf) && cnt < 20 && pos < cap - 200) {
+            pos += snprintf(out + pos, cap - pos, "%s", ln);
+            cnt++;
+        }
+        fclose(nf);
+    }
+
+    out[cap-1] = '\0';
+}
+
+/* Parst KI-Suchantwort in Array von Ergebnis-Strings. */
+static int parse_search_results(const char *answer) {
+    search_n = 0;
+    if (!answer || !*answer) return 0;
+    char tmp[FLUX_MAX_RESPONSE];
+    strncpy(tmp, answer, sizeof(tmp) - 1);
+    tmp[sizeof(tmp)-1] = '\0';
+    char *ptr = tmp;
+    char *line;
+    while ((line = strsep(&ptr, "\n")) != NULL && search_n < SRCH_MAX) {
+        while (*line == ' ' || *line == '-') line++;
+        if (!*line || *line == '\r') continue;
+        snprintf(search_results_buf[search_n], sizeof(search_results_buf[0]),
+                 "%.126s", line);
+        search_results_p[search_n] = search_results_buf[search_n];
+        search_n++;
+    }
+    return search_n;
+}
+
 /* Zeichnet den aktuellen Screen neu (benoetigt fuer Overlay-Hintergrund). */
 static void redraw_current_screen(flux_fb_t *fb, flux_screen_t screen,
                                    const char *last_q, const char *input_buf,
@@ -557,6 +651,9 @@ static void redraw_current_screen(flux_fb_t *fb, flux_screen_t screen,
                                  meeting_transcript, meeting_status);
             break;
         }
+        case FLUX_SCREEN_SEARCH:
+            flux_ui_draw_search(fb, search_query, search_results_p,
+                                search_n, search_searching); break;
         default: break;
     }
 }
@@ -833,9 +930,16 @@ int main(void) {
                 flux_config_get("auto_lock", auto_lock_s, sizeof(auto_lock_s));
                 int timeout = atoi(auto_lock_s);
                 if (timeout > 0 && time(NULL) - last_event_time >= (time_t)timeout) {
+                    if (voice_active) { flux_voice_cancel(); voice_active = 0; }
                     screen = FLUX_SCREEN_LOCK;
                     flux_ui_draw_lock(&fb);
                 }
+            }
+            /* Spracheingabe-Overlay: Timer jede Sekunde aktualisieren */
+            if (voice_active && screen == FLUX_SCREEN_ASSISTANT) {
+                int elapsed = (int)(time(NULL) - voice_start_t);
+                flux_ui_draw_assistant(&fb, last_q, input_buf, answer_buf, 0);
+                flux_ui_draw_voice_overlay(&fb, elapsed);
             }
             /* Zombie-Kinder (TTS-Prozesse) aufraumen */
             while (waitpid(-1, NULL, WNOHANG) > 0) {}
@@ -1604,6 +1708,102 @@ int main(void) {
             continue;
         }
 
+        if (screen == FLUX_SCREEN_SEARCH) {
+            if (ev.type == FLUX_EV_SWIPE_LEFT) {
+                uint32_t *old = capture_frame(&fb);
+                screen = FLUX_SCREEN_ASSISTANT;
+                flux_ui_draw_assistant(&fb, last_q, input_buf, answer_buf, 0);
+                animate_slide_from_left(&fb, old);
+                free(old);
+                continue;
+            }
+
+            int do_search = 0;
+
+            if (ev.type == FLUX_EV_TAP) {
+                int srch_back, srch_ridx;
+                flux_ui_search_hit(&fb, ev.x, ev.y, &srch_back, &srch_ridx);
+                if (srch_back) {
+                    uint32_t *old = capture_frame(&fb);
+                    screen = FLUX_SCREEN_ASSISTANT;
+                    flux_ui_draw_assistant(&fb, last_q, input_buf, answer_buf, 0);
+                    animate_slide_from_left(&fb, old);
+                    free(old);
+                    continue;
+                }
+                /* Tastatur */
+                char tap_ch = 0; int tap_bs = 0, tap_enter = 0;
+                if (flux_ui_kbd_hit(&fb, ev.x, ev.y, &tap_ch, &tap_bs, &tap_enter)) {
+                    if (tap_bs) {
+                        size_t ql = strlen(search_query);
+                        if (ql > 0) search_query[ql-1] = '\0';
+                    } else if (tap_enter) {
+                        do_search = search_query[0] != '\0';
+                    } else if (tap_ch) {
+                        size_t ql = strlen(search_query);
+                        if (ql + 1 < sizeof(search_query)) {
+                            search_query[ql] = tap_ch;
+                            search_query[ql+1] = '\0';
+                        }
+                    }
+                }
+            } else if (ev.type == FLUX_EV_CHAR) {
+                size_t ql = strlen(search_query);
+                if (ql + 1 < sizeof(search_query)) {
+                    search_query[ql] = ev.ch;
+                    search_query[ql+1] = '\0';
+                }
+            } else if (ev.type == FLUX_EV_BACKSPACE) {
+                size_t ql = strlen(search_query);
+                if (ql > 0) search_query[ql-1] = '\0';
+            } else if (ev.type == FLUX_EV_ENTER) {
+                do_search = search_query[0] != '\0';
+            }
+
+            if (do_search) {
+                search_searching = 1;
+                search_n = 0;
+                flux_ui_draw_search(&fb, search_query, search_results_p, 0, 1);
+
+                char sctx[6400] = {0};
+                collect_search_context(search_query, sctx, sizeof(sctx));
+
+                char sq[6800];
+                snprintf(sq, sizeof(sq),
+                         "%s\n\n"
+                         "Gib die passendsten Treffer als Liste aus. Format pro Zeile:\n"
+                         "Quelle: Inhalt\n"
+                         "Quelle ist: Gedaechtnis, Kalender, Kontakte oder Notizen.\n"
+                         "Maximal 8 Treffer. Nur die Trefferliste, keine Erklaerungen.",
+                         sctx);
+
+                char sanswer[FLUX_MAX_RESPONSE] = {0};
+                flux_ipc_ask(sq, sanswer, sizeof(sanswer));
+                parse_search_results(sanswer);
+                search_searching = 0;
+            }
+
+            flux_ui_draw_search(&fb, search_query, search_results_p, search_n, search_searching);
+            continue;
+        }
+
+        /* FLUX_SCREEN_ASSISTANT -- Voice-Overlay: beliebiger Input stoppt die Aufnahme */
+        if (voice_active && (ev.type == FLUX_EV_TAP || ev.type == FLUX_EV_CHAR ||
+                              ev.type == FLUX_EV_ENTER || ev.type == FLUX_EV_BACKSPACE)) {
+            voice_active = 0;
+            flux_ui_draw_assistant(&fb, last_q, input_buf, "Transkribiere...", 1);
+            char voice_text[512] = {0};
+            if (flux_voice_stop_and_transcribe(voice_text, sizeof(voice_text)) && voice_text[0]) {
+                snprintf(input_buf, sizeof(input_buf), "%s", voice_text);
+                flux_ui_draw_assistant(&fb, last_q, input_buf, answer_buf, 0);
+            } else {
+                snprintf(answer_buf, sizeof(answer_buf),
+                         "Keine Spracheingabe erkannt -- bitte deutlicher sprechen.");
+                flux_ui_draw_assistant(&fb, last_q, input_buf, answer_buf, 0);
+            }
+            continue;
+        }
+
         /* FLUX_SCREEN_ASSISTANT -- Wisch nach unten oeffnet den Notify-Overlay. */
         if (ev.type == FLUX_EV_SWIPE_DOWN) {
             pre_notify_screen = FLUX_SCREEN_ASSISTANT;
@@ -1664,9 +1864,20 @@ int main(void) {
                 continue;
             }
             if (flux_ui_mic_hit(&fb, ev.x, ev.y)) {
-                snprintf(answer_buf, sizeof(answer_buf),
-                         "Kein Mikrofon erkannt -- Spracheingabe ist in dieser Umgebung noch nicht verfuegbar.");
-                flux_ui_draw_assistant(&fb, last_q, input_buf, answer_buf, 0);
+                if (!flux_voice_can_record()) {
+                    snprintf(answer_buf, sizeof(answer_buf),
+                             "Kein Mikrofon erkannt -- arecord oder ffmpeg wird benoetigt.");
+                    flux_ui_draw_assistant(&fb, last_q, input_buf, answer_buf, 0);
+                } else if (flux_voice_start()) {
+                    voice_active = 1;
+                    voice_start_t = time(NULL);
+                    flux_ui_draw_assistant(&fb, last_q, input_buf, answer_buf, 0);
+                    flux_ui_draw_voice_overlay(&fb, 0);
+                } else {
+                    snprintf(answer_buf, sizeof(answer_buf),
+                             "Aufnahme konnte nicht gestartet werden.");
+                    flux_ui_draw_assistant(&fb, last_q, input_buf, answer_buf, 0);
+                }
                 continue;
             }
             if (flux_ui_copy_hit(&fb, ev.x, ev.y)) {
@@ -1883,6 +2094,20 @@ int main(void) {
                 screen = FLUX_SCREEN_IMAGE_VIEWER;
                 flux_ui_draw_image_viewer(&fb, gallery_names[0],
                     image_pixels, image_w, image_h, "", 0);
+                animate_slide_in(&fb, old);
+                free(old);
+                continue;
+            }
+            if (strcasecmp(input_buf, "suche") == 0 || strcasecmp(input_buf, "search") == 0 ||
+                strcasecmp(input_buf, "finden") == 0 || strcasecmp(input_buf, "finder") == 0) {
+                input_buf[0] = '\0';
+                search_query[0] = '\0';
+                search_n = 0;
+                search_searching = 0;
+                uint32_t *old = capture_frame(&fb);
+                screen = FLUX_SCREEN_SEARCH;
+                flux_ui_draw_search(&fb, search_query, search_results_p,
+                                    search_n, search_searching);
                 animate_slide_in(&fb, old);
                 free(old);
                 continue;
