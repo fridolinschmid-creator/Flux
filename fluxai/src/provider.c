@@ -225,7 +225,10 @@ static int parse_tool_call(const char *response,
     return 1;
 }
 
-void flux_provider_ask(const char *question, char *out, size_t out_cap) {
+/* use_history: 1 = letzte Gespraechsrunden einbetten und das Ergebnis im
+ * Verlauf speichern; 0 = ephemerer Aufruf (Hintergrund-Aufgaben). */
+static void provider_ask_impl(const char *question, char *out, size_t out_cap,
+                              int use_history) {
     char key_buf[256];
     const char *api_key = NULL;
     if (flux_config_get("api_key", key_buf, sizeof(key_buf)) && key_buf[0])
@@ -277,16 +280,16 @@ void flux_provider_ask(const char *question, char *out, size_t out_cap) {
         }
     }
 
-    /* Erster API-Aufruf -- mit Gespraechsverlauf */
-    if (!api_call(api_key, model, system_prompt, question, out, out_cap, 1))
+    /* Erster API-Aufruf -- Gespraechsverlauf nur bei use_history */
+    if (!api_call(api_key, model, system_prompt, question, out, out_cap, use_history))
         return;
 
     /* Tool-Aufruf? */
     char tool_name[64], tool_arg[1024];
     if (!parse_tool_call(out, tool_name, sizeof(tool_name),
                               tool_arg, sizeof(tool_arg))) {
-        /* Normale Antwort -- Austausch im Verlauf speichern */
-        ctx_add(question, out);
+        /* Normale Antwort -- Austausch nur im Verlauf speichern, wenn gewuenscht */
+        if (use_history) ctx_add(question, out);
         return;
     }
 
@@ -308,6 +311,14 @@ void flux_provider_ask(const char *question, char *out, size_t out_cap) {
              "Antworte auf Deutsch, kurz und klar.",
              question, tool_name, tool_arg, tool_result);
 
-    if (api_call(api_key, model, system_prompt, followup, out, out_cap, 0))
+    if (api_call(api_key, model, system_prompt, followup, out, out_cap, 0) && use_history)
         ctx_add(question, out);
+}
+
+void flux_provider_ask(const char *question, char *out, size_t out_cap) {
+    provider_ask_impl(question, out, out_cap, 1);
+}
+
+void flux_provider_ask_ephemeral(const char *question, char *out, size_t out_cap) {
+    provider_ask_impl(question, out, out_cap, 0);
 }

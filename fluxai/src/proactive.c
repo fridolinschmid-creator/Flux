@@ -13,6 +13,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
+#include <unistd.h>
 #include <sys/stat.h>
 
 #define PROACTIVE_OUT   "/tmp/flux_proactive.txt"
@@ -43,6 +44,7 @@ static void read_file_section(const char *path, char *out, size_t cap) {
 }
 
 void flux_proactive_check(const char *api_key, const char *model) {
+    (void)api_key; (void)model; /* Key/Model werden in flux_provider_ask gelesen */
     if (!should_run()) return;
     touch_stamp(); /* Update stamp first to avoid repeated rapid checks */
 
@@ -153,7 +155,7 @@ void flux_proactive_check(const char *api_key, const char *model) {
              ctx);
 
     char answer[512] = {0};
-    flux_provider_ask(question, answer, sizeof(answer));
+    flux_provider_ask_ephemeral(question, answer, sizeof(answer));
 
     if (!answer[0] || strncmp(answer, "Kein Cloud", 10) == 0) return;
 

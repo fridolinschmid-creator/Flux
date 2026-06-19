@@ -122,7 +122,7 @@ void flux_journal_check(const char *api_key, const char *model) {
                     "\nAntworte NUR mit dem Tagebucheintrag, keine Erklaerungen.");
 
     char answer[1024] = {0};
-    flux_provider_ask(question, answer, sizeof(answer));
+    flux_provider_ask_ephemeral(question, answer, sizeof(answer));
 
     if (!answer[0] || strncmp(answer, "ACTION:", 7) == 0) return;
 
