@@ -250,7 +250,21 @@ int main(int argc, char *argv[]) {
         "");
     save_ppm(&fb, outdir, "24_ki_overlay_kalender");
 
-    /* 25 -- KI-Gedaechtnis (memory screen) */
+    /* 25 -- Lockscreen mit proaktiver KI-Benachrichtigung */
+    {
+        /* Simuliere die /tmp/flux_proactive.txt Datei */
+        FILE *pf = fopen("/tmp/flux_proactive.txt", "w");
+        if (pf) {
+            fprintf(pf, "Morgen hat Laura Geburtstag! Soll ich dir helfen eine Nachricht zu schreiben?\n");
+            fclose(pf);
+        }
+        flux_ui_set_accent(0x4FD1C5);
+        flux_ui_draw_lock(&fb);
+        save_ppm(&fb, outdir, "25_lockscreen_proaktiv");
+        unlink("/tmp/flux_proactive.txt");
+    }
+
+    /* 26 -- KI-Gedaechtnis (memory screen) */
     flux_ui_set_accent(0x4FD1C5);
     {
         const char *mem_entries[] = {
@@ -262,7 +276,7 @@ int main(int argc, char *argv[]) {
         };
         flux_ui_draw_memory(&fb, mem_entries, 5, 0);
     }
-    save_ppm(&fb, outdir, "25_ki_gedaechtnis");
+    save_ppm(&fb, outdir, "26_ki_gedaechtnis");
 
     flux_fb_close(&fb);
     printf("\nFertig! PPM -> PNG: convert %s/XX.ppm %s/XX.png\n", outdir, outdir);

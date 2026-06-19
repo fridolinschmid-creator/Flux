@@ -328,6 +328,44 @@ void flux_ui_draw_lock(flux_fb_t *fb) {
                          fb->height / 3 + scale_clock * 11 + 56, gline, COL_ACCENT, 2);
         }
     }
+    /* Proaktive KI-Benachrichtigung (von fluxaid generiert) */
+    {
+        char pline[512] = {0};
+        FILE *pf = fopen("/tmp/flux_proactive.txt", "r");
+        if (pf) { size_t pn = fread(pline, 1, sizeof(pline)-1, pf); pline[pn] = '\0'; fclose(pf); }
+        size_t pl = strlen(pline);
+        while (pl > 0 && (pline[pl-1] == '\n' || pline[pl-1] == '\r')) pline[--pl] = '\0';
+        if (pline[0]) {
+            /* Notification card: rounded rect with accent-colored top stripe */
+            int card_m = 20;
+            int card_x = card_m;
+            int card_w = fb->width - 2 * card_m;
+            int card_y = fb->height * 2 / 3 - 10;
+            int card_h = 100;
+            flux_fb_fill_rect(fb, card_x, card_y, card_w, card_h, 0x1A2535);
+            flux_fb_fill_rect(fb, card_x, card_y, card_w, 3, g_accent);
+            /* KI icon label */
+            flux_fb_text(fb, card_x + 10, card_y + 8, "KI-Hinweis", g_accent, 2);
+            /* Message text: wrap at ~38 chars */
+            const char *p = pline;
+            int ty = card_y + 26;
+            while (*p && ty < card_y + card_h - 10) {
+                char lbuf[48]; int ll = 0;
+                while (p[ll] && p[ll] != '\n' && ll < 42) ll++;
+                /* Word-wrap: back up to last space if line too long */
+                if (ll == 42 && p[ll] && p[ll] != ' ') {
+                    int sw = ll;
+                    while (sw > 20 && p[sw] != ' ') sw--;
+                    if (p[sw] == ' ') ll = sw;
+                }
+                memcpy(lbuf, p, (size_t)ll); lbuf[ll] = '\0';
+                flux_fb_text(fb, card_x + 10, ty, lbuf, COL_TEXT, 2);
+                ty += 18;
+                p += ll;
+                if (*p == ' ' || *p == '\n') p++;
+            }
+        }
+    }
     flux_fb_present(fb);
 }
 

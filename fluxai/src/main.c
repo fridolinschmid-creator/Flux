@@ -6,8 +6,10 @@
  */
 #include "actions.h"
 #include "provider.h"
+#include "proactive.h"
 #include "exec.h"
 #include "../../common/flux_protocol.h"
+#include "../../common/flux_config.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -16,6 +18,7 @@
 #include <sys/socket.h>
 #include <sys/un.h>
 #include <sys/stat.h>
+#include <sys/select.h>
 #include <signal.h>
 
 static int make_listen_socket(const char *path) {
@@ -75,7 +78,36 @@ int main(void) {
 
     fprintf(stderr, "fluxaid: lauscht auf %s\n", FLUX_SOCK_PATH);
 
+    /* Proactive check on startup */
+    {
+        char key_buf[256] = {0};
+        flux_config_get("api_key", key_buf, sizeof(key_buf));
+        const char *k = key_buf[0] ? key_buf : getenv("FLUX_AI_API_KEY");
+        const char *m = getenv("FLUX_AI_MODEL");
+        if (!m || !*m) m = "claude-haiku-4-5-20251001";
+        if (k && *k) flux_proactive_check(k, m);
+    }
+
     for (;;) {
+        /* Use select() with 5-minute timeout for proactive checks */
+        fd_set rfds;
+        FD_ZERO(&rfds);
+        FD_SET(listen_fd, &rfds);
+        struct timeval tv = { .tv_sec = 300, .tv_usec = 0 };
+        int ret = select(listen_fd + 1, &rfds, NULL, NULL, &tv);
+
+        if (ret == 0) {
+            /* Timeout: run proactive check */
+            char key_buf[256] = {0};
+            flux_config_get("api_key", key_buf, sizeof(key_buf));
+            const char *k = key_buf[0] ? key_buf : getenv("FLUX_AI_API_KEY");
+            const char *m = getenv("FLUX_AI_MODEL");
+            if (!m || !*m) m = "claude-haiku-4-5-20251001";
+            if (k && *k) flux_proactive_check(k, m);
+            continue;
+        }
+        if (ret < 0) continue;
+
         int cfd = accept(listen_fd, NULL, NULL);
         if (cfd < 0) continue;
         handle_client(cfd); /* ein Request pro Verbindung reicht fuer den Prototyp */
