@@ -49,7 +49,7 @@ static int read_battery_pct(void) {
         FILE *f = fopen(paths[i], "r");
         if (!f) continue;
         int pct = -1;
-        fscanf(f, "%d", &pct);
+        (void)fscanf(f, "%d", &pct);
         fclose(f);
         if (pct >= 0) return pct;
     }
@@ -62,8 +62,8 @@ static int read_wifi_quality(void) {
     FILE *f = fopen("/proc/net/wireless", "r");
     if (!f) return -1;
     char line[128];
-    fgets(line, sizeof(line), f); /* Header 1 */
-    fgets(line, sizeof(line), f); /* Header 2 */
+    (void)fgets(line, sizeof(line), f); /* Header 1 */
+    (void)fgets(line, sizeof(line), f); /* Header 2 */
     int quality = -1;
     if (fgets(line, sizeof(line), f)) {
         char iface[64];
@@ -118,10 +118,11 @@ static void draw_statusbar(flux_fb_t *fb) {
 
     int bat = read_battery_pct();
     if (bat >= 0) {
+        if (bat > 100) bat = 100;
         rx -= 20;
         draw_battery_icon(fb, rx, (STATUSBAR_H - 12) / 2, bat);
         rx -= 6;
-        /* Prozentzahl */
+        /* Prozentzahl: max "100%" = 4 Zeichen + NUL */
         char pbuf[8];
         snprintf(pbuf, sizeof(pbuf), "%d%%", bat);
         int pw = flux_fb_text_width(pbuf, 2);
@@ -1192,8 +1193,9 @@ void flux_ui_draw_notify(flux_fb_t *fb) {
     int wifi = read_wifi_quality();
 
     if (bat >= 0) {
+        if (bat > 100) bat = 100;
         draw_battery_icon(fb, 24, y + 2, bat);
-        char pbuf[16];
+        char pbuf[20];
         snprintf(pbuf, sizeof(pbuf), "  Batterie: %d%%", bat);
         flux_fb_text(fb, 48, y, pbuf, COL_TEXT, 2);
         y += 28;

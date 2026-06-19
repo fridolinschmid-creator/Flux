@@ -33,6 +33,7 @@
 #include <unistd.h>
 #include <dirent.h>
 #include <sys/stat.h>
+#include <limits.h>
 
 #define NOTES_PATH      "/etc/flux/notes.txt"
 #define MEMORY_PATH     "/etc/flux/memory.txt"
@@ -236,6 +237,31 @@ static int tool_file_create(const char *arg, char *out, size_t cap) {
         return 1;
     }
 
+    /* Symlink-Bypass-Schutz: Elternverzeichnis real aufloesen.
+     * Ein Symlink /home/user/link -> /etc wuerde den strncmp-Vorfilter
+     * passieren -- realpath() entlarvt das. */
+    {
+        const char *pipe_pos = strchr(arg, '|');
+        char test_path[512];
+        size_t plen2 = pipe_pos ? (size_t)(pipe_pos - arg) : strlen(arg);
+        if (plen2 >= sizeof(test_path)) plen2 = sizeof(test_path) - 1;
+        memcpy(test_path, arg, plen2); test_path[plen2] = '\0';
+
+        char tmp_dir[512];
+        snprintf(tmp_dir, sizeof(tmp_dir), "%s", test_path);
+        char *sl = strrchr(tmp_dir, '/');
+        if (sl && sl > tmp_dir) *sl = '\0'; else { tmp_dir[0] = '/'; tmp_dir[1] = '\0'; }
+
+        char rdir[PATH_MAX];
+        if (realpath(tmp_dir, rdir) &&
+            strncmp(rdir, "/home/user/", 11) != 0 &&
+            strncmp(rdir, "/tmp/", 5) != 0) {
+            snprintf(out, cap,
+                     "Fehler: Zielverzeichnis liegt ausserhalb der erlaubten Zone (Symlink?)");
+            return 1;
+        }
+    }
+
     /* Format: "pfad|inhalt" -- | als Trennzeichen, \n im Inhalt werden zu echten Newlines */
     const char *sep = strchr(arg, '|');
     if (!sep) {
@@ -284,16 +310,22 @@ static int tool_file_delete(const char *arg, char *out, size_t cap) {
         snprintf(out, cap, "Fehler: kein Pfad angegeben");
         return 1;
     }
-    /* Sicherheit: nur unter /home/user/ erlaubt */
-    if (strncmp(arg, "/home/user/", 11) != 0) {
+    /* Sicherheit: realpath() aufloesen und dann prufen -- verhindert
+     * Symlink-Bypass (/home/user/link -> /etc). */
+    char resolved[PATH_MAX];
+    if (!realpath(arg, resolved)) {
+        snprintf(out, cap, "Fehler: Datei '%s' nicht gefunden", arg);
+        return 1;
+    }
+    if (strncmp(resolved, "/home/user/", 11) != 0) {
         snprintf(out, cap,
                  "Fehler: Loeschen nur unter /home/user/ erlaubt (Systemdateien schuetzen)");
         return 1;
     }
-    if (remove(arg) == 0) {
-        snprintf(out, cap, "Datei '%s' geloescht", arg);
+    if (remove(resolved) == 0) {
+        snprintf(out, cap, "Datei '%s' geloescht", resolved);
     } else {
-        snprintf(out, cap, "Fehler: '%s' konnte nicht geloescht werden", arg);
+        snprintf(out, cap, "Fehler: '%s' konnte nicht geloescht werden", resolved);
     }
     return 1;
 }

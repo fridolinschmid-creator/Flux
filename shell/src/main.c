@@ -36,6 +36,7 @@
 #include <sys/select.h>
 #include <sys/wait.h>
 #include <time.h>
+#include <limits.h>
 
 /* ---- Uebergangs-Animation (Einblenden von unten) --------------------- */
 
@@ -378,7 +379,7 @@ static void load_contacts_list(void) {
 }
 
 /* Datei-Betrachter */
-static char viewer_path[1024] = {0};
+static char viewer_path[PATH_MAX] = {0};
 static char viewer_content[VIEWER_CONTENT_MAX] = {0};
 static int  viewer_scroll = 0;
 
@@ -397,7 +398,7 @@ static char ai_ovl_input[512]   = {0};
 static char ai_ovl_result[2048] = {0};
 static char ai_ovl_label[80]    = {0};
 static char ai_ovl_ctx[8192]    = {0};   /* Volltext-Kontext fuer die KI */
-static char ai_ovl_save_path[256] = {0}; /* Pfad fuer "Als Datei speichern" */
+static char ai_ovl_save_path[PATH_MAX + 32] = {0}; /* Pfad fuer "Als Datei speichern" */
 
 /* Bild-Betrachter */
 static char   image_path[512]   = {0};
@@ -677,7 +678,7 @@ static void build_ai_overlay_context(flux_screen_t screen,
                      "Inhalt (ggf. gekuerzt):\n%.6000s",
                      viewer_path, viewer_content);
             /* Speicherpfad: gleiche Datei + _Zusammenfassung.txt */
-            char base[256]; snprintf(base, sizeof(base), "%s", viewer_path);
+            char base[PATH_MAX]; snprintf(base, sizeof(base), "%s", viewer_path);
             char *dot = strrchr(base, '.'); if (dot) *dot = '\0';
             snprintf(ai_ovl_save_path, sizeof(ai_ovl_save_path),
                      "%s_KI-Zusammenfassung.txt", base);
@@ -1353,9 +1354,11 @@ int main(void) {
                         snprintf(full_path, sizeof(full_path), "/%s",
                                  file_names_buf[file_selected]);
 
-                    /* Sicherheit: nur /home/user/ loeschen */
-                    if (strncmp(full_path, "/home/user/", 11) == 0)
-                        remove(full_path);
+                    /* Sicherheit: realpath() aufloesen -- verhindert Symlink-Bypass */
+                    char real_del[PATH_MAX];
+                    if (realpath(full_path, real_del) &&
+                        strncmp(real_del, "/home/user/", 11) == 0)
+                        remove(real_del);
                 }
                 file_selected = -1;
                 load_files(files_path);
