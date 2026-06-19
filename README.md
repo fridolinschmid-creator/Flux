@@ -95,15 +95,29 @@ Datei, Protokoll und UI bleiben unveraendert.
   Umbenennen -- ein erster sicherer Schritt, kein vollwertiger
   Datei-Manager.
 
-## Mikrofon-Knopf (Whisper) -- aktuell ein ehrlicher Platzhalter
+## Mikrofon-Knopf (Whisper) -- implementiert, hardwareabhaengig
 
-Der Assistent hat einen Mikrofon-Knopf neben der Eingabezeile. QEMU
-`virt` hat aktuell **kein Audiogeraet** -- es gibt nichts, von dem echte
-Sprache aufgenommen werden koennte. Ein Tap meldet das ehrlich ("kein
-Mikrofon erkannt") statt eine Aufnahme zu simulieren. Geplant: lokales
-`whisper.cpp` (kein Cloud-Whisper, Privacy-Grund wie beim Rest des
-Systems) -- braucht zuerst ein virtuelles Audiogeraet in der QEMU-Konfig
-und ein gebuendeltes Modell im Rootfs-Overlay, siehe Roadmap.
+Der Assistent hat einen Mikrofon-Knopf neben der Eingabezeile. Die
+Spracheingabe ist umgesetzt (`shell/src/voice.c`): Aufnahme per
+`arecord`/`ffmpeg`, lokale Transkription per `whisper-cli` mit deutschem
+Modell -- bewusst **kein** Cloud-Whisper (gleicher Privacy-Grund wie beim
+Rest des Systems). Beide Schritte sind optional: fehlt das Aufnahme-Tool,
+das Whisper-Binary oder das Modell, meldet ein Tap das ehrlich ("kein
+Mikrofon erkannt") statt eine Aufnahme zu simulieren. QEMU `virt` hat
+standardmaessig kein Audiogeraet, daher braucht es dort zuerst ein
+virtuelles Mikrofon und ein gebuendeltes Modell im Rootfs-Overlay.
+
+## Weitere Funktionen
+
+Inzwischen ueber den Assistenten erreichbar (getippte/gesprochene
+Schluesselwoerter oder Schnellzugriff/Wisch): **Kalender**, **Kontakte**,
+**Fotogalerie + Kamera**, **Bild-Betrachter mit KI-Analyse**,
+**KI-Gedaechtnis**, **Meeting-Mitschrift** und **semantische Suche**.
+Der Daemon hat zusaetzlich eine Tool-Schicht (Wetter, Rechner, Dateien,
+Notizen, Erinnerungen u.a.) und drei Hintergrunddienste (proaktive
+Hinweise, Tagebuch, Morgen-Briefing). Details in
+[`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md); eine kritische
+Bestandsaufnahme in [`docs/AUDIT.md`](docs/AUDIT.md).
 
 ---
 
@@ -209,6 +223,15 @@ Flux/
 ## Bauen & Starten
 
 ### Schnelltest auf dem Host (ohne echtes Geraet/QEMU)
+```bash
+make            # baut Daemon + Shell (nativer Host-Build)
+make test       # Unit-Tests (lokale Intents) + End-to-End-Protokolltest
+```
+`make test` startet den Daemon mit einem Socket unter `/tmp`
+(`FLUX_SOCK_PATH`-Override), braucht also **kein Root** und keinen
+API-Key. Dieselben Schritte laufen in CI (`.github/workflows/ci.yml`).
+
+Einzeln:
 ```bash
 cd fluxai && make && ./fluxaid &     # Daemon starten
 cd ../shell && make                  # nur Compile-Test, /dev/fb0 fehlt auf dem Host
