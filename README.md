@@ -224,6 +224,15 @@ Flux/
 
 ### Schnelltest auf dem Host (ohne echtes Geraet/QEMU)
 ```bash
+make            # baut Daemon + Shell (nativer Host-Build)
+make test       # Unit-Tests (lokale Intents) + End-to-End-Protokolltest
+```
+`make test` startet den Daemon mit einem Socket unter `/tmp`
+(`FLUX_SOCK_PATH`-Override), braucht also **kein Root** und keinen
+API-Key. Dieselben Schritte laufen in CI (`.github/workflows/ci.yml`).
+
+Einzeln:
+```bash
 cd fluxai && make && ./fluxaid &     # Daemon starten
 cd ../shell && make                  # nur Compile-Test, /dev/fb0 fehlt auf dem Host
 ```

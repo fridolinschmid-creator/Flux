@@ -159,9 +159,12 @@ call can no longer be escaped).
    right-sizing a handful of buffers (low priority, all truncate safely).
 
 ### Future recommendations
-- Add a tiny host-side test harness (the daemon already runs without a
-  framebuffer) and wire it into a `make test` target + CI so future
-  refactors of `main.c` and the HTTP layer can be done safely.
+- ~~Add a tiny host-side test harness and wire it into a `make test`
+  target + CI.~~ **Done:** top-level `Makefile` (`make test`), `tests/`
+  (unit tests for local intents + an end-to-end protocol test that runs
+  the daemon rootless via the new `FLUX_SOCK_PATH` override), and
+  `.github/workflows/ci.yml` (build + test on every push/PR). This is the
+  safety net for the deferred `main.c` / HTTP-layer refactors.
 - Introduce a small `secret_store` abstraction so the move off plaintext
   `flux.conf` later touches one module, not every caller.
 - Consider streaming/`-Wconversion` passes once the above tests exist.
