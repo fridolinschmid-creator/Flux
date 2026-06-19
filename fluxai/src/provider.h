@@ -11,6 +11,14 @@
 #include <stddef.h>
 
 void flux_provider_init(void);
+
+/* Beantwortet eine Nutzerfrage und pflegt den Gespraechsverlauf
+ * (letzte Runden werden als Kontext mitgesendet und gespeichert). */
 void flux_provider_ask(const char *question, char *out, size_t out_cap);
+
+/* Wie flux_provider_ask, aber OHNE den Gespraechsverlauf zu lesen oder zu
+ * veraendern. Fuer Hintergrund-Aufgaben (Proactive/Journal/Habits), deren
+ * grosse interne Prompts sonst den Verlauf des Nutzers verschmutzen. */
+void flux_provider_ask_ephemeral(const char *question, char *out, size_t out_cap);
 
 #endif

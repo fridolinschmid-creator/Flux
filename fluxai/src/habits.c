@@ -210,7 +210,7 @@ void flux_habits_morning_briefing(const char *api_key, const char *model) {
                     "Nur der Begrüssungstext, keine Erklaerungen.");
 
     char answer[512] = {0};
-    flux_provider_ask(question, answer, sizeof(answer));
+    flux_provider_ask_ephemeral(question, answer, sizeof(answer));
 
     if (!answer[0] || strncmp(answer, "ACTION:", 7) == 0) return;
 

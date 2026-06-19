@@ -49,7 +49,7 @@ static int read_battery_pct(void) {
         FILE *f = fopen(paths[i], "r");
         if (!f) continue;
         int pct = -1;
-        fscanf(f, "%d", &pct);
+        if (fscanf(f, "%d", &pct) != 1) pct = -1;
         fclose(f);
         if (pct >= 0) return pct;
     }
@@ -62,9 +62,13 @@ static int read_wifi_quality(void) {
     FILE *f = fopen("/proc/net/wireless", "r");
     if (!f) return -1;
     char line[128];
-    fgets(line, sizeof(line), f); /* Header 1 */
-    fgets(line, sizeof(line), f); /* Header 2 */
     int quality = -1;
+    /* Zwei Header-Zeilen ueberspringen; wenn die Datei kuerzer ist, gibt
+     * es kein WLAN-Interface zu melden. */
+    if (!fgets(line, sizeof(line), f) || !fgets(line, sizeof(line), f)) {
+        fclose(f);
+        return -1;
+    }
     if (fgets(line, sizeof(line), f)) {
         char iface[64];
         int status, link;

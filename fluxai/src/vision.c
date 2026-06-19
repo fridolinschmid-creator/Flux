@@ -14,6 +14,29 @@
 #define VISION_MODEL   "claude-haiku-4-5-20251001"
 #define VISION_API_URL "https://api.anthropic.com/v1/messages"
 
+/* Schreibt s als sicher single-quotetes Shell-Argument nach out
+ * ('  ->  '\''). Verhindert Command-Injection ueber Dateinamen, die in
+ * eine system()-Kommandozeile eingebaut werden. Gibt 0 bei Erfolg, -1
+ * wenn der Zielpuffer zu klein ist. */
+static int shell_quote(const char *s, char *out, size_t cap) {
+    size_t o = 0;
+    if (o + 1 >= cap) return -1;
+    out[o++] = '\'';
+    for (; *s; s++) {
+        if (*s == '\'') {
+            if (o + 4 >= cap) return -1;
+            out[o++] = '\''; out[o++] = '\\'; out[o++] = '\''; out[o++] = '\'';
+        } else {
+            if (o + 1 >= cap) return -1;
+            out[o++] = *s;
+        }
+    }
+    if (o + 2 > cap) return -1;
+    out[o++] = '\'';
+    out[o] = '\0';
+    return 0;
+}
+
 /* ---- Base64-Encoder ------------------------------------------------- */
 
 static const char b64_chars[] =
@@ -105,9 +128,14 @@ int flux_vision_analyze(const char *ppm_path, char *out, size_t out_cap,
     /* PPM → JPEG per ImageMagick (Anthropic akzeptiert kein PPM) */
     const char *tmp_jpg = "/tmp/flux_vision_img.jpg";
     {
-        char cmd[1024];
+        char q_src[1100];
+        if (shell_quote(ppm_path, q_src, sizeof(q_src)) != 0) {
+            snprintf(out, out_cap, "Bildpfad zu lang.");
+            return 0;
+        }
+        char cmd[1280];
         snprintf(cmd, sizeof(cmd),
-                 "convert '%s' -quality 80 '%s' 2>/dev/null", ppm_path, tmp_jpg);
+                 "convert %s -quality 80 '%s' 2>/dev/null", q_src, tmp_jpg);
         if (system(cmd) != 0) {
             snprintf(out, out_cap,
                      "Bildkonvertierung fehlgeschlagen (convert nicht installiert?).");
