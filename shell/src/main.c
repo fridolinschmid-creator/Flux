@@ -1700,6 +1700,21 @@ int main(void) {
                 free(old);
                 continue;
             }
+            if (strcasecmp(input_buf, "journal") == 0 || strcasecmp(input_buf, "tagebuch") == 0) {
+                input_buf[0] = '\0';
+                /* Navigate to Journal directory in file browser */
+                mkdir("/home/user/Journal", 0755);
+                snprintf(files_path, sizeof(files_path), "/home/user/Journal");
+                load_files(files_path);
+                file_selected = -1;
+                uint32_t *old = capture_frame(&fb);
+                screen = FLUX_SCREEN_FILES;
+                flux_ui_draw_files(&fb, files_path, file_names, file_metas,
+                                   file_n, file_truncated, file_selected);
+                animate_slide_in(&fb, old);
+                free(old);
+                continue;
+            }
             if (strcasecmp(input_buf, "gedaechtnis") == 0 || strcasecmp(input_buf, "memory") == 0 ||
                 strcasecmp(input_buf, "erinnerungen") == 0 || strcasecmp(input_buf, "ki-speicher") == 0) {
                 input_buf[0] = '\0';

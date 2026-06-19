@@ -7,6 +7,7 @@
 #include "actions.h"
 #include "provider.h"
 #include "proactive.h"
+#include "journal.h"
 #include "exec.h"
 #include "../../common/flux_protocol.h"
 #include "../../common/flux_config.h"
@@ -97,13 +98,16 @@ int main(void) {
         int ret = select(listen_fd + 1, &rfds, NULL, NULL, &tv);
 
         if (ret == 0) {
-            /* Timeout: run proactive check */
+            /* Timeout: run periodic checks */
             char key_buf[256] = {0};
             flux_config_get("api_key", key_buf, sizeof(key_buf));
             const char *k = key_buf[0] ? key_buf : getenv("FLUX_AI_API_KEY");
             const char *m = getenv("FLUX_AI_MODEL");
             if (!m || !*m) m = "claude-haiku-4-5-20251001";
-            if (k && *k) flux_proactive_check(k, m);
+            if (k && *k) {
+                flux_proactive_check(k, m);
+                flux_journal_check(k, m);
+            }
             continue;
         }
         if (ret < 0) continue;
