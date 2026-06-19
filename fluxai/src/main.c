@@ -12,6 +12,7 @@
 #include "exec.h"
 #include "../../common/flux_protocol.h"
 #include "../../common/flux_config.h"
+#include "../../common/flux_privdrop.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -97,6 +98,14 @@ int main(void) {
     const char *sock_path = resolve_sock_path();
     ensure_sock_dir(sock_path);
     int listen_fd = make_listen_socket(sock_path);
+
+    /* Privilegien ablegen, sobald der Socket gebunden ist (opt-in: nur wenn
+     * "service_user" konfiguriert ist -- siehe scripts/setup-users.sh). Der
+     * Zustand unter FLUX_CONFIG_DIR muss dem Dienstnutzer gehoeren. */
+    if (flux_privdrop("service_user", "FLUX_SERVICE_USER") != 0) {
+        fprintf(stderr, "fluxaid: Privilege-Drop fehlgeschlagen -- beende\n");
+        return 1;
+    }
 
     fprintf(stderr, "fluxaid: lauscht auf %s\n", sock_path);
 

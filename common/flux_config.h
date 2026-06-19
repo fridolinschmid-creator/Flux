@@ -16,6 +16,10 @@
 #define FLUX_CONFIG_DIR  "/etc/flux"
 #define FLUX_CONFIG_PATH "/etc/flux/flux.conf"
 
+/* Konfigurationsverzeichnis: per Env FLUX_CONFIG_DIR ueberschreibbar
+ * (Tests/abweichende Secret-Ablage), sonst FLUX_CONFIG_DIR. */
+const char *flux_config_dir(void);
+
 /* Gibt 1 zurueck und kopiert den Wert nach out, wenn key gesetzt ist.
  * Sonst 0 (Datei fehlt oder Key nicht vorhanden) -- out ist dann ein
  * leerer String. */

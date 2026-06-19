@@ -19,15 +19,20 @@ daemon:
 shell:
 	$(MAKE) -C shell
 
-# Unit-Tests (lokale Intents) + End-to-End-Protokolltest gegen den Daemon.
-test: daemon tests/test_actions tests/protocol_client
+# Unit-Tests (lokale Intents + Config/Crypto) + E2E-Protokolltest.
+test: daemon tests/test_actions tests/test_config tests/protocol_client
 	@echo "== unit: actions =="
 	./tests/test_actions
+	@echo "== unit: config (encryption at rest) =="
+	./tests/test_config
 	@echo "== e2e: protocol =="
 	./tests/run_protocol_test.sh
 
 tests/test_actions: tests/test_actions.c fluxai/src/actions.c
 	$(CC) $(CFLAGS) -o $@ $^
+
+tests/test_config: tests/test_config.c common/flux_config.c common/flux_secret.c
+	$(CC) $(CFLAGS) -o $@ $^ -lcrypto
 
 tests/protocol_client: tests/protocol_client.c
 	$(CC) $(CFLAGS) -o $@ $^
@@ -35,4 +40,4 @@ tests/protocol_client: tests/protocol_client.c
 clean:
 	$(MAKE) -C fluxai clean
 	$(MAKE) -C shell clean
-	rm -f tests/test_actions tests/protocol_client
+	rm -f tests/test_actions tests/test_config tests/protocol_client
