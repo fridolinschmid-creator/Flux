@@ -12,6 +12,11 @@
 
 void flux_provider_init(void);
 
+/* 1, wenn der deterministische Mock-Provider aktiv ist (FLUX_PROVIDER=mock).
+ * Der Mock antwortet ohne Netzwerk/API-Key und erlaubt es Tests, den
+ * kompletten Tool-Dispatch reproduzierbar zu pruefen. */
+int flux_provider_is_mock(void);
+
 /* Beantwortet eine Nutzerfrage und pflegt den Gespraechsverlauf
  * (letzte Runden werden als Kontext mitgesendet und gespeichert). */
 void flux_provider_ask(const char *question, char *out, size_t out_cap);
