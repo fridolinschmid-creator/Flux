@@ -30,14 +30,24 @@ void flux_ipc_send_raw(const char *request, char *out, size_t out_cap) {
         return;
     }
 
+    /* Schleife bis vollstaendige Antwort (endet mit "\nEND\n") vorliegt.
+     * Ein einzelnes read() reicht bei langen KI-Antworten nicht. */
     char resp[FLUX_MAX_RESPONSE];
-    ssize_t n = read(fd, resp, sizeof(resp) - 1);
+    size_t total = 0;
+    ssize_t n;
+    while (total < sizeof(resp) - 1) {
+        n = read(fd, resp + total, sizeof(resp) - 1 - total);
+        if (n <= 0) break;
+        total += (size_t)n;
+        resp[total] = '\0';
+        if (strstr(resp, "\nEND\n")) break;
+    }
     close(fd);
-    if (n <= 0) {
+    if (total == 0) {
         snprintf(out, out_cap, "Keine Antwort von fluxaid erhalten.");
         return;
     }
-    resp[n] = '\0';
+    resp[total] = '\0';
 
     const char *body = resp;
     if (strncmp(body, "A:", 2) == 0 || strncmp(body, "ERR:", 4) == 0)

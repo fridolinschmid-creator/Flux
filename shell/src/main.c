@@ -836,7 +836,7 @@ static void load_files(const char *path) {
 static void files_go_parent(void) {
     char *slash = strrchr(files_path, '/');
     if (slash && slash != files_path) *slash = '\0';
-    else strcpy(files_path, "/");
+    else { files_path[0] = '/'; files_path[1] = '\0'; }
     file_selected = -1;
 }
 
@@ -905,6 +905,8 @@ int main(void) {
     char pin_buf[FLUX_PIN_LEN + 1] = {0};
     int  pin_len = 0;
     int  pin_error = 0;
+    int  pin_fail_count = 0;
+    time_t pin_locked_until = 0;
 
     flux_action_t pending_action;
     memset(&pending_action, 0, sizeof(pending_action));
@@ -1089,6 +1091,13 @@ int main(void) {
             }
             if (!hit) continue;
 
+            /* Brute-Force-Schutz: nach 5 Fehlversuchen 30 s sperren */
+            if (pin_locked_until > 0 && time(NULL) < pin_locked_until) {
+                pin_error = 1;
+                flux_ui_draw_pin(&fb, 0, pin_error);
+                continue;
+            }
+
             pin_error = 0;
             if (backspace) {
                 if (pin_len > 0) pin_len--;
@@ -1103,8 +1112,10 @@ int main(void) {
                 char stored[128] = {0};
                 flux_config_get("pin_hash", stored, sizeof(stored));
                 pin_len = 0;
-                pin_buf[0] = '\0';
+                explicit_bzero(pin_buf, sizeof(pin_buf));
                 if (strcmp(hash, stored) == 0) {
+                    pin_fail_count = 0;
+                    pin_locked_until = 0;
                     screen = FLUX_SCREEN_ASSISTANT;
                     input_buf[0] = '\0';
                     answer_buf[0] = '\0';
@@ -1113,6 +1124,11 @@ int main(void) {
                     animate_slide_in(&fb, old);
                     free(old);
                 } else {
+                    pin_fail_count++;
+                    if (pin_fail_count >= 5) {
+                        pin_locked_until = time(NULL) + 30;
+                        pin_fail_count = 0;
+                    }
                     pin_error = 1;
                     flux_ui_draw_pin(&fb, pin_len, pin_error);
                 }
@@ -1830,7 +1846,7 @@ int main(void) {
                 free(old);
                 continue;
             } else if (quick == 2) {
-                strcpy(files_path, "/");
+                files_path[0] = '/'; files_path[1] = '\0';
                 file_selected = -1;
                 load_files(files_path);
                 animate_ripple(&fb, ev.x, ev.y);
@@ -1940,7 +1956,7 @@ int main(void) {
             }
             if (strcasecmp(input_buf, "dateien") == 0 || strcasecmp(input_buf, "files") == 0) {
                 input_buf[0] = '\0';
-                strcpy(files_path, "/");
+                files_path[0] = '/'; files_path[1] = '\0';
                 file_selected = -1;
                 load_files(files_path);
                 uint32_t *old = capture_frame(&fb);

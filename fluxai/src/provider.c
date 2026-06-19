@@ -226,7 +226,7 @@ static int parse_tool_call(const char *response,
 }
 
 void flux_provider_ask(const char *question, char *out, size_t out_cap) {
-    char key_buf[256];
+    char key_buf[256] = {0};
     const char *api_key = NULL;
     if (flux_config_get("api_key", key_buf, sizeof(key_buf)) && key_buf[0])
         api_key = key_buf;
@@ -310,4 +310,5 @@ void flux_provider_ask(const char *question, char *out, size_t out_cap) {
 
     if (api_call(api_key, model, system_prompt, followup, out, out_cap, 0))
         ctx_add(question, out);
+    explicit_bzero(key_buf, sizeof(key_buf));
 }

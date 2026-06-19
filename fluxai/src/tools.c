@@ -71,13 +71,28 @@ static int tool_date_time(const char *arg, char *out, size_t cap) {
 
 static int tool_weather(const char *arg, char *out, size_t cap) {
     /* Wenn arg leer -> IP-basierte Ortserkennung (wttr.in ohne Ort) */
-    const char *city = (arg && *arg) ? arg : "";
+    const char *city_raw = (arg && *arg) ? arg : "";
+
+    /* Stadtname bereinigen: nur alphanumerische Zeichen, Leerzeichen, Bindestrich
+     * und Unterstrich erlaubt -- verhindert URL-Manipulation / SSRF. */
+    char safe_city[128] = {0};
+    size_t si = 0;
+    for (size_t i = 0; city_raw[i] && si + 1 < sizeof(safe_city); i++) {
+        unsigned char c = (unsigned char)city_raw[i];
+        if ((c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') ||
+            (c >= '0' && c <= '9') || c == '-' || c == '_' || c == ' ')
+            safe_city[si++] = (char)c;
+    }
+    safe_city[si] = '\0';
+    /* Leerzeichen → '+' fuer URL-Kompatibilitaet */
+    for (size_t i = 0; safe_city[i]; i++)
+        if (safe_city[i] == ' ') safe_city[i] = '+';
 
     /* URL aufbauen: wttr.in/{city}?format=%l:+%C,+%t,+%h+Feuchte,+Wind+%w */
     char url[512];
     snprintf(url, sizeof(url),
              "https://wttr.in/%s?format=%%l:+%%C,+%%t,+%%h+Feuchte,+Wind+%%w",
-             city);
+             safe_city);
 
     char respbuf[1024];
     respbuf[0] = '\0';
