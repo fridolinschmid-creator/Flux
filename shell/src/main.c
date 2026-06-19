@@ -405,6 +405,12 @@ static int    image_analyzing   = 0;
 static uint32_t *image_pixels   = NULL;
 static int    image_w = 0, image_h = 0;
 
+/* Meeting-Mitschrift */
+static int  meeting_recording  = 0;
+static time_t meeting_start_t  = 0;
+static char meeting_transcript[8192] = {0};
+static char meeting_status[128] = "Aufnahme-Knopf druecken um zu beginnen.";
+
 /* KI-Gedaechtnis */
 #define MEMORY_MAX 200
 static char memory_entries_buf[MEMORY_MAX][256];
@@ -545,6 +551,12 @@ static void redraw_current_screen(flux_fb_t *fb, flux_screen_t screen,
                                        image_w, image_h, image_caption, 0); break;
         case FLUX_SCREEN_MEMORY:
             flux_ui_draw_memory(fb, memory_entries, memory_n, memory_scroll); break;
+        case FLUX_SCREEN_MEETING: {
+            int elapsed = meeting_recording ? (int)(time(NULL) - meeting_start_t) : 0;
+            flux_ui_draw_meeting(fb, meeting_recording, elapsed,
+                                 meeting_transcript, meeting_status);
+            break;
+        }
         default: break;
     }
 }
@@ -1509,6 +1521,67 @@ int main(void) {
             continue;
         }
 
+        if (screen == FLUX_SCREEN_MEETING) {
+            int elapsed = meeting_recording ? (int)(time(NULL) - meeting_start_t) : 0;
+            if (ev.type == FLUX_EV_SWIPE_LEFT || (ev.type == FLUX_EV_TAP &&
+                    ({ int r,s,b; flux_ui_meeting_hit(&fb,ev.x,ev.y,&r,&s,&b); b; }))) {
+                if (meeting_recording) {
+                    meeting_recording = 0;
+                    snprintf(meeting_status, sizeof(meeting_status),
+                             "Aufnahme beendet (%d:%02d).", elapsed/60, elapsed%60);
+                }
+                uint32_t *old = capture_frame(&fb);
+                screen = FLUX_SCREEN_ASSISTANT;
+                flux_ui_draw_assistant(&fb, last_q, input_buf, answer_buf, 0);
+                animate_slide_from_left(&fb, old);
+                free(old);
+                continue;
+            }
+            if (ev.type == FLUX_EV_TAP) {
+                int rec, save, back;
+                flux_ui_meeting_hit(&fb, ev.x, ev.y, &rec, &save, &back);
+                if (rec) {
+                    animate_ripple(&fb, ev.x, ev.y);
+                    if (!meeting_recording) {
+                        meeting_recording = 1;
+                        meeting_start_t   = time(NULL);
+                        meeting_transcript[0] = '\0';
+                        snprintf(meeting_status, sizeof(meeting_status), "Aufnahme laueft...");
+                    } else {
+                        meeting_recording = 0;
+                        elapsed = (int)(time(NULL) - meeting_start_t);
+                        snprintf(meeting_status, sizeof(meeting_status),
+                                 "Aufnahme beendet (%d:%02d). Whisper.cpp nicht installiert -- "
+                                 "Transkription auf anderem Geraet moeglich.", elapsed/60, elapsed%60);
+                    }
+                } else if (save && (meeting_transcript[0] || elapsed > 0)) {
+                    animate_ripple(&fb, ev.x, ev.y);
+                    /* Save transcript to /home/user/Meetings/ */
+                    mkdir("/home/user/Meetings", 0755);
+                    time_t nt = time(NULL); struct tm ntm; localtime_r(&nt, &ntm);
+                    char mpath[256];
+                    strftime(mpath, sizeof(mpath),
+                             "/home/user/Meetings/Meeting_%Y%m%d_%H%M.md", &ntm);
+                    FILE *mf = fopen(mpath, "w");
+                    if (mf) {
+                        char hdr[128];
+                        strftime(hdr, sizeof(hdr), "# Meeting %d.%m.%Y %H:%M\n\n", &ntm);
+                        fprintf(mf, "%s", hdr);
+                        if (meeting_transcript[0])
+                            fprintf(mf, "%s\n", meeting_transcript);
+                        else
+                            fprintf(mf, "*(Keine Transkription verfuegbar -- Whisper.cpp fehlt)*\n");
+                        fclose(mf);
+                        snprintf(meeting_status, sizeof(meeting_status),
+                                 "Gespeichert: %s", mpath);
+                    }
+                }
+            }
+            flux_ui_draw_meeting(&fb, meeting_recording, elapsed,
+                                  meeting_transcript, meeting_status);
+            continue;
+        }
+
         if (screen == FLUX_SCREEN_MEMORY) {
             if (ev.type == FLUX_EV_SWIPE_LEFT) {
                 uint32_t *old = capture_frame(&fb);
@@ -1715,6 +1788,20 @@ int main(void) {
                 screen = FLUX_SCREEN_GALLERY;
                 flux_ui_draw_gallery(&fb, gallery_names, gallery_dates,
                                      gallery_n, gallery_selected);
+                animate_slide_in(&fb, old);
+                free(old);
+                continue;
+            }
+            if (strcasecmp(input_buf, "meeting") == 0 || strcasecmp(input_buf, "besprechung") == 0 ||
+                strcasecmp(input_buf, "aufnahme") == 0 || strcasecmp(input_buf, "mitschrift") == 0) {
+                input_buf[0] = '\0';
+                meeting_recording = 0; meeting_start_t = 0;
+                meeting_transcript[0] = '\0';
+                snprintf(meeting_status, sizeof(meeting_status),
+                         "Aufnahme-Knopf druecken um zu beginnen.");
+                uint32_t *old = capture_frame(&fb);
+                screen = FLUX_SCREEN_MEETING;
+                flux_ui_draw_meeting(&fb, 0, 0, "", meeting_status);
                 animate_slide_in(&fb, old);
                 free(old);
                 continue;

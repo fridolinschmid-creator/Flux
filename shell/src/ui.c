@@ -1742,6 +1742,128 @@ void flux_ui_draw_ai_overlay(flux_fb_t *fb, const char *context_label,
     flux_fb_present(fb);
 }
 
+/* ---- Meeting-Mitschrift -------------------------------------------- */
+
+#define MTG_BTN_R   56   /* Radius des Aufnahme-Knopfs */
+#define MTG_SAVE_H  52
+#define MTG_BACK_H  LIST_BACK_H
+
+void flux_ui_draw_meeting(flux_fb_t *fb, int recording, int elapsed_s,
+                           const char *transcript, const char *status_msg) {
+    flux_fb_fill_rect(fb, 0, 0, fb->width, fb->height, COL_BG);
+    draw_statusbar(fb);
+
+    /* Title */
+    int hy = STATUSBAR_H + 10;
+    int tw = flux_fb_text_width("Meeting-Mitschrift", 3);
+    flux_fb_text(fb, (fb->width - tw) / 2, hy, "Meeting-Mitschrift", g_accent, 3);
+
+    /* Recording button: circle at 1/3 height */
+    int cx = fb->width / 2;
+    int cy = STATUSBAR_H + 48 + MTG_BTN_R + 10;
+    /* Outer ring */
+    uint32_t ring_col = recording ? 0xE05252 : 0x3A4A5A;
+    for (int dy = -MTG_BTN_R; dy <= MTG_BTN_R; dy++) {
+        for (int dx = -MTG_BTN_R; dx <= MTG_BTN_R; dx++) {
+            int d2 = dx*dx + dy*dy;
+            int r2 = MTG_BTN_R * MTG_BTN_R;
+            int ri2 = (MTG_BTN_R - 6) * (MTG_BTN_R - 6);
+            if (d2 <= r2 && d2 > ri2) {
+                int px = cx + dx, py = cy + dy;
+                if (px >= 0 && px < fb->width && py >= 0 && py < fb->height)
+                    fb->back[py * fb->width + px] = ring_col;
+            }
+        }
+    }
+    /* Inner filled circle */
+    int ir = MTG_BTN_R - 10;
+    uint32_t inner_col = recording ? 0xC03030 : 0x1C2840;
+    for (int dy = -ir; dy <= ir; dy++) {
+        for (int dx = -ir; dx <= ir; dx++) {
+            if (dx*dx + dy*dy <= ir*ir) {
+                int px = cx + dx, py = cy + dy;
+                if (px >= 0 && px < fb->width && py >= 0 && py < fb->height)
+                    fb->back[py * fb->width + px] = inner_col;
+            }
+        }
+    }
+    /* Icon: REC dot or stop square */
+    if (recording) {
+        int dot_r = 12;
+        for (int dy = -dot_r; dy <= dot_r; dy++)
+            for (int dx = -dot_r; dx <= dot_r; dx++)
+                if (dx*dx + dy*dy <= dot_r*dot_r) {
+                    int px = cx + dx, py = cy + dy;
+                    if (px >= 0 && px < fb->width && py >= 0 && py < fb->height)
+                        fb->back[py * fb->width + px] = 0xFFFFFF;
+                }
+    } else {
+        /* Microphone icon (simplified: vertical bar + semicircle outline) */
+        flux_fb_fill_rect(fb, cx - 6, cy - 14, 12, 20, 0xAAAAAA);
+        flux_fb_fill_rect(fb, cx - 12, cy + 6, 4, 8, 0xAAAAAA);
+        flux_fb_fill_rect(fb, cx + 8, cy + 6, 4, 8, 0xAAAAAA);
+        flux_fb_fill_rect(fb, cx - 6, cy + 14, 12, 4, 0xAAAAAA);
+    }
+
+    /* Timer */
+    int by = cy + MTG_BTN_R + 12;
+    if (recording) {
+        char timer[16];
+        int m = elapsed_s / 60, s = elapsed_s % 60;
+        snprintf(timer, sizeof(timer), "%02d:%02d", m, s);
+        tw = flux_fb_text_width(timer, 4);
+        flux_fb_text(fb, (fb->width - tw) / 2, by, timer, 0xE05252, 4);
+        by += 40;
+    } else {
+        by += 8;
+    }
+
+    /* Status text */
+    if (status_msg && status_msg[0]) {
+        tw = flux_fb_text_width(status_msg, 2);
+        flux_fb_text(fb, (fb->width - tw) / 2, by, status_msg, COL_DIM, 2);
+        by += 24;
+    }
+
+    /* Transcript area */
+    int tr_top = by + 8;
+    int tr_bot = fb->height - MTG_SAVE_H - MTG_BACK_H - 8;
+    if (tr_top < tr_bot) {
+        flux_fb_fill_rect(fb, 12, tr_top, fb->width - 24, tr_bot - tr_top, 0x111820);
+        if (transcript && transcript[0]) {
+            draw_wrapped(fb, 20, tr_top + 8,
+                         fb->width - 40, transcript, COL_TEXT, 2, tr_bot - tr_top - 16);
+        } else {
+            const char *ph = recording ? "Transkription laueft..." : "Kein Transkript";
+            tw = flux_fb_text_width(ph, 2);
+            flux_fb_text(fb, (fb->width - tw) / 2,
+                         tr_top + (tr_bot - tr_top) / 2 - 8, ph, COL_DIM, 2);
+        }
+    }
+
+    /* Save button */
+    int save_y = fb->height - MTG_SAVE_H - MTG_BACK_H;
+    flux_fb_fill_rect(fb, 16, save_y + 4, fb->width - 32, MTG_SAVE_H - 8, 0x1A3A2A);
+    tw = flux_fb_text_width("Speichern & Schliessen", 2);
+    flux_fb_text(fb, (fb->width - tw) / 2, save_y + (MTG_SAVE_H - 16) / 2,
+                 "Speichern & Schliessen", 0x4AE84A, 2);
+
+    draw_back_bar(fb, "Zurueck");
+    flux_fb_present(fb);
+}
+
+int flux_ui_meeting_hit(const flux_fb_t *fb, int x, int y,
+                        int *rec_btn, int *save_btn, int *back_btn) {
+    *rec_btn = *save_btn = *back_btn = 0;
+    if (y >= fb->height - MTG_BACK_H) { *back_btn = 1; return 1; }
+    int save_y = fb->height - MTG_SAVE_H - MTG_BACK_H;
+    if (y >= save_y && y < save_y + MTG_SAVE_H) { *save_btn = 1; return 1; }
+    int cx = fb->width / 2, cy = STATUSBAR_H + 48 + MTG_BTN_R + 10;
+    int dx = x - cx, dy = y - cy;
+    if (dx*dx + dy*dy <= MTG_BTN_R * MTG_BTN_R) { *rec_btn = 1; return 1; }
+    return 0;
+}
+
 /* ---- KI-Gedaechtnis ------------------------------------------------- */
 
 void flux_ui_draw_memory(flux_fb_t *fb, const char **entries, int n, int scroll) {

@@ -264,7 +264,16 @@ int main(int argc, char *argv[]) {
         unlink("/tmp/flux_proactive.txt");
     }
 
-    /* 26 -- KI-Gedaechtnis (memory screen) */
+    /* 26 -- Meeting-Mitschrift (Aufnahme laueft) */
+    flux_ui_set_accent(0xF97316); /* Orange fuer Meeting */
+    flux_ui_draw_meeting(&fb, 1, 423,
+        "Max: Wir muessen das Produkt bis Q3 fertig haben.\n"
+        "Anna: Der Backend-Service braucht noch 3 Wochen.\n"
+        "Max: Okay, dann priorisieren wir den MVP.",
+        "Aufnahme laueft...");
+    save_ppm(&fb, outdir, "26_meeting_aufnahme");
+
+    /* 27 -- KI-Gedaechtnis (memory screen) */
     flux_ui_set_accent(0x4FD1C5);
     {
         const char *mem_entries[] = {
@@ -276,7 +285,7 @@ int main(int argc, char *argv[]) {
         };
         flux_ui_draw_memory(&fb, mem_entries, 5, 0);
     }
-    save_ppm(&fb, outdir, "26_ki_gedaechtnis");
+    save_ppm(&fb, outdir, "27_ki_gedaechtnis");
 
     flux_fb_close(&fb);
     printf("\nFertig! PPM -> PNG: convert %s/XX.ppm %s/XX.png\n", outdir, outdir);

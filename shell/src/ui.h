@@ -28,6 +28,7 @@ typedef enum {
     FLUX_SCREEN_GALLERY,     /* Fotogalerie */
     FLUX_SCREEN_IMAGE_VIEWER, /* Einzelbild-Betrachter mit KI-Analyse */
     FLUX_SCREEN_MEMORY,      /* KI-Gedaechtnis-Liste */
+    FLUX_SCREEN_MEETING,     /* Meeting-Mitschrift (Audio-Transkription) */
 } flux_screen_t;
 
 typedef enum {
@@ -197,6 +198,22 @@ void flux_ui_draw_ai_overlay(flux_fb_t *fb, const char *context_label,
  * *save_result: "Als Datei speichern"-Button. */
 int flux_ui_ai_overlay_hit(const flux_fb_t *fb, int x, int y,
                             int *cancel, int *submit, int *save_result);
+
+/* ---- Meeting-Mitschrift -------------------------------------------- */
+
+/* Zeigt den Meeting-Bildschirm.
+ * recording: 1 wenn Aufnahme laeuft, 0 wenn bereit/beendet.
+ * elapsed_s: vergangene Aufnahmezeit in Sekunden.
+ * transcript: bisheriger Transkriptionstext (leer = noch keine Transkription).
+ * status_msg: Statustext unter dem Knopf (z.B. "Aufnahme laeuft..." oder
+ *             "Transkription nicht verfuegbar"). */
+void flux_ui_draw_meeting(flux_fb_t *fb, int recording, int elapsed_s,
+                           const char *transcript, const char *status_msg);
+
+/* Hit-Test: setzt *rec_btn=1 fuer den Aufnahme-Knopf, *save_btn=1 fuer
+ * "Speichern", *back_btn=1 fuer Zurueck. */
+int flux_ui_meeting_hit(const flux_fb_t *fb, int x, int y,
+                        int *rec_btn, int *save_btn, int *back_btn);
 
 /* ---- KI-Gedaechtnis ------------------------------------------------- */
 
