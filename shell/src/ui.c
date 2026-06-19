@@ -1704,6 +1704,94 @@ void flux_ui_draw_ai_overlay(flux_fb_t *fb, const char *context_label,
     flux_fb_present(fb);
 }
 
+/* ---- KI-Gedaechtnis ------------------------------------------------- */
+
+void flux_ui_draw_memory(flux_fb_t *fb, const char **entries, int n, int scroll) {
+    flux_fb_fill_rect(fb, 0, 0, fb->width, fb->height, COL_BG);
+    draw_statusbar(fb);
+
+    /* Header */
+    int hy = STATUSBAR_H;
+    flux_fb_fill_rect(fb, 0, hy, fb->width, LIST_BACK_H, COL_STATUSBAR);
+    flux_fb_fill_rect(fb, 0, hy + LIST_BACK_H - 1, fb->width, 1, g_accent);
+    int tw = flux_fb_text_width("< Zurueck", 2);
+    flux_fb_text(fb, (fb->width - tw) / 2 - 40, hy + (LIST_BACK_H - 16) / 2, "< Zurueck", COL_DIM, 2);
+    tw = flux_fb_text_width("KI-Gedaechtnis", 3);
+    flux_fb_text(fb, (fb->width - tw) / 2 + 20, hy + (LIST_BACK_H - 24) / 2, "KI-Gedaechtnis", g_accent, 3);
+
+    int list_y = hy + LIST_BACK_H + 8;
+    int list_h = fb->height - list_y - 8;
+
+    if (n == 0) {
+        tw = flux_fb_text_width("Noch nichts gespeichert.", 2);
+        flux_fb_text(fb, (fb->width - tw) / 2,
+                     list_y + list_h / 2, "Noch nichts gespeichert.", COL_DIM, 2);
+        flux_fb_present(fb);
+        return;
+    }
+
+    /* Draw entries */
+    int entry_h = 72;
+    int y0 = list_y;
+    int max_visible = list_h / entry_h;
+    if (scroll > n - max_visible) scroll = n - max_visible;
+    if (scroll < 0) scroll = 0;
+
+    for (int i = scroll; i < n && y0 + entry_h <= list_y + list_h; i++) {
+        int ey = y0;
+        /* Alternating row background */
+        uint32_t row_bg = (i % 2 == 0) ? COL_ROW : 0x111111;
+        flux_fb_fill_rect(fb, 0, ey, fb->width, entry_h, row_bg);
+        /* Accent left stripe */
+        flux_fb_fill_rect(fb, 0, ey + 4, 4, entry_h - 8, g_accent);
+        /* Entry text: first line is the timestamp in brackets */
+        const char *entry = entries[i];
+        if (entry[0] == '[') {
+            /* Split: "[timestamp] text" */
+            const char *end_bracket = strchr(entry, ']');
+            if (end_bracket) {
+                char ts_buf[32];
+                size_t ts_len = (size_t)(end_bracket - entry + 1);
+                if (ts_len >= sizeof(ts_buf)) ts_len = sizeof(ts_buf) - 1;
+                memcpy(ts_buf, entry, ts_len); ts_buf[ts_len] = '\0';
+                flux_fb_text(fb, 14, ey + 8, ts_buf, COL_DIM, 1);
+                const char *text = end_bracket + 1;
+                while (*text == ' ') text++;
+                /* Wrap text over 2 lines, max 44 chars each */
+                char line1[48] = {0}, line2[48] = {0};
+                int l1 = 0;
+                while (text[l1] && text[l1] != '\n' && l1 < 44) l1++;
+                memcpy(line1, text, (size_t)l1); line1[l1] = '\0';
+                flux_fb_text(fb, 14, ey + 22, line1, COL_TEXT, 2);
+                text += l1;
+                if (*text == '\n') text++;
+                if (*text) {
+                    int l2 = 0;
+                    while (text[l2] && text[l2] != '\n' && l2 < 44) l2++;
+                    memcpy(line2, text, (size_t)l2); line2[l2] = '\0';
+                    flux_fb_text(fb, 14, ey + 44, line2, COL_DIM, 2);
+                }
+            } else {
+                flux_fb_text(fb, 14, ey + 24, entry, COL_TEXT, 2);
+            }
+        } else {
+            flux_fb_text(fb, 14, ey + 24, entry, COL_TEXT, 2);
+        }
+        /* Divider */
+        flux_fb_fill_rect(fb, 0, ey + entry_h - 1, fb->width, 1, 0x222222);
+        y0 += entry_h;
+    }
+
+    /* Scroll indicator */
+    if (n > max_visible) {
+        int bar_h = list_h * max_visible / n;
+        int bar_y = list_y + list_h * scroll / n;
+        flux_fb_fill_rect(fb, fb->width - 4, bar_y, 4, bar_h, g_accent);
+    }
+
+    flux_fb_present(fb);
+}
+
 int flux_ui_ai_overlay_hit(const flux_fb_t *fb, int x, int y,
                             int *cancel, int *submit, int *save_result) {
     *cancel = *submit = *save_result = 0;

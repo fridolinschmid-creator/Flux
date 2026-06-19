@@ -239,23 +239,38 @@ void flux_provider_ask(const char *question, char *out, size_t out_cap) {
     const char *model = getenv("FLUX_AI_MODEL");
     if (!model || !*model) model = FLUX_DEFAULT_MODEL;
 
-    /* System-Prompt = Basis + Uhrzeit/Datum + Praeferenzen + Tool-Beschreibung */
-    char system_prompt[6144];
+    /* System-Prompt = Basis + Uhrzeit/Datum + Gedaechtnis + Praeferenzen + Tool-Beschreibung */
+    char system_prompt[8192];
     {
         time_t _t = time(NULL); struct tm _tm; localtime_r(&_t, &_tm);
         char _dt[64]; strftime(_dt, sizeof(_dt), "%A, %d. %B %Y, %H:%M Uhr", &_tm);
+
         char _prefs[512] = {0};
         FILE *_pf = fopen("/etc/flux/prefs.txt", "r");
         if (_pf) { size_t _n = fread(_prefs, 1, sizeof(_prefs)-1, _pf); _prefs[_n] = '\0'; fclose(_pf); }
-        if (_prefs[0])
-            snprintf(system_prompt, sizeof(system_prompt),
-                     "%s\n\nAktuelles Datum/Uhrzeit: %s\n"
-                     "Nutzerpraeferenzen (beachten):\n%s\n\n%s",
-                     FLUX_SYSTEM_PROMPT_BASE, _dt, _prefs, flux_tools_description());
-        else
-            snprintf(system_prompt, sizeof(system_prompt),
-                     "%s\n\nAktuelles Datum/Uhrzeit: %s\n\n%s",
-                     FLUX_SYSTEM_PROMPT_BASE, _dt, flux_tools_description());
+
+        char _mem[2048] = {0};
+        FILE *_mf = fopen("/etc/flux/memory.txt", "r");
+        if (_mf) { size_t _n = fread(_mem, 1, sizeof(_mem)-1, _mf); _mem[_n] = '\0'; fclose(_mf); }
+
+        /* Build prompt section by section */
+        snprintf(system_prompt, sizeof(system_prompt), "%s\n\nAktuelles Datum/Uhrzeit: %s\n",
+                 FLUX_SYSTEM_PROMPT_BASE, _dt);
+        if (_mem[0]) {
+            size_t l = strlen(system_prompt);
+            snprintf(system_prompt + l, sizeof(system_prompt) - l,
+                     "\nKI-Gedaechtnis (persoenliche Infos des Nutzers -- immer beachten):\n%s\n", _mem);
+        }
+        if (_prefs[0]) {
+            size_t l = strlen(system_prompt);
+            snprintf(system_prompt + l, sizeof(system_prompt) - l,
+                     "\nNutzerpraeferenzen (beachten):\n%s\n", _prefs);
+        }
+        {
+            size_t l = strlen(system_prompt);
+            snprintf(system_prompt + l, sizeof(system_prompt) - l,
+                     "\n%s", flux_tools_description());
+        }
     }
 
     /* Erster API-Aufruf -- mit Gespraechsverlauf */

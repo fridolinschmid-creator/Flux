@@ -27,6 +27,7 @@ typedef enum {
     FLUX_SCREEN_CONTACTS,    /* Kontaktliste */
     FLUX_SCREEN_GALLERY,     /* Fotogalerie */
     FLUX_SCREEN_IMAGE_VIEWER, /* Einzelbild-Betrachter mit KI-Analyse */
+    FLUX_SCREEN_MEMORY,      /* KI-Gedaechtnis-Liste */
 } flux_screen_t;
 
 typedef enum {
@@ -196,6 +197,13 @@ void flux_ui_draw_ai_overlay(flux_fb_t *fb, const char *context_label,
  * *save_result: "Als Datei speichern"-Button. */
 int flux_ui_ai_overlay_hit(const flux_fb_t *fb, int x, int y,
                             int *cancel, int *submit, int *save_result);
+
+/* ---- KI-Gedaechtnis ------------------------------------------------- */
+
+/* Zeigt alle Eintraege aus /etc/flux/memory.txt in einer scrollbaren Liste.
+ * entries: Array von Strings (bereits geladen). n: Anzahl Eintraege.
+ * scroll: erster sichtbarer Eintrag (fuer vertikales Scrollen). */
+void flux_ui_draw_memory(flux_fb_t *fb, const char **entries, int n, int scroll);
 
 /* ---- Farbthema ----------------------------------------------------- */
 

@@ -15,6 +15,10 @@
  *   brightness_set   -- Bildschirmhelligkeit setzen, ARG: 0-100 (Prozent)
  *   wifi_info        -- WLAN-Signalstaerke und Interface, ARG: (leer)
  *   vibrate          -- Geraet vibrieren lassen, ARG: Dauer in ms (z.B. 300)
+ *   memory_save      -- Personliche Info dauerhaft merken, ARG: Text
+ *   memory_list      -- Alle KI-Erinnerungen anzeigen, ARG: (leer)
+ *   memory_search    -- KI-Erinnerungen durchsuchen, ARG: Suchbegriff
+ *   memory_delete    -- Erinnerungen loeschen, ARG: Suchbegriff
  */
 #include "tools.h"
 #include "vision.h"
@@ -31,6 +35,7 @@
 #include <sys/stat.h>
 
 #define NOTES_PATH      "/etc/flux/notes.txt"
+#define MEMORY_PATH     "/etc/flux/memory.txt"
 #define WEATHER_CACHE   "/tmp/flux_weather.txt"
 #define FILE_READ_MAX   8192
 #define NOTE_TEXT_MAX   512
@@ -749,10 +754,130 @@ static int tool_vibrate(const char *arg, char *out, size_t cap) {
     return 1;
 }
 
+/* ---- memory_save ----------------------------------------------------- */
+static int tool_memory_save(const char *arg, char *out, size_t cap) {
+    if (!arg || !*arg) {
+        snprintf(out, cap, "Fehler: kein Text angegeben");
+        return 1;
+    }
+    mkdir("/etc/flux", 0755);
+    FILE *f = fopen(MEMORY_PATH, "a");
+    if (!f) {
+        snprintf(out, cap, "Fehler: Erinnerung konnte nicht gespeichert werden");
+        return 1;
+    }
+    time_t t = time(NULL); struct tm tm; localtime_r(&t, &tm);
+    char ts[32]; strftime(ts, sizeof(ts), "%Y-%m-%d %H:%M", &tm);
+    char entry[512]; snprintf(entry, sizeof(entry), "%s", arg);
+    size_t l = strlen(entry);
+    while (l > 0 && (entry[l-1] == '\n' || entry[l-1] == '\r')) entry[--l] = '\0';
+    fprintf(f, "[%s] %s\n", ts, entry);
+    fclose(f);
+    /* If birthday mentioned: auto-add a yearly calendar reminder */
+    char lower[512]; size_t li = 0;
+    for (const char *p = entry; *p && li < sizeof(lower)-1; p++, li++)
+        lower[li] = (*p >= 'A' && *p <= 'Z') ? *p + 32 : *p;
+    lower[li] = '\0';
+    if (strstr(lower, "geburtstag") || strstr(lower, "birthday")) {
+        FILE *cf = fopen("/etc/flux/calendar.txt", "a");
+        if (cf) {
+            /* Store as a placeholder birthday reminder */
+            fprintf(cf, "# Geburtstag-Erinnerung: %s\n", entry);
+            fclose(cf);
+        }
+    }
+    snprintf(out, cap, "Notiert: \"%s\"", entry);
+    return 1;
+}
+
+/* ---- memory_list ----------------------------------------------------- */
+static int tool_memory_list(const char *arg, char *out, size_t cap) {
+    (void)arg;
+    FILE *f = fopen(MEMORY_PATH, "r");
+    if (!f) {
+        snprintf(out, cap, "Noch nichts gespeichert. Sage mir z.B. deinen Namen, "
+                           "Geburtstag von Kontakten, oder Praeferenzen.");
+        return 1;
+    }
+    char tmp[4096]; size_t pos = snprintf(tmp, sizeof(tmp), "KI-Gedaechtnis:\n");
+    char line[256]; int n = 0;
+    while (fgets(line, sizeof(line), f) && pos + 2 < sizeof(tmp)) {
+        if (line[0] == '\n') continue;
+        size_t ll = strlen(line);
+        if (pos + ll + 1 < sizeof(tmp)) { memcpy(tmp + pos, line, ll); pos += ll; tmp[pos] = '\0'; }
+        n++;
+    }
+    fclose(f);
+    if (!n) snprintf(out, cap, "KI-Gedaechtnis ist leer.");
+    else    snprintf(out, cap, "%s", tmp);
+    return 1;
+}
+
+/* ---- memory_search --------------------------------------------------- */
+static int tool_memory_search(const char *arg, char *out, size_t cap) {
+    if (!arg || !*arg) { snprintf(out, cap, "Fehler: kein Suchbegriff"); return 1; }
+    FILE *f = fopen(MEMORY_PATH, "r");
+    if (!f) { snprintf(out, cap, "Keine Erinnerungen vorhanden."); return 1; }
+    char tmp[4096]; size_t pos = snprintf(tmp, sizeof(tmp), "Erinnerungen zu \"%s\":\n", arg);
+    char lower_arg[128]; size_t ai = 0;
+    for (const char *p = arg; *p && ai < sizeof(lower_arg)-1; p++, ai++)
+        lower_arg[ai] = (*p >= 'A' && *p <= 'Z') ? *p + 32 : *p;
+    lower_arg[ai] = '\0';
+    char line[256]; int found = 0;
+    while (fgets(line, sizeof(line), f)) {
+        char lower_line[256]; size_t li = 0;
+        for (const char *p = line; *p && li < sizeof(lower_line)-1; p++, li++)
+            lower_line[li] = (*p >= 'A' && *p <= 'Z') ? *p + 32 : *p;
+        lower_line[li] = '\0';
+        if (strstr(lower_line, lower_arg)) {
+            size_t ll = strlen(line);
+            if (pos + ll + 1 < sizeof(tmp)) { memcpy(tmp + pos, line, ll); pos += ll; tmp[pos] = '\0'; }
+            found++;
+        }
+    }
+    fclose(f);
+    if (!found) snprintf(out, cap, "Keine Erinnerungen zu \"%s\" gefunden.", arg);
+    else        snprintf(out, cap, "%s", tmp);
+    return 1;
+}
+
+/* ---- memory_delete --------------------------------------------------- */
+static int tool_memory_delete(const char *arg, char *out, size_t cap) {
+    if (!arg || !*arg) { snprintf(out, cap, "Fehler: kein Suchbegriff angegeben"); return 1; }
+    FILE *f = fopen(MEMORY_PATH, "r");
+    if (!f) { snprintf(out, cap, "Keine Erinnerungen vorhanden."); return 1; }
+    char lines[200][256]; int n = 0;
+    char line[256];
+    while (fgets(line, sizeof(line), f) && n < 200) {
+        memcpy(lines[n++], line, sizeof(lines[0])-1);
+        lines[n-1][sizeof(lines[0])-1] = '\0';
+    }
+    fclose(f);
+    char lower_arg[128]; size_t ai = 0;
+    for (const char *p = arg; *p && ai < sizeof(lower_arg)-1; p++, ai++)
+        lower_arg[ai] = (*p >= 'A' && *p <= 'Z') ? *p + 32 : *p;
+    lower_arg[ai] = '\0';
+    f = fopen(MEMORY_PATH, "w");
+    if (!f) { snprintf(out, cap, "Fehler: Datei nicht schreibbar"); return 1; }
+    int deleted = 0;
+    for (int i = 0; i < n; i++) {
+        char lower_line[256]; size_t li = 0;
+        for (const char *p = lines[i]; *p && li < sizeof(lower_line)-1; p++, li++)
+            lower_line[li] = (*p >= 'A' && *p <= 'Z') ? *p + 32 : *p;
+        lower_line[li] = '\0';
+        if (strstr(lower_line, lower_arg)) { deleted++; }
+        else { fputs(lines[i], f); }
+    }
+    fclose(f);
+    if (deleted > 0) snprintf(out, cap, "%d Erinnerung(en) zu \"%s\" geloescht.", deleted, arg);
+    else             snprintf(out, cap, "Keine passenden Erinnerungen gefunden.");
+    return 1;
+}
+
 /* ---- contact_save ---------------------------------------------------- */
 static int tool_contact_save(const char *arg, char *out, size_t cap) {
     if (!arg || !*arg) {
-        snprintf(out, cap, "Fehler: kein Kontakt angegeben (Format: Name,Telefon,Email)");
+        snprintf(out, cap, "Fehler: kein Kontakt angegeben (Format: Name,Telefon,Email[,Geburtstag])");
         return 1;
     }
     mkdir("/etc/flux", 0755);
@@ -761,14 +886,44 @@ static int tool_contact_save(const char *arg, char *out, size_t cap) {
         snprintf(out, cap, "Fehler: Kontakt konnte nicht gespeichert werden");
         return 1;
     }
-    /* Strip trailing newline */
     char entry[256];
     snprintf(entry, sizeof(entry), "%s", arg);
     size_t l = strlen(entry);
     while (l > 0 && (entry[l-1] == '\n' || entry[l-1] == '\r')) entry[--l] = '\0';
     fprintf(f, "%s\n", entry);
     fclose(f);
-    snprintf(out, cap, "Kontakt gespeichert: %s", entry);
+    /* If birthday field (4th CSV column) present, add annual calendar reminder */
+    const char *p1 = strchr(entry, ',');
+    const char *p2 = p1 ? strchr(p1+1, ',') : NULL;
+    const char *p3 = p2 ? strchr(p2+1, ',') : NULL;
+    if (p3 && *(p3+1)) {
+        const char *birthday = p3 + 1;
+        /* Get name (first field) */
+        char name[64]; size_t nl = (size_t)(p1 - entry);
+        if (nl >= sizeof(name)) nl = sizeof(name)-1;
+        memcpy(name, entry, nl); name[nl] = '\0';
+        FILE *cf = fopen("/etc/flux/calendar.txt", "a");
+        if (cf) {
+            /* birthday format may be DD.MM.YYYY or MM-DD or YYYY-MM-DD */
+            fprintf(cf, "# Geburtstag %s: %s\n", name, birthday);
+            /* Try to produce an ISO date for this year */
+            int dd = 0, mm = 0, yyyy = 0;
+            if (sscanf(birthday, "%d.%d.%d", &dd, &mm, &yyyy) >= 2 ||
+                sscanf(birthday, "%d-%d-%d", &yyyy, &mm, &dd) == 3) {
+                time_t now = time(NULL); struct tm tmnow; localtime_r(&now, &tmnow);
+                int cur_year = tmnow.tm_year + 1900;
+                if (yyyy < 1900 || yyyy > 9999) yyyy = cur_year;
+                char cal_entry[256];
+                snprintf(cal_entry, sizeof(cal_entry),
+                         "%04d-%02d-%02d 00:00 Geburtstag: %s", yyyy, mm, dd, name);
+                fprintf(cf, "%s\n", cal_entry);
+            }
+            fclose(cf);
+        }
+        snprintf(out, cap, "Kontakt gespeichert: %s (Geburtstag: %s in Kalender eingetragen)", name, birthday);
+    } else {
+        snprintf(out, cap, "Kontakt gespeichert: %s", entry);
+    }
     return 1;
 }
 
@@ -1053,6 +1208,10 @@ int flux_tool_exec(const char *name, const char *arg,
     if (strcmp(name, "image_list")    == 0) return tool_image_list(arg, out, out_cap);
     if (strcmp(name, "image_analyze") == 0) return tool_image_analyze(arg, out, out_cap);
     if (strcmp(name, "image_take")    == 0) return tool_image_take(arg, out, out_cap);
+    if (strcmp(name, "memory_save")   == 0) return tool_memory_save(arg, out, out_cap);
+    if (strcmp(name, "memory_list")   == 0) return tool_memory_list(arg, out, out_cap);
+    if (strcmp(name, "memory_search") == 0) return tool_memory_search(arg, out, out_cap);
+    if (strcmp(name, "memory_delete") == 0) return tool_memory_delete(arg, out, out_cap);
     return 0; /* unbekanntes Tool */
 }
 
@@ -1089,6 +1248,12 @@ const char *flux_tools_description(void) {
         "  image_list      -- Fotos in /home/user/Pictures/ auflisten. ARG: (leer)\n"
         "  image_analyze   -- Bild per KI analysieren (Was ist drauf? Wo wurde es aufgenommen?). ARG: Dateiname oder Pfad\n"
         "  image_take      -- Neues Foto aufnehmen und speichern. ARG: (leer)\n"
+        "  memory_save     -- Persoenliche Info dauerhaft merken (Name, Geburtstag, Praeferenz usw.). ARG: Text\n"
+        "  memory_list     -- Alle gespeicherten Infos anzeigen. ARG: (leer)\n"
+        "  memory_search   -- Gespeicherte Infos durchsuchen. ARG: Suchbegriff\n"
+        "  memory_delete   -- Gespeicherte Info loeschen. ARG: Suchbegriff\n"
         "Verwende Tools NUR wenn Echtzeitdaten benoetigt werden (Wetter, Dateien, Berechnung usw.). "
+        "Wenn der Nutzer dir persoenliche Infos nennt (Name, Geburtstag, Praeferenz), "
+        "speichere diese SOFORT mit memory_save -- ohne explizite Aufforderung. "
         "Normale Fragen beantworte ohne Tools.";
 }

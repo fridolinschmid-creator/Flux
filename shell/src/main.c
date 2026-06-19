@@ -405,6 +405,29 @@ static int    image_analyzing   = 0;
 static uint32_t *image_pixels   = NULL;
 static int    image_w = 0, image_h = 0;
 
+/* KI-Gedaechtnis */
+#define MEMORY_MAX 200
+static char memory_entries_buf[MEMORY_MAX][256];
+static const char *memory_entries[MEMORY_MAX];
+static int  memory_n     = 0;
+static int  memory_scroll = 0;
+
+static void load_memory(void) {
+    memory_n = 0;
+    FILE *f = fopen("/etc/flux/memory.txt", "r");
+    if (!f) return;
+    char line[256];
+    while (fgets(line, sizeof(line), f) && memory_n < MEMORY_MAX) {
+        size_t l = strlen(line);
+        while (l > 0 && (line[l-1] == '\n' || line[l-1] == '\r')) line[--l] = '\0';
+        if (!line[0]) continue;
+        snprintf(memory_entries_buf[memory_n], sizeof(memory_entries_buf[0]), "%s", line);
+        memory_entries[memory_n] = memory_entries_buf[memory_n];
+        memory_n++;
+    }
+    fclose(f);
+}
+
 static void load_gallery(void) {
     gallery_n = 0;
     DIR *d = opendir(FLUX_PICTURES_DIR);
@@ -520,6 +543,8 @@ static void redraw_current_screen(flux_fb_t *fb, flux_screen_t screen,
         case FLUX_SCREEN_IMAGE_VIEWER:
             flux_ui_draw_image_viewer(fb, image_path, image_pixels,
                                        image_w, image_h, image_caption, 0); break;
+        case FLUX_SCREEN_MEMORY:
+            flux_ui_draw_memory(fb, memory_entries, memory_n, memory_scroll); break;
         default: break;
     }
 }
@@ -1465,6 +1490,28 @@ int main(void) {
             continue;
         }
 
+        if (screen == FLUX_SCREEN_MEMORY) {
+            if (ev.type == FLUX_EV_SWIPE_LEFT) {
+                uint32_t *old = capture_frame(&fb);
+                screen = FLUX_SCREEN_ASSISTANT;
+                flux_ui_draw_assistant(&fb, last_q, input_buf, answer_buf, 0);
+                animate_slide_from_left(&fb, old);
+                free(old);
+                continue;
+            }
+            if (ev.type == FLUX_EV_TAP) {
+                int idx, back;
+                if (flux_ui_list_hit(&fb, ev.x, ev.y, memory_n, &idx, &back) && back) {
+                    uint32_t *old = capture_frame(&fb);
+                    screen = FLUX_SCREEN_ASSISTANT;
+                    flux_ui_draw_assistant(&fb, last_q, input_buf, answer_buf, 0);
+                    animate_slide_from_left(&fb, old);
+                    free(old);
+                }
+            }
+            continue;
+        }
+
         /* FLUX_SCREEN_ASSISTANT -- Wisch nach unten oeffnet den Notify-Overlay. */
         if (ev.type == FLUX_EV_SWIPE_DOWN) {
             pre_notify_screen = FLUX_SCREEN_ASSISTANT;
@@ -1649,6 +1696,18 @@ int main(void) {
                 screen = FLUX_SCREEN_GALLERY;
                 flux_ui_draw_gallery(&fb, gallery_names, gallery_dates,
                                      gallery_n, gallery_selected);
+                animate_slide_in(&fb, old);
+                free(old);
+                continue;
+            }
+            if (strcasecmp(input_buf, "gedaechtnis") == 0 || strcasecmp(input_buf, "memory") == 0 ||
+                strcasecmp(input_buf, "erinnerungen") == 0 || strcasecmp(input_buf, "ki-speicher") == 0) {
+                input_buf[0] = '\0';
+                load_memory();
+                memory_scroll = 0;
+                uint32_t *old = capture_frame(&fb);
+                screen = FLUX_SCREEN_MEMORY;
+                flux_ui_draw_memory(&fb, memory_entries, memory_n, memory_scroll);
                 animate_slide_in(&fb, old);
                 free(old);
                 continue;

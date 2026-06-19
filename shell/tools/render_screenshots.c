@@ -250,6 +250,20 @@ int main(int argc, char *argv[]) {
         "");
     save_ppm(&fb, outdir, "24_ki_overlay_kalender");
 
+    /* 25 -- KI-Gedaechtnis (memory screen) */
+    flux_ui_set_accent(0x4FD1C5);
+    {
+        const char *mem_entries[] = {
+            "[2026-06-15 10:22] Meine Frau heisst Laura und hat am 15. Maerz Geburtstag",
+            "[2026-06-16 14:05] Ich bin Softwareentwickler und arbeite bei Acme GmbH",
+            "[2026-06-17 08:30] Ich trinke morgens keinen Kaffee, nur Tee",
+            "[2026-06-18 19:47] Lieblingsrestaurant: Trattoria Bella Vista in der Hauptstrasse",
+            "[2026-06-19 11:13] Mein Auto ist ein blauer VW Golf, Kennzeichen M-AB 1234",
+        };
+        flux_ui_draw_memory(&fb, mem_entries, 5, 0);
+    }
+    save_ppm(&fb, outdir, "25_ki_gedaechtnis");
+
     flux_fb_close(&fb);
     printf("\nFertig! PPM -> PNG: convert %s/XX.ppm %s/XX.png\n", outdir, outdir);
     return 0;
