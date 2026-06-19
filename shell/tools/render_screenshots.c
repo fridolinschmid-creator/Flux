@@ -287,6 +287,26 @@ int main(int argc, char *argv[]) {
     }
     save_ppm(&fb, outdir, "27_ki_gedaechtnis");
 
+    /* 28 -- Semantische KI-Suche (Ergebnisliste) */
+    flux_ui_set_accent(0x4FD1C5);
+    {
+        const char *results[] = {
+            "Gedaechtnis: Meine Frau heisst Laura und hat am 15. Maerz Geburtstag",
+            "Kalender: 2026-03-15 Lauras Geburtstag",
+            "Kontakte: Laura Mustermann, +49 151 12345678",
+            "Notizen: Geschenkideen fuer Laura: Buch, Schmuck, Konzerttickets",
+        };
+        flux_ui_draw_search(&fb, "Laura", results, 4, 0);
+    }
+    save_ppm(&fb, outdir, "28_semantic_search");
+
+    /* 29 -- Spracheingabe-Overlay (Aufnahme laueft 7 Sekunden) */
+    flux_ui_set_accent(0x4FD1C5);
+    flux_ui_draw_assistant(&fb, "Was ist das Wetter heute?",
+                            "", "Das Wetter heute ist sonnig und angenehm warm.", 0);
+    flux_ui_draw_voice_overlay(&fb, 7);
+    save_ppm(&fb, outdir, "29_voice_overlay");
+
     flux_fb_close(&fb);
     printf("\nFertig! PPM -> PNG: convert %s/XX.ppm %s/XX.png\n", outdir, outdir);
     return 0;

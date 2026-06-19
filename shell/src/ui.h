@@ -29,6 +29,7 @@ typedef enum {
     FLUX_SCREEN_IMAGE_VIEWER, /* Einzelbild-Betrachter mit KI-Analyse */
     FLUX_SCREEN_MEMORY,      /* KI-Gedaechtnis-Liste */
     FLUX_SCREEN_MEETING,     /* Meeting-Mitschrift (Audio-Transkription) */
+    FLUX_SCREEN_SEARCH,      /* Semantische KI-Suche ueber alles */
 } flux_screen_t;
 
 typedef enum {
@@ -198,6 +199,28 @@ void flux_ui_draw_ai_overlay(flux_fb_t *fb, const char *context_label,
  * *save_result: "Als Datei speichern"-Button. */
 int flux_ui_ai_overlay_hit(const flux_fb_t *fb, int x, int y,
                             int *cancel, int *submit, int *save_result);
+
+/* ---- Semantische KI-Suche ------------------------------------------ */
+
+/* Suchbildschirm: ein Eingabefeld + KI-Ergebnisliste.
+ * query: aktueller Suchbegriff (leer = Platzhalter anzeigen).
+ * results: Array von Ergebnis-Strings (Source: Text), n Eintraege.
+ * searching: 1 waehrend die KI sucht (Lade-Animation). */
+void flux_ui_draw_search(flux_fb_t *fb, const char *query,
+                          const char **results, int n, int searching);
+
+/* Hit-Test: gibt 1 bei Treffer.
+ * *back: Zurueck-Knopf getroffen.
+ * *result_idx: Ergebnis-Zeile getroffen (-1 = keins). */
+int flux_ui_search_hit(const flux_fb_t *fb, int x, int y,
+                       int *back, int *result_idx);
+
+/* ---- Spracheingabe-Overlay ----------------------------------------- */
+
+/* Zeichnet den Aufnahme-Indikator ueber dem aktuellen Screen.
+ * elapsed_s: Aufnahmedauer in Sekunden (fuer Timer).
+ * Ruft flux_fb_present() auf. */
+void flux_ui_draw_voice_overlay(flux_fb_t *fb, int elapsed_s);
 
 /* ---- Meeting-Mitschrift -------------------------------------------- */
 
