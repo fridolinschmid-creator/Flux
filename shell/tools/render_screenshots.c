@@ -224,6 +224,32 @@ int main(int argc, char *argv[]) {
     }
     save_ppm(&fb, outdir, "22_bild_betrachter");
 
+    /* 23 -- KI-Overlay ueber Datei-Betrachter (Wisch nach rechts) */
+    flux_ui_draw_file_viewer(&fb, "/home/user/mietvertrag.txt",
+        "Mietvertrag\n\nParagraph 1: Mietbeginn 01.07.2026\n"
+        "Paragraph 4: Kuendigungsfrist 3 Monate\n"
+        "Paragraph 8: Zutritt mit 24h Vorankuendigung\n",
+        0);
+    flux_ui_draw_ai_overlay(&fb,
+        "Datei: mietvertrag.txt",
+        "Was ist ungewoehnlich an diesem Vertrag?",
+        "Paragraph 8 enthaelt eine unuebliche Klausel:\n"
+        "Der Vermieter darf die Wohnung mit nur 24h\n"
+        "Vorankuendigung betreten. Ueblich sind 48h.\n"
+        "Rechtlich ist das in Deutschland grenzwertig.");
+    save_ppm(&fb, outdir, "23_ki_overlay_datei");
+
+    /* 24 -- KI-Overlay ueber Kalender */
+    {
+        const char *evs[] = { "2026-06-20 14:00 Arzttermin" };
+        flux_ui_draw_calendar(&fb, 2026, 6, 18, 18, evs, 1);
+    }
+    flux_ui_draw_ai_overlay(&fb,
+        "Kalender: Juni 2026",
+        "Welche freien Tage habe ich diese Woche?",
+        "");
+    save_ppm(&fb, outdir, "24_ki_overlay_kalender");
+
     flux_fb_close(&fb);
     printf("\nFertig! PPM -> PNG: convert %s/XX.ppm %s/XX.png\n", outdir, outdir);
     return 0;

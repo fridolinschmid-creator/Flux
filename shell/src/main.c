@@ -390,6 +390,14 @@ static const char *gallery_dates[GALLERY_MAX];
 static int gallery_n = 0;
 static int gallery_selected = -1;
 
+/* KI-Kontext-Overlay (Wisch nach rechts von ueberall) */
+static int  ai_ovl_active  = 0;
+static char ai_ovl_input[512]   = {0};
+static char ai_ovl_result[2048] = {0};
+static char ai_ovl_label[80]    = {0};
+static char ai_ovl_ctx[8192]    = {0};   /* Volltext-Kontext fuer die KI */
+static char ai_ovl_save_path[256] = {0}; /* Pfad fuer "Als Datei speichern" */
+
 /* Bild-Betrachter */
 static char   image_path[512]   = {0};
 static char   image_caption[512] = {0};
@@ -484,6 +492,129 @@ static uint32_t *load_ppm_scaled(const char *path, int target_w, int target_h,
     *out_w = sw;
     *out_h = sh;
     return out;
+}
+
+/* Zeichnet den aktuellen Screen neu (benoetigt fuer Overlay-Hintergrund). */
+static void redraw_current_screen(flux_fb_t *fb, flux_screen_t screen,
+                                   const char *last_q, const char *input_buf,
+                                   const char *answer_buf) {
+    switch (screen) {
+        case FLUX_SCREEN_ASSISTANT:
+            flux_ui_draw_assistant(fb, last_q, input_buf, answer_buf, 0); break;
+        case FLUX_SCREEN_SETTINGS:
+            flux_ui_draw_settings(fb, setting_labels, setting_values, FLUX_SETTINGS_N); break;
+        case FLUX_SCREEN_FILES:
+            flux_ui_draw_files(fb, files_path, file_names, file_metas,
+                               file_n, file_truncated, file_selected); break;
+        case FLUX_SCREEN_FILE_VIEWER:
+            flux_ui_draw_file_viewer(fb, viewer_path, viewer_content, viewer_scroll); break;
+        case FLUX_SCREEN_CALENDAR:
+            flux_ui_draw_calendar(fb, cal_year, cal_month, cal_today_day,
+                                   cal_selected_day, cal_event_strs, cal_n_events); break;
+        case FLUX_SCREEN_CONTACTS:
+            flux_ui_draw_contacts(fb, contact_names_p, contact_details_p,
+                                   contact_n, contact_selected); break;
+        case FLUX_SCREEN_GALLERY:
+            flux_ui_draw_gallery(fb, gallery_names, gallery_dates,
+                                  gallery_n, gallery_selected); break;
+        case FLUX_SCREEN_IMAGE_VIEWER:
+            flux_ui_draw_image_viewer(fb, image_path, image_pixels,
+                                       image_w, image_h, image_caption, 0); break;
+        default: break;
+    }
+}
+
+/* Befuellt den KI-Overlay mit Kontext des aktuellen Screens. */
+static void build_ai_overlay_context(flux_screen_t screen,
+                                      const char *last_q, const char *answer_buf) {
+    static const char *mnames[] = {
+        "", "Januar","Februar","Maerz","April","Mai","Juni",
+        "Juli","August","September","Oktober","November","Dezember"
+    };
+    ai_ovl_label[0] = ai_ovl_ctx[0] = ai_ovl_save_path[0] = '\0';
+
+    switch (screen) {
+        case FLUX_SCREEN_FILE_VIEWER: {
+            const char *fname = strrchr(viewer_path, '/');
+            fname = fname ? fname + 1 : viewer_path;
+            snprintf(ai_ovl_label, sizeof(ai_ovl_label), "Datei: %.50s", fname);
+            snprintf(ai_ovl_ctx, sizeof(ai_ovl_ctx),
+                     "Du hilfst dem Nutzer mit der Datei '%s'. "
+                     "Inhalt (ggf. gekuerzt):\n%.6000s",
+                     viewer_path, viewer_content);
+            /* Speicherpfad: gleiche Datei + _Zusammenfassung.txt */
+            char base[256]; snprintf(base, sizeof(base), "%s", viewer_path);
+            char *dot = strrchr(base, '.'); if (dot) *dot = '\0';
+            snprintf(ai_ovl_save_path, sizeof(ai_ovl_save_path),
+                     "%s_KI-Zusammenfassung.txt", base);
+            break;
+        }
+        case FLUX_SCREEN_IMAGE_VIEWER: {
+            const char *fname = strrchr(image_path, '/');
+            fname = fname ? fname + 1 : image_path;
+            snprintf(ai_ovl_label, sizeof(ai_ovl_label), "Foto: %.50s", fname);
+            snprintf(ai_ovl_ctx, sizeof(ai_ovl_ctx),
+                     "Du hilfst dem Nutzer mit dem Foto '%s'. "
+                     "KI-Bildbeschreibung: %s",
+                     image_path,
+                     image_caption[0] ? image_caption : "(noch nicht analysiert -- frage per image_analyze-Tool)");
+            snprintf(ai_ovl_save_path, sizeof(ai_ovl_save_path),
+                     "%s.beschreibung.txt", image_path);
+            break;
+        }
+        case FLUX_SCREEN_CALENDAR: {
+            const char *mn = (cal_month >= 1 && cal_month <= 12) ? mnames[cal_month] : "";
+            snprintf(ai_ovl_label, sizeof(ai_ovl_label), "Kalender: %s %04d", mn, cal_year);
+            snprintf(ai_ovl_ctx, sizeof(ai_ovl_ctx),
+                     "Der Nutzer betrachtet den Kalender: %s %04d. "
+                     "Ausgewaehlter Tag: %d.",
+                     mn, cal_year, cal_selected_day);
+            snprintf(ai_ovl_save_path, sizeof(ai_ovl_save_path),
+                     "/home/user/Kalender_%04d-%02d_KI.txt", cal_year, cal_month);
+            break;
+        }
+        case FLUX_SCREEN_CONTACTS:
+            snprintf(ai_ovl_label, sizeof(ai_ovl_label),
+                     "Kontakte (%d Eintraege)", contact_n);
+            snprintf(ai_ovl_ctx, sizeof(ai_ovl_ctx),
+                     "Der Nutzer ist in der Kontakte-Liste (%d Kontakte).", contact_n);
+            snprintf(ai_ovl_save_path, sizeof(ai_ovl_save_path),
+                     "/home/user/Kontakte_Export.txt");
+            break;
+        case FLUX_SCREEN_GALLERY:
+            snprintf(ai_ovl_label, sizeof(ai_ovl_label),
+                     "Fotogalerie (%d Fotos)", gallery_n);
+            snprintf(ai_ovl_ctx, sizeof(ai_ovl_ctx),
+                     "Der Nutzer ist in der Fotogalerie (%d Fotos).", gallery_n);
+            snprintf(ai_ovl_save_path, sizeof(ai_ovl_save_path),
+                     "/home/user/Galerie_KI.txt");
+            break;
+        case FLUX_SCREEN_FILES:
+            snprintf(ai_ovl_label, sizeof(ai_ovl_label),
+                     "Dateien: %.40s", files_path);
+            snprintf(ai_ovl_ctx, sizeof(ai_ovl_ctx),
+                     "Der Nutzer ist im Datei-Browser: %s (%d Eintraege).",
+                     files_path, file_n);
+            snprintf(ai_ovl_save_path, sizeof(ai_ovl_save_path),
+                     "/home/user/Dateiliste_KI.txt");
+            break;
+        case FLUX_SCREEN_SETTINGS:
+            snprintf(ai_ovl_label, sizeof(ai_ovl_label), "Einstellungen");
+            snprintf(ai_ovl_ctx, sizeof(ai_ovl_ctx),
+                     "Der Nutzer ist in den Systemeinstellungen von Flux.");
+            snprintf(ai_ovl_save_path, sizeof(ai_ovl_save_path),
+                     "/home/user/Einstellungen_KI.txt");
+            break;
+        default: /* ASSISTANT + alle anderen */
+            snprintf(ai_ovl_label, sizeof(ai_ovl_label), "KI-Assistent");
+            if (last_q && last_q[0])
+                snprintf(ai_ovl_ctx, sizeof(ai_ovl_ctx),
+                         "Letztes Gespraech -- Frage: '%s' Antwort: '%.500s'",
+                         last_q, answer_buf ? answer_buf : "");
+            snprintf(ai_ovl_save_path, sizeof(ai_ovl_save_path),
+                     "/home/user/KI-Antwort.txt");
+            break;
+    }
 }
 
 /* Laedt ein Foto in den Bild-Betrachter. */
@@ -659,6 +790,105 @@ int main(void) {
 
         flux_event_t ev = flux_input_poll(&in);
         if (ev.type == FLUX_EV_NONE) continue;
+
+        /* ---- Globaler KI-Overlay (Wisch nach rechts) ----------------
+         * Funktioniert auf ALLEN Screens ausser Lock/PIN.
+         * Overlay abfangen bevor irgendein Screen-Handler greift. */
+        if (screen != FLUX_SCREEN_LOCK && screen != FLUX_SCREEN_PIN) {
+
+            /* Wisch nach rechts oeffnet den Overlay */
+            if (ev.type == FLUX_EV_SWIPE_RIGHT && !ai_ovl_active) {
+                ai_ovl_active = 1;
+                ai_ovl_input[0] = ai_ovl_result[0] = '\0';
+                build_ai_overlay_context(screen, last_q, answer_buf);
+                redraw_current_screen(&fb, screen, last_q, input_buf, answer_buf);
+                flux_ui_draw_ai_overlay(&fb, ai_ovl_label, ai_ovl_input, ai_ovl_result);
+                continue;
+            }
+
+            /* Solange Overlay aktiv: alle Events abfangen */
+            if (ai_ovl_active) {
+                if (ev.type == FLUX_EV_TAP) {
+                    int ovl_cancel = 0, ovl_submit = 0, ovl_save = 0;
+                    flux_ui_ai_overlay_hit(&fb, ev.x, ev.y,
+                                           &ovl_cancel, &ovl_submit, &ovl_save);
+                    if (ovl_cancel) {
+                        ai_ovl_active = 0;
+                        ai_ovl_input[0] = ai_ovl_result[0] = '\0';
+                        redraw_current_screen(&fb, screen, last_q, input_buf, answer_buf);
+                    } else if (ovl_submit && ai_ovl_input[0]) {
+                        /* KI anfragen mit Screen-Kontext */
+                        char q_full[8960];
+                        if (ai_ovl_ctx[0])
+                            snprintf(q_full, sizeof(q_full),
+                                     "[Systemkontext: %s]\n\nNutzerfrage: %s",
+                                     ai_ovl_ctx, ai_ovl_input);
+                        else
+                            snprintf(q_full, sizeof(q_full), "%s", ai_ovl_input);
+                        ai_ovl_result[0] = '\0';
+                        redraw_current_screen(&fb, screen, last_q, input_buf, answer_buf);
+                        flux_ui_draw_ai_overlay(&fb, ai_ovl_label, ai_ovl_input,
+                                                "KI denkt nach ...");
+                        flux_ipc_ask(q_full, ai_ovl_result, sizeof(ai_ovl_result));
+                        redraw_current_screen(&fb, screen, last_q, input_buf, answer_buf);
+                        flux_ui_draw_ai_overlay(&fb, ai_ovl_label, ai_ovl_input, ai_ovl_result);
+                    } else if (ovl_save && ai_ovl_result[0]) {
+                        /* Ergebnis als .txt speichern */
+                        FILE *sf = fopen(ai_ovl_save_path, "w");
+                        if (sf) {
+                            fprintf(sf, "KI-Antwort zu: %s\nFrage: %s\n\n%s\n",
+                                    ai_ovl_label, ai_ovl_input, ai_ovl_result);
+                            fclose(sf);
+                        }
+                        /* kurzes Feedback */
+                        char saved_msg[320];
+                        snprintf(saved_msg, sizeof(saved_msg),
+                                 "Gespeichert: %s", ai_ovl_save_path);
+                        /* Ergebnis-Text kurz ersetzen */
+                        snprintf(ai_ovl_result, sizeof(ai_ovl_result),
+                                 "[Gespeichert unter %s]", ai_ovl_save_path);
+                        redraw_current_screen(&fb, screen, last_q, input_buf, answer_buf);
+                        flux_ui_draw_ai_overlay(&fb, ai_ovl_label, ai_ovl_input, ai_ovl_result);
+                    }
+                } else if (ev.type == FLUX_EV_CHAR) {
+                    size_t len = strlen(ai_ovl_input);
+                    if (len + 1 < sizeof(ai_ovl_input)) {
+                        ai_ovl_input[len] = ev.ch;
+                        ai_ovl_input[len + 1] = '\0';
+                    }
+                    redraw_current_screen(&fb, screen, last_q, input_buf, answer_buf);
+                    flux_ui_draw_ai_overlay(&fb, ai_ovl_label, ai_ovl_input, ai_ovl_result);
+                } else if (ev.type == FLUX_EV_BACKSPACE) {
+                    size_t len = strlen(ai_ovl_input);
+                    if (len > 0) ai_ovl_input[len - 1] = '\0';
+                    redraw_current_screen(&fb, screen, last_q, input_buf, answer_buf);
+                    flux_ui_draw_ai_overlay(&fb, ai_ovl_label, ai_ovl_input, ai_ovl_result);
+                } else if (ev.type == FLUX_EV_ENTER && ai_ovl_input[0]) {
+                    /* Enter = Fragen absenden */
+                    char q_full[8960];
+                    if (ai_ovl_ctx[0])
+                        snprintf(q_full, sizeof(q_full),
+                                 "[Systemkontext: %s]\n\nNutzerfrage: %s",
+                                 ai_ovl_ctx, ai_ovl_input);
+                    else
+                        snprintf(q_full, sizeof(q_full), "%s", ai_ovl_input);
+                    ai_ovl_result[0] = '\0';
+                    redraw_current_screen(&fb, screen, last_q, input_buf, answer_buf);
+                    flux_ui_draw_ai_overlay(&fb, ai_ovl_label, ai_ovl_input,
+                                            "KI denkt nach ...");
+                    flux_ipc_ask(q_full, ai_ovl_result, sizeof(ai_ovl_result));
+                    redraw_current_screen(&fb, screen, last_q, input_buf, answer_buf);
+                    flux_ui_draw_ai_overlay(&fb, ai_ovl_label, ai_ovl_input, ai_ovl_result);
+                } else if (ev.type == FLUX_EV_SWIPE_RIGHT || ev.type == FLUX_EV_SWIPE_LEFT) {
+                    /* Nochmal wischen schliesst den Overlay */
+                    ai_ovl_active = 0;
+                    ai_ovl_input[0] = ai_ovl_result[0] = '\0';
+                    redraw_current_screen(&fb, screen, last_q, input_buf, answer_buf);
+                }
+                continue; /* Overlay schluckt ALLE Events */
+            }
+        }
+        /* ---- Ende KI-Overlay ---------------------------------------- */
 
         if (screen == FLUX_SCREEN_LOCK) {
             if (ev.type == FLUX_EV_ENTER || ev.type == FLUX_EV_SWIPE_UP) {
@@ -1330,7 +1560,7 @@ int main(void) {
             if (tap_backspace) kind = FLUX_EV_BACKSPACE;
             else if (tap_enter) kind = FLUX_EV_ENTER;
             else { kind = FLUX_EV_CHAR; ch = tap_ch; }
-        } else if (kind == FLUX_EV_SWIPE_UP || kind == FLUX_EV_SWIPE_LEFT || kind == FLUX_EV_SWIPE_RIGHT) {
+        } else if (kind == FLUX_EV_SWIPE_UP || kind == FLUX_EV_SWIPE_LEFT) {
             continue; /* auf dem Assistenten-Bildschirm ohne Bedeutung */
         }
 

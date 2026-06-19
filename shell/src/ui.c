@@ -1609,3 +1609,132 @@ int flux_ui_image_viewer_hit(const flux_fb_t *fb, int x, int y,
     if (btn == 2) { *del     = 1; return 1; }
     return 0;
 }
+
+/* ---- Globaler KI-Kontext-Overlay (Wisch nach rechts) ---------------- */
+
+#define AI_OVL_MARGIN  14
+#define AI_OVL_CARD_Y  (STATUSBAR_H + 16)
+#define AI_OVL_CARD_H  196
+#define AI_OVL_BTN_H   48
+
+/* Verdunkelt den aktuellen Backbuffer (50% Schwarz-Ueberlagerung). */
+static void dim_screen(flux_fb_t *fb) {
+    int npx = fb->width * fb->height;
+    for (int i = 0; i < npx; i++) {
+        uint32_t px = fb->back[i];
+        fb->back[i] = ((px >> 1) & 0x7F7F7F);
+    }
+}
+
+void flux_ui_draw_ai_overlay(flux_fb_t *fb, const char *context_label,
+                              const char *input_text, const char *result_text) {
+    dim_screen(fb);
+
+    int cx  = AI_OVL_MARGIN;
+    int cw  = fb->width - 2 * AI_OVL_MARGIN;
+    int cy  = AI_OVL_CARD_Y;
+    int ch  = AI_OVL_CARD_H;
+
+    /* Karten-Hintergrund */
+    flux_fb_fill_rect(fb, cx, cy, cw, ch, COL_CARD);
+    /* Akzent-Oberkante */
+    flux_fb_fill_rect(fb, cx, cy, cw, 4, COL_ACCENT);
+
+    /* Kontext-Label */
+    if (context_label && context_label[0]) {
+        flux_fb_text(fb, cx + 12, cy + 10, context_label, COL_ACCENT, 2);
+    }
+
+    /* Eingabefeld */
+    int inf_y = cy + 38;
+    int inf_h = 54;
+    flux_fb_fill_rect(fb, cx + 8, inf_y, cw - 16, inf_h, COL_BG);
+    flux_fb_fill_rect(fb, cx + 8, inf_y, 3, inf_h, COL_ACCENT); /* linker Akzent-Strich */
+    const char *disp = (input_text && input_text[0]) ? input_text : "Frage die KI...";
+    uint32_t   tcol  = (input_text && input_text[0]) ? COL_TEXT : COL_DIM;
+    flux_fb_text(fb, cx + 18, inf_y + (inf_h - 14) / 2, disp, tcol, 2);
+
+    /* Zwei Buttons: [Abbrechen] [Fragen] */
+    int bty  = cy + ch - AI_OVL_BTN_H - 10;
+    int btnw = (cw - 28) / 2;
+
+    flux_fb_fill_rect(fb, cx + 8, bty, btnw, AI_OVL_BTN_H, COL_KEY_SPEC);
+    int tw = flux_fb_text_width("Abbrechen", 2);
+    flux_fb_text(fb, cx + 8 + (btnw - tw) / 2, bty + (AI_OVL_BTN_H - 14) / 2,
+                 "Abbrechen", COL_DIM, 2);
+
+    int b2x = cx + 8 + btnw + 12;
+    flux_fb_fill_rect(fb, b2x, bty, btnw, AI_OVL_BTN_H, COL_ACCENT);
+    tw = flux_fb_text_width("Fragen", 2);
+    flux_fb_text(fb, b2x + (btnw - tw) / 2, bty + (AI_OVL_BTN_H - 14) / 2,
+                 "Fragen", COL_BG, 2);
+
+    /* Ergebnis-Panel (unterhalb der Karte) */
+    if (result_text && result_text[0]) {
+        int ry  = cy + ch + 10;
+        int rh  = fb->height - ry - 14;
+        if (rh > 64) {
+            flux_fb_fill_rect(fb, cx, ry, cw, rh, 0x0D1320);
+            flux_fb_fill_rect(fb, cx, ry, cw, 3, COL_ACCENT);
+
+            /* Text: bis zu ~9 Zeilen a 42 Zeichen */
+            const char *p = result_text;
+            int text_bottom = ry + rh - 52; /* Platz fuer Speichern-Button */
+            int ly = ry + 8;
+            while (*p && ly < text_bottom) {
+                char line[48]; int len = 0;
+                while (p[len] && p[len] != '\n' && len < 42) len++;
+                if (len == 0) { p++; ly += 17; continue; }
+                memcpy(line, p, (size_t)len); line[len] = '\0';
+                flux_fb_text(fb, cx + 10, ly, line, COL_TEXT, 2);
+                ly += 17;
+                p += len;
+                if (*p == '\n') p++;
+            }
+
+            /* "Speichern"-Button */
+            int sy = ry + rh - 46;
+            flux_fb_fill_rect(fb, cx + 8, sy, cw - 16, 38, 0x143314);
+            tw = flux_fb_text_width("Als Datei speichern", 2);
+            flux_fb_text(fb, cx + 8 + (cw - 16 - tw) / 2, sy + 12,
+                         "Als Datei speichern", 0x4AE84A, 2);
+        }
+    }
+
+    flux_fb_present(fb);
+}
+
+int flux_ui_ai_overlay_hit(const flux_fb_t *fb, int x, int y,
+                            int *cancel, int *submit, int *save_result) {
+    *cancel = *submit = *save_result = 0;
+
+    int cx   = AI_OVL_MARGIN;
+    int cw   = fb->width - 2 * AI_OVL_MARGIN;
+    int cy   = AI_OVL_CARD_Y;
+    int ch   = AI_OVL_CARD_H;
+    int bty  = cy + ch - AI_OVL_BTN_H - 10;
+    int btnw = (cw - 28) / 2;
+    int b2x  = cx + 8 + btnw + 12;
+
+    /* Abbrechen-Button */
+    if (x >= cx + 8 && x < cx + 8 + btnw && y >= bty && y < bty + AI_OVL_BTN_H)
+        { *cancel = 1; return 1; }
+
+    /* Fragen-Button */
+    if (x >= b2x && x < b2x + btnw && y >= bty && y < bty + AI_OVL_BTN_H)
+        { *submit = 1; return 1; }
+
+    /* Speichern-Button (unteres Panel) */
+    int ry = cy + ch + 10;
+    int rh = fb->height - ry - 14;
+    if (rh > 64) {
+        int sy = ry + rh - 46;
+        if (x >= cx + 8 && x < cx + cw - 8 && y >= sy && y < sy + 38)
+            { *save_result = 1; return 1; }
+    }
+
+    /* Tap ausserhalb der Karte -> schliessen */
+    if (y >= cy && y < cy + ch && x >= cx && x < cx + cw)
+        return 0; /* Tap in der Karte, aber nicht auf einem Button */
+    *cancel = 1; return 1;
+}

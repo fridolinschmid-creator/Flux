@@ -181,6 +181,22 @@ int flux_ui_image_viewer_hit(const flux_fb_t *fb, int x, int y,
 
 void flux_ui_draw_ripple(flux_fb_t *fb, int cx, int cy, int frame);
 
+/* ---- Globaler KI-Kontext-Overlay ----------------------------------- */
+
+/* Zeichnet den halbtransparenten KI-Overlay ueber den aktuellen Screen.
+ * context_label: z.B. "Datei: notizen.txt" oder "Kalender: Juni 2026".
+ * input_text:    aktuelle Eingabe des Nutzers (leer = Platzhalter).
+ * result_text:   KI-Antwort (leer = noch keine Antwort). */
+void flux_ui_draw_ai_overlay(flux_fb_t *fb, const char *context_label,
+                              const char *input_text, const char *result_text);
+
+/* Hit-Test: gibt 1 bei Treffer.
+ * *cancel: Abbrechen-Button oder Tap ausserhalb.
+ * *submit: "Fragen"-Button.
+ * *save_result: "Als Datei speichern"-Button. */
+int flux_ui_ai_overlay_hit(const flux_fb_t *fb, int x, int y,
+                            int *cancel, int *submit, int *save_result);
+
 /* ---- Farbthema ----------------------------------------------------- */
 
 /* Setzt die Akzentfarbe fuer alle Bildschirme.
