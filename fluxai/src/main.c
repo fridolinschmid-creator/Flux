@@ -21,6 +21,7 @@
 #include <sys/un.h>
 #include <sys/stat.h>
 #include <sys/select.h>
+#include <sys/types.h>
 #include <signal.h>
 
 static int make_listen_socket(const char *path) {
@@ -37,6 +38,15 @@ static int make_listen_socket(const char *path) {
     chmod(path, 0666); /* jede App darf den Assistenten fragen */
     if (listen(fd, 8) < 0) { perror("listen"); exit(1); }
     return fd;
+}
+
+/* Liefert die UID des verbundenen Peers (SO_PEERCRED). -1 bei Fehler. */
+static int peer_uid(int fd, uid_t *uid) {
+    struct ucred cred;
+    socklen_t len = sizeof(cred);
+    if (getsockopt(fd, SOL_SOCKET, SO_PEERCRED, &cred, &len) < 0) return -1;
+    *uid = cred.uid;
+    return 0;
 }
 
 static void handle_client(int cfd) {
@@ -59,6 +69,23 @@ static void handle_client(int cfd) {
         snprintf(topic, sizeof(topic), "%.80s", question);
         flux_habits_log("assistant", topic);
     } else if (strncmp(line, "X:", 2) == 0) {
+        /* Eine bestaetigte Aktion (Anruf/SMS/Mail) darf NUR der
+         * vertrauenswuerdige UI-Prozess ausloesen -- sonst koennte jeder
+         * lokale Prozess am 0666-Socket den Bestaetigungs-Dialog umgehen
+         * und das Geraet zu Anrufen/SMS zwingen. Geprueft wird die
+         * Peer-UID: sie muss der eigenen UID des Daemons entsprechen
+         * (Shell und fluxaid laufen als derselbe Nutzer). */
+        uid_t puid = (uid_t)-1;
+        if (peer_uid(cfd, &puid) != 0 || puid != geteuid()) {
+            fprintf(stderr,
+                    "fluxaid: Aktionsanfrage von nicht autorisierter UID %ld abgelehnt\n",
+                    (long)puid);
+            const char *msg =
+                "ERR:Nicht autorisiert -- Aktionen nur vom UI-Prozess\nEND\n";
+            if (write(cfd, msg, strlen(msg)) < 0) { /* Client weg, egal */ }
+            close(cfd);
+            return;
+        }
         /* Eine bestaetigte Aktion ist mehrzeilig (TO:/SUBJECT:/BODY:)
          * -- NICHT am ersten Newline abschneiden. */
         flux_exec_action(line + 2, answer, sizeof(answer));

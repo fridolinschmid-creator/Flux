@@ -2,10 +2,14 @@
 #   make CROSS_COMPILE=aarch64-linux-gnu-
 # Nativer Test-Build (auf dem Host):
 #   make
+# Sicherheits-Haertung: Stack-Protector, FORTIFY (Bounds-Checks fuer
+# str/mem-Funktionen), PIE (ASLR) und Full-RELRO (GOT read-only).
 CROSS_COMPILE ?=
 CC      := $(CROSS_COMPILE)gcc
-CFLAGS  ?= -O2 -Wall -Wextra -std=gnu11 -D_GNU_SOURCE
-LDFLAGS ?= -lcurl
+HARDEN_CFLAGS  := -fstack-protector-strong -D_FORTIFY_SOURCE=2 -fPIE -Wformat -Wformat-security
+HARDEN_LDFLAGS := -pie -Wl,-z,relro,-z,now
+CFLAGS  ?= -O2 -Wall -Wextra -std=gnu11 -D_GNU_SOURCE $(HARDEN_CFLAGS)
+LDFLAGS ?= -lcurl $(HARDEN_LDFLAGS)
 
 SRC := $(wildcard src/*.c) $(wildcard ../common/*.c)
 BIN := fluxaid
