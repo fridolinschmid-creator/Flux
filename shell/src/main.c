@@ -630,15 +630,34 @@ static void build_ai_overlay_context(flux_screen_t screen,
             snprintf(ai_ovl_save_path, sizeof(ai_ovl_save_path),
                      "/home/user/Einstellungen_KI.txt");
             break;
-        default: /* ASSISTANT + alle anderen */
+        case FLUX_SCREEN_MEMORY:
+            snprintf(ai_ovl_label, sizeof(ai_ovl_label), "KI-Gedaechtnis");
+            snprintf(ai_ovl_ctx, sizeof(ai_ovl_ctx),
+                     "Der Nutzer betrachtet sein KI-Gedaechtnis (%d Eintraege). "
+                     "Er kann dich fragen was gespeichert ist oder dich bitten etwas zu aendern.",
+                     memory_n);
+            snprintf(ai_ovl_save_path, sizeof(ai_ovl_save_path),
+                     "/home/user/Gedaechtnis_Export.txt");
+            break;
+        default: /* ASSISTANT + alle anderen */ {
             snprintf(ai_ovl_label, sizeof(ai_ovl_label), "KI-Assistent");
-            if (last_q && last_q[0])
+            /* Load today's conversation transcript for richer context */
+            char tfile[256]; time_t _tt = time(NULL); struct tm _ttm; localtime_r(&_tt, &_ttm);
+            strftime(tfile, sizeof(tfile), "/home/user/Journal/Gespraeche_%Y-%m-%d.md", &_ttm);
+            char transcript[4096] = {0};
+            FILE *_tf = fopen(tfile, "r");
+            if (_tf) { size_t _n = fread(transcript, 1, sizeof(transcript)-1, _tf); transcript[_n] = '\0'; fclose(_tf); }
+            if (transcript[0])
+                snprintf(ai_ovl_ctx, sizeof(ai_ovl_ctx),
+                         "Heutiges Gespraechs-Transkript:\n%.3000s", transcript);
+            else if (last_q && last_q[0])
                 snprintf(ai_ovl_ctx, sizeof(ai_ovl_ctx),
                          "Letztes Gespraech -- Frage: '%s' Antwort: '%.500s'",
                          last_q, answer_buf ? answer_buf : "");
             snprintf(ai_ovl_save_path, sizeof(ai_ovl_save_path),
                      "/home/user/KI-Antwort.txt");
             break;
+        }
     }
 }
 
@@ -1700,6 +1719,21 @@ int main(void) {
                 free(old);
                 continue;
             }
+            if (strcasecmp(input_buf, "transkript") == 0 || strcasecmp(input_buf, "gespraeche") == 0 ||
+                strcasecmp(input_buf, "verlauf") == 0) {
+                input_buf[0] = '\0';
+                mkdir("/home/user/Journal", 0755);
+                snprintf(files_path, sizeof(files_path), "/home/user/Journal");
+                load_files(files_path);
+                file_selected = -1;
+                uint32_t *old = capture_frame(&fb);
+                screen = FLUX_SCREEN_FILES;
+                flux_ui_draw_files(&fb, files_path, file_names, file_metas,
+                                   file_n, file_truncated, file_selected);
+                animate_slide_in(&fb, old);
+                free(old);
+                continue;
+            }
             if (strcasecmp(input_buf, "journal") == 0 || strcasecmp(input_buf, "tagebuch") == 0) {
                 input_buf[0] = '\0';
                 /* Navigate to Journal directory in file browser */
@@ -1750,6 +1784,20 @@ int main(void) {
             flux_ui_draw_assistant(&fb, last_q, "", answer_buf, 1);
             flux_ipc_ask(last_q, answer_buf, sizeof(answer_buf));
             input_buf[0] = '\0';
+
+            /* Gespraechs-Transkription: Q&A in tagesaktuelle Datei speichern */
+            {
+                time_t _tt = time(NULL); struct tm _ttm; localtime_r(&_tt, &_ttm);
+                char _tfile[256], _ts[32];
+                strftime(_tfile, sizeof(_tfile), "/home/user/Journal/Gespraeche_%Y-%m-%d.md", &_ttm);
+                strftime(_ts, sizeof(_ts), "%H:%M", &_ttm);
+                mkdir("/home/user/Journal", 0755);
+                FILE *_tf = fopen(_tfile, "a");
+                if (_tf) {
+                    fprintf(_tf, "\n**[%s] Nutzer:** %s\n\n**KI:** %s\n", _ts, last_q, answer_buf);
+                    fclose(_tf);
+                }
+            }
 
             /* TTS: KI-Antwort vorlesen (wenn aktiviert) */
             tts_speak(answer_buf);
