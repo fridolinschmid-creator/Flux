@@ -110,9 +110,12 @@ void flux_ui_draw_files(flux_fb_t *fb, const char *path, const char **names,
 void flux_ui_draw_file_viewer(flux_fb_t *fb, const char *path,
                                const char *content, int scroll_line);
 
-/* Gibt 1 wenn der "Zurueck"-Bereich getroffen, 0 sonst.
- * scroll_delta gibt Anzahl Zeilen hoch (<0) oder runter (>0) an. */
-int flux_ui_viewer_hit(const flux_fb_t *fb, int x, int y, int *scroll_delta, int *back);
+/* Gibt 1 wenn die untere Leiste oder der Scroll-Bereich getroffen wurde.
+ * scroll_delta gibt Anzahl Zeilen hoch (<0) oder runter (>0) an.
+ * *back: "Zurueck" getroffen. *ai: "KI fragen"-Knopf getroffen (darf NULL
+ * sein -- dann zaehlt die ganze untere Leiste als Zurueck). */
+int flux_ui_viewer_hit(const flux_fb_t *fb, int x, int y,
+                       int *scroll_delta, int *back, int *ai);
 
 /* ---- Loeschen-Knopf in der Dateien-Ansicht -------------------------
  * Sichtbar wenn selected_idx >= 0. Gibt 1 wenn der Loeschen-Knopf

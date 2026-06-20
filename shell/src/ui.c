@@ -1144,16 +1144,39 @@ void flux_ui_draw_file_viewer(flux_fb_t *fb, const char *path,
                      text_bottom - 20, up, COL_DIM, 2);
     }
 
-    draw_back_bar(fb, "Zurueck");
+    /* Geteilte Leiste unten: links "Zurueck", rechts "KI fragen".
+     * Die KI-Schaltflaeche macht die Dokument-KI sichtbar (vorher nur
+     * per Wisch-nach-rechts erreichbar, siehe flux_ui_viewer_hit). */
+    {
+        int by = fb->height - LIST_BACK_H;
+        flux_fb_fill_rect(fb, 0, by, fb->width, LIST_BACK_H, COL_STATUSBAR);
+        int split = fb->width * 3 / 5;
+        flux_fb_fill_rect(fb, split, by + 10, 1, LIST_BACK_H - 20, COL_DIVIDER);
+
+        const char *back_lbl = "Zurueck";
+        int btw = flux_fb_text_width(back_lbl, 3);
+        flux_fb_text(fb, (split - btw) / 2, by + (LIST_BACK_H - 21) / 2,
+                     back_lbl, COL_DIM, 3);
+
+        const char *ai_lbl = "KI fragen";
+        int atw = flux_fb_text_width(ai_lbl, 3);
+        flux_fb_text(fb, split + (fb->width - split - atw) / 2,
+                     by + (LIST_BACK_H - 21) / 2, ai_lbl, COL_ACCENT, 3);
+    }
     flux_fb_present(fb);
 }
 
 int flux_ui_viewer_hit(const flux_fb_t *fb, int x, int y,
-                       int *scroll_delta, int *back) {
-    (void)x;
+                       int *scroll_delta, int *back, int *ai) {
     *scroll_delta = 0;
     *back = 0;
-    if (y >= fb->height - LIST_BACK_H) { *back = 1; return 1; }
+    if (ai) *ai = 0;
+    if (y >= fb->height - LIST_BACK_H) {
+        /* Untere Leiste: rechtes Drittel = KI fragen, sonst Zurueck */
+        if (ai && x >= fb->width * 3 / 5) *ai = 1;
+        else *back = 1;
+        return 1;
+    }
     int mid = fb->height / 2;
     if (y < mid - 20) { *scroll_delta = -3; return 1; }
     if (y > mid + 20) { *scroll_delta =  3; return 1; }

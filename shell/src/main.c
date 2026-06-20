@@ -1473,10 +1473,18 @@ int main(void) {
                 continue;
             }
             if (ev.type != FLUX_EV_TAP && ev.type != FLUX_EV_SWIPE_UP) continue;
-            int scroll_delta = 0, back = 0;
+            int scroll_delta = 0, back = 0, ai_btn = 0;
             if (ev.type == FLUX_EV_SWIPE_UP) { scroll_delta = 3; }
-            else flux_ui_viewer_hit(&fb, ev.x, ev.y, &scroll_delta, &back);
+            else flux_ui_viewer_hit(&fb, ev.x, ev.y, &scroll_delta, &back, &ai_btn);
 
+            if (ai_btn) {
+                /* "KI fragen": Dokument-KI-Overlay mit Dateiinhalt als Kontext */
+                ai_ovl_active = 1;
+                ai_ovl_input[0] = ai_ovl_result[0] = '\0';
+                build_ai_overlay_context(FLUX_SCREEN_FILE_VIEWER, last_q, answer_buf);
+                flux_ui_draw_ai_overlay(&fb, ai_ovl_label, ai_ovl_input, ai_ovl_result);
+                continue;
+            }
             if (back) {
                 uint32_t *old = capture_frame(&fb);
                 screen = FLUX_SCREEN_FILES;
