@@ -13,7 +13,13 @@ BIN := flux-shell
 $(BIN): $(SRC)
 	$(CC) $(CFLAGS) -o $@ $(SRC) $(LDFLAGS)
 
-clean:
-	rm -f $(BIN)
+# Test der Client-IPC (Schritt 2): Stream-Konsum + Rueckwaertskompatibilitaet.
+# Linkt nur src/ipc.c, braucht weder Framebuffer noch curl.
+test: test/ipc_test.c src/ipc.c
+	$(CC) $(CFLAGS) -o /tmp/flux_ipc_test src/ipc.c test/ipc_test.c -lpthread
+	/tmp/flux_ipc_test
 
-.PHONY: clean
+clean:
+	rm -f $(BIN) /tmp/flux_ipc_test
+
+.PHONY: clean test

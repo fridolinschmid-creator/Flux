@@ -73,6 +73,21 @@ static size_t curl_write_cb(void *ptr, size_t size, size_t nmemb, void *userdata
     return add;
 }
 
+/* Streaming-Schreibcallback: speist jeden Roh-Block in den SSE-Parser,
+ * der text_delta-Stuecke an den Callback (P:-Frames) weitergibt und den
+ * Gesamttext aufbaut. */
+static size_t curl_stream_cb(void *ptr, size_t size, size_t nmemb, void *userdata) {
+    flux_sse_t *sse = userdata;
+    size_t add = size * nmemb;
+    flux_sse_feed(sse, (const char *)ptr, add);
+    return add;
+}
+
+/* Direktiven, die im Stream NICHT an den Nutzer gemeldet werden sollen
+ * (sie werden strukturiert weiterverarbeitet: Tool-Aufruf bzw. Aktions-
+ * Bestaetigung), aber vollstaendig im Antworttext landen. */
+static const char *const STREAM_SUPPRESS[] = { "TOOL:", "ACTION:", NULL };
+
 void flux_provider_init(void) {
     curl_global_init(CURL_GLOBAL_DEFAULT);
 }
@@ -129,10 +144,13 @@ static int extract_text(const char *json, char *out, size_t out_cap) {
  * Gibt 1 bei Erfolg. */
 static int api_call(const char *api_key, const char *model,
                     const char *system_prompt, const char *final_q,
-                    char *out, size_t out_cap, int use_ctx) {
+                    char *out, size_t out_cap, int use_ctx,
+                    flux_delta_cb cb, void *ud) {
+    const int stream = (cb != NULL);
     char body[24576];
     snprintf(body, sizeof(body),
-             "{\"model\":\"%s\",\"max_tokens\":600,\"system\":\"", model);
+             "{\"model\":\"%s\",\"max_tokens\":600,%s\"system\":\"",
+             model, stream ? "\"stream\":true," : "");
     json_escape_append(body, sizeof(body), system_prompt);
     strncat(body, "\",\"messages\":[", sizeof(body) - strlen(body) - 1);
 
@@ -174,14 +192,27 @@ static int api_call(const char *api_key, const char *model,
     curl_easy_setopt(curl, CURLOPT_POST, 1L);
     curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
     curl_easy_setopt(curl, CURLOPT_POSTFIELDS, body);
-    curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, curl_write_cb);
-    curl_easy_setopt(curl, CURLOPT_WRITEDATA, &mb);
+    flux_sse_t sse;
+    if (stream) {
+        flux_sse_init(&sse, out, out_cap, cb, ud, STREAM_SUPPRESS);
+        curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, curl_stream_cb);
+        curl_easy_setopt(curl, CURLOPT_WRITEDATA, &sse);
+    } else {
+        curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, curl_write_cb);
+        curl_easy_setopt(curl, CURLOPT_WRITEDATA, &mb);
+    }
     curl_easy_setopt(curl, CURLOPT_TIMEOUT, 20L);
 
     CURLcode res = curl_easy_perform(curl);
     int ok = 0;
     if (res != CURLE_OK) {
         snprintf(out, out_cap, "Netzwerkfehler: %s", curl_easy_strerror(res));
+    } else if (stream) {
+        flux_sse_finish(&sse);
+        if (out[0] == '\0')
+            snprintf(out, out_cap, "Antwort konnte nicht gelesen werden.");
+        else
+            ok = 1;
     } else if (!extract_text(respbuf, out, out_cap)) {
         snprintf(out, out_cap, "Antwort konnte nicht gelesen werden.");
     } else {
@@ -226,6 +257,12 @@ static int parse_tool_call(const char *response,
 }
 
 void flux_provider_ask(const char *question, char *out, size_t out_cap) {
+    flux_provider_ask_stream(question, NULL, NULL, out, out_cap);
+}
+
+void flux_provider_ask_stream(const char *question,
+                              flux_delta_cb on_delta, void *ud,
+                              char *out, size_t out_cap) {
     char key_buf[256];
     const char *api_key = NULL;
     if (flux_config_get("api_key", key_buf, sizeof(key_buf)) && key_buf[0])
@@ -277,8 +314,11 @@ void flux_provider_ask(const char *question, char *out, size_t out_cap) {
         }
     }
 
-    /* Erster API-Aufruf -- mit Gespraechsverlauf */
-    if (!api_call(api_key, model, system_prompt, question, out, out_cap, 1))
+    /* Erster API-Aufruf -- mit Gespraechsverlauf. Streamt sichtbare
+     * Stuecke ueber on_delta; TOOL:/ACTION:-Direktiven werden dabei
+     * unterdrueckt, stehen aber vollstaendig in out. */
+    if (!api_call(api_key, model, system_prompt, question, out, out_cap, 1,
+                  on_delta, ud))
         return;
 
     /* Tool-Aufruf? */
@@ -308,6 +348,7 @@ void flux_provider_ask(const char *question, char *out, size_t out_cap) {
              "Antworte auf Deutsch, kurz und klar.",
              question, tool_name, tool_arg, tool_result);
 
-    if (api_call(api_key, model, system_prompt, followup, out, out_cap, 0))
+    if (api_call(api_key, model, system_prompt, followup, out, out_cap, 0,
+                 on_delta, ud))
         ctx_add(question, out);
 }

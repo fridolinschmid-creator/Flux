@@ -230,6 +230,19 @@ static void maybe_generate_greeting(void) {
     if (p > 0) waitpid(p, NULL, WNOHANG);
 }
 
+/* Progressive Anzeige der gestreamten KI-Antwort. Die Shell ist
+ * single-threaded; ein Datei-Scope-Zeiger genuegt fuer den Callback aus
+ * flux_ipc_ask_stream(). thinking=0, damit der bisher empfangene Text in
+ * der KI-Blase erscheint (bei thinking=1 wird er unterdrueckt).
+ * flux_ui_draw_assistant() praesentiert selbst (flux_fb_present). */
+static flux_fb_t  *g_stream_fb;
+static const char *g_stream_q;
+static void on_stream_partial(const char *live, void *ud) {
+    (void)ud;
+    if (g_stream_fb && live && *live)
+        flux_ui_draw_assistant(g_stream_fb, g_stream_q, "", live, 0);
+}
+
 #define FLUX_PIN_LEN       4
 #define FLUX_FILES_MAX     12
 #define FLUX_SETTINGS_N    10   /* 7 bestehende + theme + auto_lock + tts */
@@ -2114,8 +2127,13 @@ int main(void) {
             }
 
             snprintf(last_q, sizeof(last_q), "%s", input_buf);
-            flux_ui_draw_assistant(&fb, last_q, "", answer_buf, 1);
-            flux_ipc_ask(last_q, answer_buf, sizeof(answer_buf));
+            flux_ui_draw_assistant(&fb, last_q, "", "", 1); /* Denke-Indikator */
+            /* Streamen: P:-Teilstuecke erscheinen progressiv in der Blase,
+             * danach steht die volle Antwort in answer_buf. */
+            g_stream_fb = &fb; g_stream_q = last_q;
+            flux_ipc_ask_stream(last_q, on_stream_partial, NULL,
+                                answer_buf, sizeof(answer_buf));
+            g_stream_fb = NULL;
             input_buf[0] = '\0';
 
             /* Gespraechs-Transkription: Q&A in tagesaktuelle Datei speichern */

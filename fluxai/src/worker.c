@@ -54,7 +54,29 @@ static job_t dequeue(void) {
     return job;
 }
 
-/* ---- Request-Bearbeitung (unveraendert aus main.c uebernommen) -------- */
+/* ---- Progressive Teilantworten (P:-Frames) --------------------------- */
+
+/* Schreibt ein sichtbares Teilstueck als  P:<escaped>\n  an den Client.
+ * Eingebettete Zeilenumbrueche werden escaped (\n -> \\n, \\ -> \\\\),
+ * damit ein P:-Frame genau eine Zeile bleibt; der Client (shell/ipc.c)
+ * entschluesselt das und rendert progressiv. Backward-kompatibel: aeltere
+ * Clients ignorieren P:-Zeilen und lesen bis zum abschliessenden A:/END. */
+static void write_partial(const char *text, void *ud) {
+    int cfd = *(int *)ud;
+    char frame[FLUX_MAX_LINE];
+    size_t o = 0;
+    frame[o++] = 'P'; frame[o++] = ':';
+    for (const char *p = text; *p && o + 3 < sizeof(frame); p++) {
+        if      (*p == '\\') { frame[o++] = '\\'; frame[o++] = '\\'; }
+        else if (*p == '\n') { frame[o++] = '\\'; frame[o++] = 'n';  }
+        else if (*p == '\r') { /* weglassen */ }
+        else                 { frame[o++] = *p; }
+    }
+    frame[o++] = '\n';
+    if (write(cfd, frame, o) < 0) { /* Client weg -- egal, SIGPIPE ignoriert */ }
+}
+
+/* ---- Request-Bearbeitung (aus main.c uebernommen) -------------------- */
 
 static void handle_client(int cfd) {
     char line[FLUX_MAX_LINE];
@@ -69,8 +91,12 @@ static void handle_client(int cfd) {
         char *nl = strchr(line, '\n');
         if (nl) *nl = '\0';
         const char *question = line + 2;
+        /* Lokale Intents antworten sofort (kein Streaming noetig). Sonst
+         * den Provider streamen: P:-Frames waehrend der Generierung, danach
+         * das finale A:<antwort>\nEND\n unten. */
         if (!flux_actions_try(question, answer, sizeof(answer)))
-            flux_provider_ask(question, answer, sizeof(answer));
+            flux_provider_ask_stream(question, write_partial, &cfd,
+                                     answer, sizeof(answer));
         /* Nutzungsgewohnheiten loggen (ersten 80 Zeichen der Frage) */
         char topic[84];
         snprintf(topic, sizeof(topic), "%.80s", question);

@@ -8,8 +8,16 @@
  *                        oder "X:<typ>\nTO:<empfaenger>\nSUBJECT:<betreff>\n
  *                              BODY:\n<text...>" (vom Nutzer bestaetigte
  *                              Aktion, siehe shell/src/action.h)
- *   Server -> Client:   "A:<antwort, darf eingebettete \n enthalten>\nEND\n"
+ *   Server -> Client:   [optional, 0..n mal] "P:<teilstueck>\n"  (Streaming:
+ *                          progressive Teilantwort; eingebettete \n sind als
+ *                          \\n escaped, ein P:-Frame ist genau eine Zeile)
+ *                        danach "A:<antwort, darf eingebettete \n enthalten>\nEND\n"
  *                        oder einmalig "ERR:<meldung>\n" "END\n"
+ *
+ * P:-Frames sind rein additiv und rueckwaertskompatibel: ein Client, der sie
+ * nicht kennt, liest einfach bis zum abschliessenden A:.../END weiter und
+ * erhaelt die vollstaendige Antwort. Das finale A: enthaelt immer den
+ * kompletten Text (die P:-Stuecke zusammengesetzt).
  *
  * Fuer "Q:" kann die Antwort selbst wieder ein strukturiertes Format
  * sein, wenn die KI eine Aktion vorschlaegt (siehe provider.c

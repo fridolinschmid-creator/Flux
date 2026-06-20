@@ -1,16 +1,17 @@
-/* worker_test.c -- Funktionstest fuer den Arbeiterthread (Schritt 1).
+/* worker_test.c -- Funktionstest fuer den Arbeiterthread (Schritt 1+2).
  *
- * Linkt worker.c gegen leichte Stubs der Abhaengigkeiten (kein curl, kein
- * Netz) und treibt echte Verbindungen durch den Arbeiter, um zu pruefen:
- *   - Q:-Routing trifft zuerst actions, sonst provider
+ * Linkt worker.c gegen leichte Stubs (kein curl, kein Netz) und treibt
+ * echte Verbindungen durch den Arbeiter. Prueft:
+ *   - Q:-Routing trifft zuerst actions (kein Streaming), sonst provider
+ *   - der Provider-Pfad streamt P:-Teilstuecke vor dem finalen A:
  *   - X:-Routing geht an exec (mehrzeilig erhalten)
- *   - die Antwort ist exakt im Rahmen  A:<text>\nEND\n
+ *   - die finale Antwort ist exakt im Rahmen  A:<text>\nEND\n
  *   - mehrere parallel angenommene Verbindungen werden alle beantwortet
- *   - die Hauptschleife blockiert nicht (submit kehrt sofort zurueck)
  *
  * Bauen/laufen:  make -C fluxai test
  */
 #include "../src/worker.h"
+#include "../src/provider.h"   /* flux_provider_ask_stream, flux_delta_cb */
 
 #include <assert.h>
 #include <stdio.h>
@@ -25,11 +26,21 @@ int flux_actions_try(const char *q, char *out, size_t cap) {
     if (strstr(q, "uhrzeit")) { snprintf(out, cap, "Es ist 12:00 Uhr."); return 1; }
     return 0; /* sonst Fallback auf provider */
 }
-void flux_provider_ask(const char *q, char *out, size_t cap) {
-    snprintf(out, cap, "PROVIDER:%s", q);
+/* Streamt die Antwort in zwei Stuecken, damit P:-Frames entstehen. */
+void flux_provider_ask_stream(const char *q, flux_delta_cb cb, void *ud,
+                              char *out, size_t cap) {
+    char full[512];
+    snprintf(full, sizeof(full), "PROVIDER:%s", q);
+    if (cb) {
+        size_t half = strlen(full) / 2;
+        char a[256];
+        snprintf(a, sizeof(a), "%.*s", (int)half, full);
+        cb(a, ud);            /* erstes Teilstueck  -> P: */
+        cb(full + half, ud);  /* zweites Teilstueck -> P: */
+    }
+    snprintf(out, cap, "%s", full);
 }
 void flux_exec_action(const char *payload, char *out, size_t cap) {
-    /* payload muss die mehrzeilige Struktur unveraendert enthalten */
     snprintf(out, cap, "EXEC[%s]", payload);
 }
 void flux_habits_log(const char *s, const char *t) { (void)s; (void)t; }
@@ -40,42 +51,64 @@ int  flux_config_get(const char *key, char *out, size_t cap) {
     (void)key; if (cap) out[0] = '\0'; return 0;
 }
 
-/* ---- Hilfe: einen Request ueber den Arbeiter ausfuehren -------------- */
+/* ---- Hilfe: vollstaendige Antwort einsammeln (bis "\nEND\n") --------- */
 
 static void roundtrip(const char *request, char *resp, size_t cap) {
     int sv[2];
     assert(socketpair(AF_UNIX, SOCK_STREAM, 0, sv) == 0);
-    /* sv[1] geht an den Arbeiter (er besitzt und schliesst es),
-     * sv[0] bleibt der Testseite zum Senden/Empfangen. */
-    flux_worker_submit_client(sv[1]);
+    flux_worker_submit_client(sv[1]);   /* Arbeiter besitzt/schliesst sv[1] */
     assert(write(sv[0], request, strlen(request)) == (ssize_t)strlen(request));
-    ssize_t n = read(sv[0], resp, cap - 1);
-    assert(n > 0);
-    resp[n] = '\0';
+    size_t len = 0;
+    for (;;) {
+        ssize_t n = read(sv[0], resp + len, cap - 1 - len);
+        if (n <= 0) break;
+        len += (size_t)n; resp[len] = '\0';
+        if (strstr(resp, "\nEND\n")) break;
+    }
     close(sv[0]);
+}
+
+/* Extrahiert den Text des finalen A:-Frames (nach evtl. P:-Frames). */
+static const char *final_answer(const char *raw) {
+    const char *a = strstr(raw, "\nA:");
+    a = a ? a + 3 : (strncmp(raw, "A:", 2) == 0 ? raw + 2 : NULL);
+    return a;
 }
 
 int main(void) {
     flux_worker_start();
+    char resp[2048];
 
-    char resp[1024];
-
-    /* 1) Q: trifft lokalen Intent (actions) -> kein provider */
+    /* 1) Q: lokaler Intent (actions) -> kein Streaming, nur A: */
     roundtrip("Q:wie ist die uhrzeit\n", resp, sizeof(resp));
     assert(strcmp(resp, "A:Es ist 12:00 Uhr.\nEND\n") == 0);
-    printf("ok  Q: lokaler Intent  -> %s", resp);
+    assert(strstr(resp, "P:") == NULL);
+    printf("ok  Q: lokaler Intent (kein Stream)\n");
 
-    /* 2) Q: ohne lokalen Intent -> provider-Fallback */
+    /* 2) Q: provider -> P:-Frames gefolgt von finalem A: */
     roundtrip("Q:erzaehl mir was\n", resp, sizeof(resp));
-    assert(strcmp(resp, "A:PROVIDER:erzaehl mir was\nEND\n") == 0);
-    printf("ok  Q: provider        -> %s", resp);
+    assert(strstr(resp, "P:") != NULL);                 /* gestreamt */
+    const char *fa = final_answer(resp);
+    assert(fa && strncmp(fa, "PROVIDER:erzaehl mir was\nEND\n", 28) == 0);
+    /* P:-Stuecke zusammengesetzt ergeben die volle Antwort */
+    {
+        char joined[512] = {0}; size_t jl = 0;
+        const char *p = resp;
+        while ((p = strstr(p, "P:")) != NULL) {
+            p += 2; const char *nl = strchr(p, '\n'); if (!nl) break;
+            size_t l = (size_t)(nl - p);
+            memcpy(joined + jl, p, l); jl += l; joined[jl] = '\0';
+            p = nl + 1;
+            if (strncmp(p, "A:", 2) == 0) break; /* finalen Frame nicht mitnehmen */
+        }
+        assert(strcmp(joined, "PROVIDER:erzaehl mir was") == 0);
+    }
+    printf("ok  Q: provider streamt P: -> A:\n");
 
-    /* 3) X: mehrzeilig -> exec, Struktur bleibt erhalten (NICHT am 1. \n
-     *    abgeschnitten) */
+    /* 3) X: mehrzeilig -> exec, Struktur erhalten */
     roundtrip("X:mail\nTO:a@b.de\nSUBJECT:Hi\nBODY:\nText", resp, sizeof(resp));
     assert(strstr(resp, "TO:a@b.de") && strstr(resp, "BODY:\nText"));
-    assert(strncmp(resp, "A:EXEC[mail\n", 12) == 0);
-    assert(strstr(resp, "\nEND\n"));
+    assert(strncmp(resp, "A:EXEC[mail\n", 12) == 0 && strstr(resp, "\nEND\n"));
     printf("ok  X: mehrzeilig exec\n");
 
     /* 4) Unbekanntes Protokoll -> ERR */
@@ -83,34 +116,35 @@ int main(void) {
     assert(strncmp(resp, "ERR:", 4) == 0 && strstr(resp, "\nEND\n"));
     printf("ok  unbekanntes Protokoll -> ERR\n");
 
-    /* 5) Mehrere Verbindungen gleichzeitig anstossen, dann alle einsammeln:
-     *    beweist, dass submit nicht blockiert und der Arbeiter FIFO leert. */
+    /* 5) Mehrere Verbindungen gleichzeitig: submit blockiert nicht, alle
+     *    werden beantwortet (FIFO durch den einen Arbeiter). */
     enum { N = 8 };
     int sv[N][2];
     for (int i = 0; i < N; i++) {
         assert(socketpair(AF_UNIX, SOCK_STREAM, 0, sv[i]) == 0);
-        flux_worker_submit_client(sv[i][1]);   /* kehrt sofort zurueck */
+        flux_worker_submit_client(sv[i][1]);
     }
     for (int i = 0; i < N; i++) {
         char req[64]; snprintf(req, sizeof(req), "Q:frage %d\n", i);
         assert(write(sv[i][0], req, strlen(req)) > 0);
     }
     for (int i = 0; i < N; i++) {
-        char r[256]; ssize_t n = read(sv[i][0], r, sizeof(r) - 1);
-        assert(n > 0); r[n] = '\0';
-        char want[256]; snprintf(want, sizeof(want), "A:PROVIDER:frage %d\nEND\n", i);
-        assert(strcmp(r, want) == 0);
+        char r[512]; size_t len = 0;
+        for (;;) {
+            ssize_t n = read(sv[i][0], r + len, sizeof(r) - 1 - len);
+            if (n <= 0) break;
+            len += (size_t)n; r[len] = '\0';
+            if (strstr(r, "\nEND\n")) break;
+        }
+        char want[128]; snprintf(want, sizeof(want), "PROVIDER:frage %d\nEND\n", i);
+        const char *afa = final_answer(r);
+        assert(afa && strcmp(afa, want) == 0);
         close(sv[i][0]);
     }
     printf("ok  %d parallele Verbindungen alle beantwortet\n", N);
 
-    /* 6) Proaktiver Job darf eingereiht werden ohne zu blockieren */
     flux_worker_submit_proactive();
-    printf("ok  proaktiver Job eingereiht (nicht blockierend)\n");
-
-    /* dem Arbeiter kurz Zeit geben, den proaktiven Job zu ziehen */
     usleep(50 * 1000);
-
     printf("\nALLE TESTS BESTANDEN\n");
     return 0;
 }
