@@ -13,4 +13,12 @@
 void flux_provider_init(void);
 void flux_provider_ask(const char *question, char *out, size_t out_cap);
 
+/* 1, wenn der aktuell gewaehlte Anbieter einen nutzbaren API-Key hat. */
+int flux_provider_available(void);
+
+/* Ermittelt API-Key und Modell des aktiven Anbieters. Gibt 1 zurueck,
+ * wenn ein Key vorliegt. key_out/model_out duerfen NULL sein. */
+int flux_provider_active(char *key_out, size_t key_cap,
+                         char *model_out, size_t model_cap);
+
 #endif

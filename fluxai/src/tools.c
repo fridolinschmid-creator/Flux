@@ -144,9 +144,29 @@ static int tool_weather(const char *arg, char *out, size_t cap) {
 
 /* ---- file_read ------------------------------------------------------- */
 
+/* Erlaubt der KI nur das Lesen aus unbedenklichen Verzeichnissen.
+ * Verhindert insbesondere Zugriff auf /etc/flux/flux.conf (API-Keys,
+ * SMTP-Passwort) und andere Systemdateien. */
+static int path_read_allowed(const char *path) {
+    /* Pfad-Traversal mit ".." grundsaetzlich ablehnen */
+    if (strstr(path, "..")) return 0;
+    static const char *ok_prefixes[] = {
+        "/home/user/", "/tmp/", "/proc/", "/sys/", NULL
+    };
+    for (int i = 0; ok_prefixes[i]; i++)
+        if (strncmp(path, ok_prefixes[i], strlen(ok_prefixes[i])) == 0) return 1;
+    return 0;
+}
+
 static int tool_file_read(const char *arg, char *out, size_t cap) {
     if (!arg || !*arg) {
         snprintf(out, cap, "Fehler: kein Pfad angegeben");
+        return 1;
+    }
+    if (!path_read_allowed(arg)) {
+        snprintf(out, cap,
+                 "Fehler: Lesen nur unter /home/user/, /tmp/, /proc/ und /sys/ "
+                 "erlaubt (Schutz von Systemdateien und Zugangsdaten).");
         return 1;
     }
     FILE *f = fopen(arg, "r");

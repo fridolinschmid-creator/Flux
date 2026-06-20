@@ -86,12 +86,9 @@ int main(void) {
 
     /* Proactive check on startup */
     {
-        char key_buf[256] = {0};
-        flux_config_get("api_key", key_buf, sizeof(key_buf));
-        const char *k = key_buf[0] ? key_buf : getenv("FLUX_AI_API_KEY");
-        const char *m = getenv("FLUX_AI_MODEL");
-        if (!m || !*m) m = "claude-haiku-4-5-20251001";
-        if (k && *k) flux_proactive_check(k, m);
+        char k[512] = {0}, m[200] = {0};
+        if (flux_provider_active(k, sizeof(k), m, sizeof(m)))
+            flux_proactive_check(k, m);
     }
 
     for (;;) {
@@ -104,12 +101,8 @@ int main(void) {
 
         if (ret == 0) {
             /* Timeout: run periodic checks */
-            char key_buf[256] = {0};
-            flux_config_get("api_key", key_buf, sizeof(key_buf));
-            const char *k = key_buf[0] ? key_buf : getenv("FLUX_AI_API_KEY");
-            const char *m = getenv("FLUX_AI_MODEL");
-            if (!m || !*m) m = "claude-haiku-4-5-20251001";
-            if (k && *k) {
+            char k[512] = {0}, m[200] = {0};
+            if (flux_provider_active(k, sizeof(k), m, sizeof(m))) {
                 flux_proactive_check(k, m);
                 flux_journal_check(k, m);
                 flux_habits_morning_briefing(k, m);

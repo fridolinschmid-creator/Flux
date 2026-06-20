@@ -228,12 +228,33 @@ Start in QEMU (Grafikfenster + virtuelle Tastatur):
 
 ### Eigenen KI-Zugang einrichten (optional)
 Ohne API-Key beantwortet `fluxaid` nur lokale Fragen (Zeit, Akku, Uptime)
-und sagt ehrlich, dass kein Cloud-Zugang konfiguriert ist. Mit eigenem
-Anthropic-Key:
-```bash
-export FLUX_AI_API_KEY="dein-key"
-export FLUX_AI_MODEL="claude-haiku-4-5-20251001"   # optional, das ist der Default
+und sagt ehrlich, dass kein Cloud-Zugang konfiguriert ist.
+
+**KI-Anbieter waehlbar.** Flux unterstuetzt mehrere vorkonfigurierte
+Anbieter; der aktive wird in den Einstellungen unter **KI-Anbieter** per
+Tipp durchgeschaltet (Anthropic → DeepSeek → NVIDIA). API-Key und Modell
+darunter beziehen sich immer auf den gerade gewaehlten Anbieter:
+
+| Anbieter | Format | Endpunkt | Standardmodell |
+|---|---|---|---|
+| Anthropic Claude | Messages API (+ Prompt-Caching) | `api.anthropic.com` | `claude-haiku-4-5-20251001` |
+| DeepSeek | OpenAI-kompatibel | `api.deepseek.com` | `deepseek-chat` |
+| NVIDIA NIM | OpenAI-kompatibel | `integrate.api.nvidia.com` | `meta/llama-3.1-8b-instruct` |
+
+Konfiguriert wird ueber die Einstellungen oder direkt in
+`/etc/flux/flux.conf`:
+```ini
+ai_provider=deepseek          # anthropic | deepseek | nvidia
+api_key=...                   # Anthropic-Key
+deepseek_key=...              # DeepSeek-Key
+nvidia_key=...                # NVIDIA-NIM-Key
+anthropic_model=...           # optional, sonst Standardmodell
+deepseek_model=...            # optional
+nvidia_model=...              # optional
 ```
+Alternativ per Umgebungsvariable (`FLUX_AI_API_KEY`, `DEEPSEEK_API_KEY`,
+`NVIDIA_API_KEY`). Bei Rate-Limits (HTTP 429, z.B. NVIDIA) wiederholt
+`fluxaid` die Anfrage automatisch mit kurzem Backoff.
 
 ---
 

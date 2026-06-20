@@ -4,7 +4,7 @@
 #include <string.h>
 #include <sys/stat.h>
 
-#define FLUX_CFG_MAX_ENTRIES 32
+#define FLUX_CFG_MAX_ENTRIES 48
 #define FLUX_CFG_KEY_CAP     64
 #define FLUX_CFG_VAL_CAP     512
 

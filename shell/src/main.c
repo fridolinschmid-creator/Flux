@@ -232,7 +232,7 @@ static void maybe_generate_greeting(void) {
 
 #define FLUX_PIN_LEN       4
 #define FLUX_FILES_MAX     12
-#define FLUX_SETTINGS_N    10   /* 7 bestehende + theme + auto_lock + tts */
+#define FLUX_SETTINGS_N    12   /* + KI-Anbieter (Key/Modell kontextabhaengig) */
 #define VIEWER_CONTENT_MAX 32768
 
 typedef enum {
@@ -246,32 +246,93 @@ typedef enum {
  * main.c maskiert Geheimnisse, bevor sie an ui.c gehen (siehe ui.h) --
  * ui.c/draw_settings weiss nichts von der Konfigurationsdatei. */
 
+/* Die Felder "__active_key" und "__active_model" sind Platzhalter: sie
+ * werden zur Laufzeit auf den Config-Key des aktuell gewaehlten Anbieters
+ * abgebildet (Anthropic/DeepSeek/NVIDIA). So bleibt die Liste kurz und der
+ * Key/Modell-Eintrag passt immer zum gewaehlten Anbieter. */
 static const char *setting_keys[FLUX_SETTINGS_N] = {
-    "pin_hash", "smtp_host", "smtp_port", "smtp_user", "smtp_pass",
-    "smtp_from", "api_key",
+    "pin_hash",
+    "ai_provider",      /* anthropic|deepseek|nvidia -- per Tap durchschalten */
+    "__active_key",     /* -> api_key | deepseek_key | nvidia_key */
+    "__active_model",   /* -> anthropic_model | deepseek_model | nvidia_model */
+    "smtp_host", "smtp_port", "smtp_user", "smtp_pass", "smtp_from",
     "theme",    /* teal|blau|lila|orange|gruen|rot */
     "auto_lock",/* 0=aus, 30, 60, 120, 300 Sekunden */
     "tts",      /* 0=aus, 1=ein */
 };
 static const char *setting_labels[FLUX_SETTINGS_N] = {
-    "PIN-Code", "SMTP-Server", "SMTP-Port", "SMTP-Benutzer",
-    "SMTP-Passwort", "Absender-Adresse", "Cloud-API-Key",
+    "PIN-Code",
+    "KI-Anbieter",          /* tippen schaltet anthropic/deepseek/nvidia */
+    "API-Key (Anbieter)",
+    "Modell (Anbieter)",
+    "SMTP-Server", "SMTP-Port", "SMTP-Benutzer",
+    "SMTP-Passwort", "Absender-Adresse",
     "Farbthema",    /* teal/blau/lila/orange/gruen/rot */
     "Auto-Sperre",  /* 0=aus */
     "Sprache (TTS)",/* 0=aus, 1=ein */
 };
-static const int setting_secret[FLUX_SETTINGS_N] = { 1, 0, 0, 0, 1, 0, 1, 0, 0, 0 };
+static const int setting_secret[FLUX_SETTINGS_N] = {
+    1, /* pin */
+    0, /* provider */
+    1, /* active key */
+    0, /* active model */
+    0, 0, 0, 1, 0, /* smtp host/port/user/pass/from */
+    0, 0, 0,       /* theme/auto_lock/tts */
+};
+
+/* Aktuell gewaehlter Anbieter aus der Config (Standard: anthropic). */
+static void get_active_provider(char *out, size_t cap) {
+    out[0] = '\0';
+    flux_config_get("ai_provider", out, cap);
+    if (!out[0]) snprintf(out, cap, "anthropic");
+}
+
+/* Bildet "__active_key"/"__active_model" auf den realen Config-Key des
+ * aktiven Anbieters ab; alle anderen Keys bleiben unveraendert. */
+static const char *resolve_setting_key(const char *key) {
+    char prov[64]; get_active_provider(prov, sizeof(prov));
+    if (!strcmp(key, "__active_key")) {
+        if (!strcmp(prov, "deepseek")) return "deepseek_key";
+        if (!strcmp(prov, "nvidia"))   return "nvidia_key";
+        return "api_key";
+    }
+    if (!strcmp(key, "__active_model")) {
+        if (!strcmp(prov, "deepseek")) return "deepseek_model";
+        if (!strcmp(prov, "nvidia"))   return "nvidia_model";
+        return "anthropic_model";
+    }
+    return key;
+}
+
+/* Standardmodell des aktiven Anbieters (muss mit fluxai/src/provider.c
+ * uebereinstimmen). */
+static const char *active_default_model(void) {
+    char prov[64]; get_active_provider(prov, sizeof(prov));
+    if (!strcmp(prov, "deepseek")) return "deepseek-chat";
+    if (!strcmp(prov, "nvidia"))   return "meta/llama-3.1-8b-instruct";
+    return "claude-haiku-4-5-20251001";
+}
 
 static char setting_values_buf[FLUX_SETTINGS_N][200];
 static const char *setting_values[FLUX_SETTINGS_N];
 
 static void load_settings_values(void) {
     for (int i = 0; i < FLUX_SETTINGS_N; i++) {
+        const char *cfg_key = resolve_setting_key(setting_keys[i]);
         char raw[200] = {0};
-        flux_config_get(setting_keys[i], raw, sizeof(raw));
+        flux_config_get(cfg_key, raw, sizeof(raw));
         if (strcmp(setting_keys[i], "pin_hash") == 0) {
             snprintf(setting_values_buf[i], sizeof(setting_values_buf[0]), "%s",
                       raw[0] ? "gesetzt" : "nicht gesetzt");
+        } else if (strcmp(setting_keys[i], "ai_provider") == 0) {
+            const char *p = raw[0] ? raw : "anthropic";
+            const char *nice = !strcmp(p, "deepseek") ? "DeepSeek"
+                             : !strcmp(p, "nvidia")   ? "NVIDIA NIM"
+                                                      : "Anthropic Claude";
+            snprintf(setting_values_buf[i], sizeof(setting_values_buf[0]), "%s", nice);
+        } else if (strcmp(setting_keys[i], "__active_model") == 0) {
+            snprintf(setting_values_buf[i], sizeof(setting_values_buf[0]), "%s",
+                      raw[0] ? raw : active_default_model());
         } else if (setting_secret[i]) {
             snprintf(setting_values_buf[i], sizeof(setting_values_buf[0]), "%s",
                       raw[0] ? "********" : "(nicht gesetzt)");
@@ -293,7 +354,7 @@ static void apply_setting_edit(int index, const char *value) {
             flux_config_set("pin_hash", hash);
         }
     } else {
-        flux_config_set(setting_keys[index], value);
+        flux_config_set(resolve_setting_key(setting_keys[index]), value);
     }
     /* Farbthema sofort anwenden */
     if (strcmp(setting_keys[index], "theme") == 0)
@@ -1261,11 +1322,22 @@ int main(void) {
                 flux_ui_draw_assistant(&fb, last_q, input_buf, answer_buf, 0);
                 animate_slide_in(&fb, old);
                 free(old);
+            } else if (strcmp(setting_keys[idx], "ai_provider") == 0) {
+                /* KI-Anbieter per Tap durchschalten statt Texteingabe */
+                char cur[64] = {0};
+                flux_config_get("ai_provider", cur, sizeof(cur));
+                const char *next = "deepseek";
+                if (!strcmp(cur, "deepseek")) next = "nvidia";
+                else if (!strcmp(cur, "nvidia")) next = "anthropic";
+                else next = "deepseek"; /* von anthropic/leer aus */
+                flux_config_set("ai_provider", next);
+                load_settings_values();
+                flux_ui_draw_settings(&fb, setting_labels, setting_values, FLUX_SETTINGS_N);
             } else {
                 edit_target = EDIT_SETTING_FIELD;
                 edit_setting_index = idx;
                 if (setting_secret[idx]) edit_buf[0] = '\0';
-                else flux_config_get(setting_keys[idx], edit_buf, sizeof(edit_buf));
+                else flux_config_get(resolve_setting_key(setting_keys[idx]), edit_buf, sizeof(edit_buf));
                 uint32_t *old = capture_frame(&fb);
                 screen = FLUX_SCREEN_EDIT_BODY;
                 flux_ui_draw_edit_body(&fb, edit_buf);
