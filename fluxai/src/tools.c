@@ -22,6 +22,7 @@
  */
 #include "tools.h"
 #include "vision.h"
+#include "imap.h"
 #include "../../common/flux_config.h"
 
 #include <curl/curl.h>
@@ -1198,10 +1199,23 @@ static int tool_image_take(const char *arg, char *out, size_t cap) {
     return 1;
 }
 
+/* ---- mail_unread / mail_read (IMAP) ---------------------------------- */
+static int tool_mail_unread(const char *arg, char *out, size_t cap) {
+    (void)arg;
+    flux_imap_fetch_unread(out, cap);
+    return 1;
+}
+static int tool_mail_read(const char *arg, char *out, size_t cap) {
+    flux_imap_read(arg, out, cap);
+    return 1;
+}
+
 /* ---- Dispatch -------------------------------------------------------- */
 
 int flux_tool_exec(const char *name, const char *arg,
                    char *out, size_t out_cap) {
+    if (strcmp(name, "mail_unread")      == 0) return tool_mail_unread(arg, out, out_cap);
+    if (strcmp(name, "mail_read")        == 0) return tool_mail_read(arg, out, out_cap);
     if (strcmp(name, "date_time")        == 0) return tool_date_time(arg, out, out_cap);
     if (strcmp(name, "weather")          == 0) return tool_weather(arg, out, out_cap);
     if (strcmp(name, "file_read")        == 0) return tool_file_read(arg, out, out_cap);
@@ -1272,6 +1286,8 @@ const char *flux_tools_description(void) {
         "  memory_list     -- Alle gespeicherten Infos anzeigen. ARG: (leer)\n"
         "  memory_search   -- Gespeicherte Infos durchsuchen. ARG: Suchbegriff\n"
         "  memory_delete   -- Gespeicherte Info loeschen. ARG: Suchbegriff\n"
+        "  mail_unread     -- Ungelesene E-Mails abrufen (Von/Betreff/Datum, fuer Zusammenfassungen). ARG: (leer)\n"
+        "  mail_read       -- Text einer E-Mail lesen. ARG: UID (aus mail_unread)\n"
         "Verwende Tools NUR wenn Echtzeitdaten benoetigt werden (Wetter, Dateien, Berechnung usw.). "
         "Wenn der Nutzer dir persoenliche Infos nennt (Name, Geburtstag, Praeferenz), "
         "speichere diese SOFORT mit memory_save -- ohne explizite Aufforderung. "

@@ -256,6 +256,19 @@ Alternativ per Umgebungsvariable (`FLUX_AI_API_KEY`, `DEEPSEEK_API_KEY`,
 `NVIDIA_API_KEY`). Bei Rate-Limits (HTTP 429, z.B. NVIDIA) wiederholt
 `fluxaid` die Anfrage automatisch mit kurzem Backoff.
 
+### E-Mail lesen (IMAP, optional)
+Neben dem SMTP-Versand kann `fluxaid` ungelesene Mails abrufen, damit die KI
+sie zusammenfassen kann ("Fasse meine ungelesenen Mails zusammen"). Dafuer in
+`/etc/flux/flux.conf`:
+```ini
+imap_host=imap.example.com   # erforderlich
+imap_port=993                # optional, Standard 993 (implizites TLS)
+imap_user=...                # optional, sonst smtp_user
+imap_pass=...                # optional, sonst smtp_pass (App-Passwort empfohlen)
+```
+KI-Tools dazu: `mail_unread` (Kopfzeilen der ungelesenen Mails) und
+`mail_read` (Text einer Mail per UID). Lesen setzt das \Seen-Flag nicht.
+
 ---
 
 ## Roadmap
