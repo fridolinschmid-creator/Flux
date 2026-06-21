@@ -30,6 +30,7 @@ typedef enum {
     FLUX_SCREEN_MEMORY,      /* KI-Gedaechtnis-Liste */
     FLUX_SCREEN_MEETING,     /* Meeting-Mitschrift (Audio-Transkription) */
     FLUX_SCREEN_SEARCH,      /* Semantische KI-Suche ueber alles */
+    FLUX_SCREEN_WIFI,        /* WLAN-Netze scannen und verbinden */
 } flux_screen_t;
 
 typedef enum {
@@ -254,6 +255,13 @@ int flux_ui_meeting_hit(const flux_fb_t *fb, int x, int y,
  * entries: Array von Strings (bereits geladen). n: Anzahl Eintraege.
  * scroll: erster sichtbarer Eintrag (fuer vertikales Scrollen). */
 void flux_ui_draw_memory(flux_fb_t *fb, const char **entries, int n, int scroll);
+
+/* ---- WLAN ----------------------------------------------------------- *
+ * names/metas parallel (SSID + "Signal 80% - gesichert"). current: aktuell
+ * verbundene SSID (leer = nicht verbunden). scanning: 1 waehrend des Scans.
+ * unavailable: 1 wenn kein WLAN-Interface/wpa_cli vorhanden. */
+void flux_ui_draw_wifi(flux_fb_t *fb, const char *current, const char **names,
+                       const char **metas, int n, int scanning, int unavailable);
 
 /* ---- Farbthema ----------------------------------------------------- */
 

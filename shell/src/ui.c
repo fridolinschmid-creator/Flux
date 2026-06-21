@@ -1104,6 +1104,60 @@ void flux_ui_draw_settings(flux_fb_t *fb, const char **labels, const char **valu
     flux_fb_present(fb);
 }
 
+/* ---- WLAN -------------------------------------------------------------- */
+
+void flux_ui_draw_wifi(flux_fb_t *fb, const char *current, const char **names,
+                       const char **metas, int n, int scanning, int unavailable) {
+    flux_fb_clear(fb, COL_BG);
+    draw_statusbar(fb);
+    flux_fb_text(fb, 16, STATUSBAR_H + 12, "WLAN", COL_ACCENT, 3);
+
+    /* Statuszeile: aktuell verbunden? */
+    char status[96];
+    if (current && current[0]) snprintf(status, sizeof(status), "Verbunden: %s", current);
+    else snprintf(status, sizeof(status), "Nicht verbunden");
+    flux_fb_text(fb, 16, STATUSBAR_H + 44, status,
+                 (current && current[0]) ? COL_ACCENT : COL_DIM, 2);
+
+    if (unavailable) {
+        draw_wrapped(fb, 16, STATUSBAR_H + TITLE_AREA_H + 8, fb->width - 32,
+                     "Kein WLAN-Geraet erkannt (oder wpa_cli fehlt). Auf echter "
+                     "Hardware mit WLAN-Chip erscheinen hier die Netze.",
+                     COL_DIM, 2, 26);
+        draw_back_bar(fb, "Zurueck");
+        flux_fb_present(fb);
+        return;
+    }
+    if (scanning) {
+        flux_fb_text(fb, 16, STATUSBAR_H + TITLE_AREA_H + 8, "Suche Netze ...",
+                     COL_TEXT, 2);
+        draw_back_bar(fb, "Zurueck");
+        flux_fb_present(fb);
+        return;
+    }
+    if (n == 0) {
+        flux_fb_text(fb, 16, STATUSBAR_H + TITLE_AREA_H + 8,
+                     "Keine Netze gefunden. Erneut tippen zum Aktualisieren.",
+                     COL_DIM, 2);
+        draw_back_bar(fb, "Aktualisieren");
+        flux_fb_present(fb);
+        return;
+    }
+
+    list_row_geom_t rows[LIST_MAX_ROWS];
+    int rn = build_list_rows(fb, n, rows);
+    for (int i = 0; i < rn; i++) {
+        flux_fb_fill_rect(fb, rows[i].x, rows[i].y, rows[i].w, rows[i].h, COL_ROW);
+        flux_fb_text(fb, rows[i].x + 12, rows[i].y + 8, names[i], COL_TEXT, 2);
+        flux_fb_text(fb, rows[i].x + 12, rows[i].y + rows[i].h - 24, metas[i], COL_DIM, 2);
+        /* aktuell verbundenes Netz markieren */
+        if (current && current[0] && strcmp(names[i], current) == 0)
+            flux_fb_fill_rect(fb, rows[i].x, rows[i].y, 4, rows[i].h, COL_ACCENT);
+    }
+    draw_back_bar(fb, "Zurueck");
+    flux_fb_present(fb);
+}
+
 /* ---- Dateien ------------------------------------------------------------ */
 
 #define FILES_DELETE_BTN_H  56

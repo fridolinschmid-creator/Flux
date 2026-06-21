@@ -22,6 +22,7 @@
 #include "action.h"
 #include "camera.h"
 #include "voice.h"
+#include "wifi.h"
 #include "../../common/flux_protocol.h"
 #include "../../common/flux_config.h"
 #include "../../common/flux_sha256.h"
@@ -232,7 +233,7 @@ static void maybe_generate_greeting(void) {
 
 #define FLUX_PIN_LEN       4
 #define FLUX_FILES_MAX     12
-#define FLUX_SETTINGS_N    9    /* + Web-Suche (SearXNG-URL) */
+#define FLUX_SETTINGS_N    10   /* + WLAN */
 #define VIEWER_CONTENT_MAX 32768
 
 typedef enum {
@@ -244,6 +245,7 @@ typedef enum {
     EDIT_NEW_FOLDER,
     EDIT_EMAIL_ADDR,    /* Schritt 1: E-Mail-Adresse */
     EDIT_EMAIL_PASS,    /* Schritt 2: App-Passwort */
+    EDIT_WIFI_PASS,     /* WLAN-Passwort fuer das gewaehlte Netz */
 } edit_target_t;
 
 /* Zwischengespeicherte E-Mail-Adresse zwischen Schritt 1 und 2. */
@@ -263,6 +265,7 @@ static const char *setting_keys[FLUX_SETTINGS_N] = {
     "__active_key",     /* -> api_key | deepseek_key | nvidia_key */
     "__active_model",   /* -> anthropic_model | deepseek_model | nvidia_model */
     "__email",          /* E-Mail-Adresse + App-Passwort (leitet SMTP/IMAP ab) */
+    "__wifi",           /* oeffnet den WLAN-Screen (Scan + Verbinden) */
     "searxng_url",      /* Web-Suche ueber eigene SearXNG-Instanz (z.B. MacBook) */
     "theme",    /* teal|blau|lila|orange|gruen|rot */
     "auto_lock",/* 0=aus, 30, 60, 120, 300 Sekunden */
@@ -274,6 +277,7 @@ static const char *setting_labels[FLUX_SETTINGS_N] = {
     "API-Key (Anbieter)",
     "Modell (Anbieter)",
     "E-Mail Einstellungen", /* Adresse + App-Passwort, Rest automatisch */
+    "WLAN",                 /* oeffnet Netz-Scan + Verbinden */
     "Web-Suche (SearXNG)",  /* URL der eigenen SearXNG-Instanz */
     "Farbthema",    /* teal/blau/lila/orange/gruen/rot */
     "Auto-Sperre",  /* 0=aus */
@@ -285,6 +289,7 @@ static const int setting_secret[FLUX_SETTINGS_N] = {
     1, /* active key */
     0, /* active model */
     0, /* email (zeigt Adresse) */
+    0, /* wifi (zeigt Verbindung) */
     0, /* searxng_url */
     0, 0, 0,       /* theme/auto_lock/tts */
 };
@@ -400,6 +405,11 @@ static void load_settings_values(void) {
         } else if (strcmp(setting_keys[i], "__active_model") == 0) {
             snprintf(setting_values_buf[i], sizeof(setting_values_buf[0]), "%s",
                       raw[0] ? raw : active_default_model());
+        } else if (strcmp(setting_keys[i], "__wifi") == 0) {
+            char cur[64] = {0};
+            flux_wifi_current(cur, sizeof(cur));
+            snprintf(setting_values_buf[i], sizeof(setting_values_buf[0]), "%s",
+                      cur[0] ? cur : "nicht verbunden");
         } else if (setting_secret[i]) {
             snprintf(setting_values_buf[i], sizeof(setting_values_buf[0]), "%s",
                       raw[0] ? "********" : "(nicht gesetzt)");
@@ -558,6 +568,32 @@ static char        search_results_buf[SRCH_MAX][128];
 static const char *search_results_p[SRCH_MAX];
 static int         search_n                  = 0;
 static int         search_searching          = 0;
+
+/* WLAN */
+#define WIFI_MAX 16
+static flux_wifi_net_t wifi_nets[WIFI_MAX];
+static char        wifi_names_buf[WIFI_MAX][64];
+static char        wifi_metas_buf[WIFI_MAX][48];
+static const char *wifi_names_p[WIFI_MAX];
+static const char *wifi_metas_p[WIFI_MAX];
+static int         wifi_n            = 0;
+static char        wifi_current[64]  = {0};
+static char        wifi_sel_ssid[64] = {0};
+static int         wifi_sel_secured  = 0;
+
+/* Scannt WLAN-Netze und befuellt die Anzeigepuffer. */
+static void wifi_rescan(void) {
+    flux_wifi_current(wifi_current, sizeof(wifi_current));
+    wifi_n = flux_wifi_scan(wifi_nets, WIFI_MAX);
+    if (wifi_n < 0) wifi_n = 0;
+    for (int i = 0; i < wifi_n; i++) {
+        snprintf(wifi_names_buf[i], sizeof(wifi_names_buf[0]), "%s", wifi_nets[i].ssid);
+        snprintf(wifi_metas_buf[i], sizeof(wifi_metas_buf[0]), "Signal %d%% - %s",
+                 wifi_nets[i].signal_pct, wifi_nets[i].secured ? "gesichert" : "offen");
+        wifi_names_p[i] = wifi_names_buf[i];
+        wifi_metas_p[i] = wifi_metas_buf[i];
+    }
+}
 
 static void load_memory(void) {
     memory_n = 0;
@@ -754,6 +790,9 @@ static void redraw_current_screen(flux_fb_t *fb, flux_screen_t screen,
             flux_ui_draw_assistant(fb, last_q, input_buf, answer_buf, 0); break;
         case FLUX_SCREEN_SETTINGS:
             flux_ui_draw_settings(fb, setting_labels, setting_values, FLUX_SETTINGS_N); break;
+        case FLUX_SCREEN_WIFI:
+            flux_ui_draw_wifi(fb, wifi_current, wifi_names_p, wifi_metas_p,
+                              wifi_n, 0, !flux_wifi_available()); break;
         case FLUX_SCREEN_FILES:
             flux_ui_draw_files(fb, files_path, file_names, file_metas,
                                file_n, file_truncated, file_selected); break;
@@ -1407,6 +1446,18 @@ int main(void) {
                     flux_ui_draw_settings(&fb, setting_labels, setting_values, FLUX_SETTINGS_N);
                     animate_slide_in(&fb, old);
                     free(old);
+                } else if (edit_target == EDIT_WIFI_PASS) {
+                    /* WLAN verbinden mit gewaehltem Netz + eingegebenem Passwort */
+                    char msg[160];
+                    flux_wifi_connect(wifi_sel_ssid, edit_buf, msg, sizeof(msg));
+                    flux_ui_set_edit_title(NULL);
+                    wifi_rescan();
+                    uint32_t *old = capture_frame(&fb);
+                    screen = FLUX_SCREEN_WIFI;
+                    flux_ui_draw_wifi(&fb, wifi_current, wifi_names_p, wifi_metas_p,
+                                      wifi_n, 0, !flux_wifi_available());
+                    animate_slide_in(&fb, old);
+                    free(old);
                 } else {
                     apply_setting_edit(edit_setting_index, edit_buf);
                     flux_ui_set_edit_title(NULL);
@@ -1450,6 +1501,17 @@ int main(void) {
                 flux_config_set("ai_provider", next);
                 load_settings_values();
                 flux_ui_draw_settings(&fb, setting_labels, setting_values, FLUX_SETTINGS_N);
+            } else if (strcmp(setting_keys[idx], "__wifi") == 0) {
+                /* WLAN-Screen oeffnen und sofort scannen */
+                uint32_t *old = capture_frame(&fb);
+                screen = FLUX_SCREEN_WIFI;
+                flux_ui_draw_wifi(&fb, wifi_current, wifi_names_p, wifi_metas_p,
+                                  0, 1, !flux_wifi_available());  /* "Suche ..." */
+                animate_slide_in(&fb, old);
+                free(old);
+                wifi_rescan();
+                flux_ui_draw_wifi(&fb, wifi_current, wifi_names_p, wifi_metas_p,
+                                  wifi_n, 0, !flux_wifi_available());
             } else if (strcmp(setting_keys[idx], "__email") == 0) {
                 /* Schritt 1: E-Mail-Adresse (mit aktueller Adresse vorbelegt) */
                 edit_target = EDIT_EMAIL_ADDR;
@@ -1472,6 +1534,58 @@ int main(void) {
                 flux_ui_draw_edit_body(&fb, edit_buf);
                 animate_slide_in(&fb, old);
                 free(old);
+            }
+            continue;
+        }
+
+        if (screen == FLUX_SCREEN_WIFI) {
+            if (ev.type == FLUX_EV_SWIPE_LEFT) {
+                uint32_t *old = capture_frame(&fb);
+                load_settings_values();
+                screen = FLUX_SCREEN_SETTINGS;
+                flux_ui_draw_settings(&fb, setting_labels, setting_values, FLUX_SETTINGS_N);
+                animate_slide_from_left(&fb, old);
+                free(old);
+                continue;
+            }
+            if (ev.type != FLUX_EV_TAP) continue;
+            int idx = 0, back = 0;
+            if (!flux_ui_list_hit(&fb, ev.x, ev.y, wifi_n, &idx, &back)) continue;
+            if (back) {
+                if (wifi_n == 0) {
+                    /* untere Leiste = "Aktualisieren" bei leerer Liste */
+                    flux_ui_draw_wifi(&fb, wifi_current, wifi_names_p, wifi_metas_p,
+                                      0, 1, !flux_wifi_available());
+                    wifi_rescan();
+                    flux_ui_draw_wifi(&fb, wifi_current, wifi_names_p, wifi_metas_p,
+                                      wifi_n, 0, !flux_wifi_available());
+                } else {
+                    uint32_t *old = capture_frame(&fb);
+                    load_settings_values();
+                    screen = FLUX_SCREEN_SETTINGS;
+                    flux_ui_draw_settings(&fb, setting_labels, setting_values, FLUX_SETTINGS_N);
+                    animate_slide_in(&fb, old);
+                    free(old);
+                }
+            } else if (idx < wifi_n) {
+                snprintf(wifi_sel_ssid, sizeof(wifi_sel_ssid), "%s", wifi_nets[idx].ssid);
+                wifi_sel_secured = wifi_nets[idx].secured;
+                if (wifi_sel_secured) {
+                    edit_target = EDIT_WIFI_PASS;
+                    edit_buf[0] = '\0';
+                    flux_ui_set_edit_title("WLAN-Passwort");
+                    uint32_t *old = capture_frame(&fb);
+                    screen = FLUX_SCREEN_EDIT_BODY;
+                    flux_ui_draw_edit_body(&fb, edit_buf);
+                    animate_slide_in(&fb, old);
+                    free(old);
+                } else {
+                    char msg[160];
+                    flux_wifi_connect(wifi_sel_ssid, "", msg, sizeof(msg));
+                    wifi_rescan();
+                    flux_ui_draw_wifi(&fb, wifi_current, wifi_names_p, wifi_metas_p,
+                                      wifi_n, 0, !flux_wifi_available());
+                }
             }
             continue;
         }

@@ -124,13 +124,15 @@ int main(int argc, char *argv[]) {
     /* 13 -- Einstellungen */
     const char *setting_labels[] = {
         "PIN-Code", "KI-Anbieter", "API-Key (Anbieter)", "Modell (Anbieter)",
-        "E-Mail Einstellungen", "Farbthema", "Auto-Sperre", "Sprache (TTS)"
+        "E-Mail Einstellungen", "WLAN", "Web-Suche (SearXNG)",
+        "Farbthema", "Auto-Sperre", "Sprache (TTS)"
     };
     const char *setting_values[] = {
         "gesetzt", "DeepSeek", "********", "deepseek-chat",
-        "ich@icloud.com", "teal", "60", "1"
+        "ich@icloud.com", "FritzBox 7590", "http://macbook.local:8888",
+        "teal", "60", "1"
     };
-    flux_ui_draw_settings(&fb, setting_labels, setting_values, 8);
+    flux_ui_draw_settings(&fb, setting_labels, setting_values, 10);
     save_ppm(&fb, outdir, "13_einstellungen");
 
     /* 13b -- E-Mail-Einrichtung: App-Passwort-Schritt */
@@ -319,6 +321,15 @@ int main(int argc, char *argv[]) {
         "API-Key fuer den gewaehlten Anbieter ein (oder waehle einen anderen "
         "Anbieter).", 0);
     save_ppm(&fb, outdir, "30_cloud_fallback");
+
+    /* 31 -- WLAN-Auswahl */
+    {
+        const char *wnames[] = { "FritzBox 7590", "Eduroam", "Cafe Free WiFi" };
+        const char *wmetas[] = { "Signal 100% - gesichert", "Signal 90% - gesichert",
+                                 "Signal 56% - offen" };
+        flux_ui_draw_wifi(&fb, "FritzBox 7590", wnames, wmetas, 3, 0, 0);
+    }
+    save_ppm(&fb, outdir, "31_wlan");
 
     flux_fb_close(&fb);
     printf("\nFertig! PPM -> PNG: convert %s/XX.ppm %s/XX.png\n", outdir, outdir);
