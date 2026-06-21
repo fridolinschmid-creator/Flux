@@ -34,6 +34,7 @@
 #include <unistd.h>
 #include <dirent.h>
 #include <sys/stat.h>
+#include <limits.h>
 
 #define NOTES_PATH      "/etc/flux/notes.txt"
 #define MEMORY_PATH     "/etc/flux/memory.txt"
@@ -227,6 +228,35 @@ static int tool_file_list(const char *arg, char *out, size_t cap) {
     return 1;
 }
 
+/* ---- Pfad-Sicherheitspruefung ---------------------------------------- */
+
+/* Gibt 1 zurueck wenn der kanonische Pfad unter einem der erlaubten
+ * Praefix-Verzeichnisse liegt. Verhindert Path-Traversal (../../etc/passwd). */
+static int path_is_allowed(const char *path, int allow_tmp) {
+    char resolved[PATH_MAX];
+    /* Datei muss nicht existieren -- realpath erlaubt es fuer Zieldatei-Checks
+     * leider nur wenn der Elternpfad existiert. Wir pruefen daher zuerst
+     * den Elternpfad, falls die Datei selbst noch nicht existiert. */
+    if (!realpath(path, resolved)) {
+        /* Elternordner versuchen */
+        char parent[PATH_MAX];
+        snprintf(parent, sizeof(parent), "%s", path);
+        char *slash = strrchr(parent, '/');
+        if (slash && slash != parent) {
+            *slash = '\0';
+            if (!realpath(parent, resolved)) return 0;
+            /* Kanonischen Elternpfad + Dateiname rekonstruieren */
+            size_t pl = strlen(resolved);
+            snprintf(resolved + pl, sizeof(resolved) - pl, "/%s", slash + 1);
+        } else {
+            return 0;
+        }
+    }
+    if (strncmp(resolved, "/home/user/", 11) == 0) return 1;
+    if (allow_tmp && strncmp(resolved, "/tmp/", 5) == 0) return 1;
+    return 0;
+}
+
 /* ---- file_create ----------------------------------------------------- */
 
 static int tool_file_create(const char *arg, char *out, size_t cap) {
@@ -234,33 +264,38 @@ static int tool_file_create(const char *arg, char *out, size_t cap) {
         snprintf(out, cap, "Fehler: kein Pfad angegeben");
         return 1;
     }
-    /* Sicherheit: nur unter /home/user/ und /tmp/ erlaubt */
-    if (strncmp(arg, "/home/user/", 11) != 0 &&
-        strncmp(arg, "/tmp/", 5) != 0) {
+
+    /* Format: "pfad|inhalt" -- | als Trennzeichen */
+    const char *sep = strchr(arg, '|');
+    char path[512];
+    if (!sep) {
+        snprintf(path, sizeof(path), "%s", arg);
+    } else {
+        size_t plen = (size_t)(sep - arg);
+        if (plen >= sizeof(path)) plen = sizeof(path) - 1;
+        memcpy(path, arg, plen);
+        path[plen] = '\0';
+    }
+
+    /* Sicherheit: kanonischen Pfad pruefen (verhindert Path-Traversal) */
+    if (!path_is_allowed(path, 1)) {
         snprintf(out, cap,
                  "Fehler: Erstellen nur unter /home/user/ und /tmp/ erlaubt");
         return 1;
     }
 
-    /* Format: "pfad|inhalt" -- | als Trennzeichen, \n im Inhalt werden zu echten Newlines */
-    const char *sep = strchr(arg, '|');
     if (!sep) {
-        /* Nur Pfad, leere Datei erstellen */
-        FILE *f = fopen(arg, "w");
+        FILE *f = fopen(path, "w");
         if (!f) {
-            snprintf(out, cap, "Fehler: Datei '%s' konnte nicht erstellt werden", arg);
+            snprintf(out, cap, "Fehler: Datei '%s' konnte nicht erstellt werden", path);
             return 1;
         }
-        fclose(f);
-        snprintf(out, cap, "Datei '%s' erstellt (leer)", arg);
+        if (fclose(f) != 0)
+            snprintf(out, cap, "Warnung: fclose fehlgeschlagen fuer '%s'", path);
+        else
+            snprintf(out, cap, "Datei '%s' erstellt (leer)", path);
         return 1;
     }
-
-    char path[512];
-    size_t plen = (size_t)(sep - arg);
-    if (plen >= sizeof(path)) plen = sizeof(path) - 1;
-    memcpy(path, arg, plen);
-    path[plen] = '\0';
 
     FILE *f = fopen(path, "w");
     if (!f) {
@@ -290,8 +325,8 @@ static int tool_file_delete(const char *arg, char *out, size_t cap) {
         snprintf(out, cap, "Fehler: kein Pfad angegeben");
         return 1;
     }
-    /* Sicherheit: nur unter /home/user/ erlaubt */
-    if (strncmp(arg, "/home/user/", 11) != 0) {
+    /* Sicherheit: kanonischen Pfad pruefen */
+    if (!path_is_allowed(arg, 0)) {
         snprintf(out, cap,
                  "Fehler: Loeschen nur unter /home/user/ erlaubt (Systemdateien schuetzen)");
         return 1;

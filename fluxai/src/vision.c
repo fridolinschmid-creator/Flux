@@ -10,6 +10,8 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#include <fcntl.h>
+#include <sys/wait.h>
 
 #define VISION_MODEL   "claude-haiku-4-5-20251001"
 #define VISION_API_URL "https://api.anthropic.com/v1/messages"
@@ -102,13 +104,27 @@ int flux_vision_analyze(const char *ppm_path, char *out, size_t out_cap,
         return 0;
     }
 
-    /* PPM → JPEG per ImageMagick (Anthropic akzeptiert kein PPM) */
+    /* PPM → JPEG per ImageMagick ohne system()-Shell-Injection */
     const char *tmp_jpg = "/tmp/flux_vision_img.jpg";
     {
-        char cmd[1024];
-        snprintf(cmd, sizeof(cmd),
-                 "convert '%s' -quality 80 '%s' 2>/dev/null", ppm_path, tmp_jpg);
-        if (system(cmd) != 0) {
+        pid_t pid = fork();
+        if (pid < 0) {
+            snprintf(out, out_cap, "fork() fehlgeschlagen.");
+            return 0;
+        }
+        if (pid == 0) {
+            /* Child: stderr schliessen, dann convert ausfuehren */
+            int devnull = open("/dev/null", O_WRONLY);
+            if (devnull >= 0) { dup2(devnull, STDERR_FILENO); close(devnull); }
+            char quality[] = "80";
+            char *argv[] = { "convert", (char *)ppm_path, "-quality", quality,
+                             (char *)tmp_jpg, NULL };
+            execvp("convert", argv);
+            _exit(127);
+        }
+        int wstatus = 0;
+        waitpid(pid, &wstatus, 0);
+        if (!WIFEXITED(wstatus) || WEXITSTATUS(wstatus) != 0) {
             snprintf(out, out_cap,
                      "Bildkonvertierung fehlgeschlagen (convert nicht installiert?).");
             return 0;

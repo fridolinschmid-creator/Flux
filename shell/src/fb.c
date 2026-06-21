@@ -154,6 +154,98 @@ int flux_fb_text_width(const char *s, int scale) {
     return stb_easy_font_width((char *)s) * scale;
 }
 
+/* ---- Erweiterte Primitive --------------------------------------------- */
+
+static inline uint32_t lerp_color(uint32_t a, uint32_t b, int t, int max) {
+    if (max <= 0) return a;
+    uint8_t ar = (a >> 16) & 0xFF, ag = (a >> 8) & 0xFF, ab = a & 0xFF;
+    uint8_t br = (b >> 16) & 0xFF, bg = (b >> 8) & 0xFF, bb = b & 0xFF;
+    uint8_t r = (uint8_t)(ar + (int)(br - ar) * t / max);
+    uint8_t g = (uint8_t)(ag + (int)(bg - ag) * t / max);
+    uint8_t bl2 = (uint8_t)(ab + (int)(bb - ab) * t / max);
+    return ((uint32_t)r << 16) | ((uint32_t)g << 8) | bl2;
+}
+
+void flux_fb_fill_rect_rounded(flux_fb_t *fb, int x, int y, int w, int h, int r, uint32_t col) {
+    if (r * 2 > w) r = w / 2;
+    if (r * 2 > h) r = h / 2;
+    for (int j = 0; j < h; j++) {
+        for (int i = 0; i < w; i++) {
+            int dx = (i < r) ? (r - i) : (i >= w - r) ? (i - (w - r - 1)) : 0;
+            int dy = (j < r) ? (r - j) : (j >= h - r) ? (j - (h - r - 1)) : 0;
+            if (dx > 0 && dy > 0 && dx * dx + dy * dy > r * r) continue;
+            put_back(fb, x + i, y + j, col);
+        }
+    }
+}
+
+void flux_fb_fill_gradient_v(flux_fb_t *fb, int x, int y, int w, int h, uint32_t c_top, uint32_t c_bot) {
+    for (int j = 0; j < h; j++) {
+        uint32_t col = lerp_color(c_top, c_bot, j, h - 1);
+        for (int i = 0; i < w; i++)
+            put_back(fb, x + i, y + j, col);
+    }
+}
+
+void flux_fb_fill_gradient_h(flux_fb_t *fb, int x, int y, int w, int h, uint32_t c_left, uint32_t c_right) {
+    for (int i = 0; i < w; i++) {
+        uint32_t col = lerp_color(c_left, c_right, i, w - 1);
+        for (int j = 0; j < h; j++)
+            put_back(fb, x + i, y + j, col);
+    }
+}
+
+void flux_fb_fill_gradient_v_rounded(flux_fb_t *fb, int x, int y, int w, int h, int r, uint32_t c_top, uint32_t c_bot) {
+    if (r * 2 > w) r = w / 2;
+    if (r * 2 > h) r = h / 2;
+    for (int j = 0; j < h; j++) {
+        uint32_t col = lerp_color(c_top, c_bot, j, h - 1);
+        for (int i = 0; i < w; i++) {
+            int dx = (i < r) ? (r - i) : (i >= w - r) ? (i - (w - r - 1)) : 0;
+            int dy = (j < r) ? (r - j) : (j >= h - r) ? (j - (h - r - 1)) : 0;
+            if (dx > 0 && dy > 0 && dx * dx + dy * dy > r * r) continue;
+            put_back(fb, x + i, y + j, col);
+        }
+    }
+}
+
+void flux_fb_fill_circle(flux_fb_t *fb, int cx, int cy, int r, uint32_t col) {
+    for (int dy = -r; dy <= r; dy++)
+        for (int dx = -r; dx <= r; dx++)
+            if (dx * dx + dy * dy <= r * r)
+                put_back(fb, cx + dx, cy + dy, col);
+}
+
+void flux_fb_draw_ring(flux_fb_t *fb, int cx, int cy, int r, int thick, uint32_t col) {
+    int r_out = r + thick / 2;
+    int r_in  = r - thick / 2;
+    if (r_in < 0) r_in = 0;
+    for (int dy = -r_out; dy <= r_out; dy++) {
+        for (int dx = -r_out; dx <= r_out; dx++) {
+            int d2 = dx * dx + dy * dy;
+            if (d2 <= r_out * r_out && d2 >= r_in * r_in)
+                put_back(fb, cx + dx, cy + dy, col);
+        }
+    }
+}
+
+void flux_fb_hline(flux_fb_t *fb, int x, int y, int w, uint32_t col) {
+    for (int i = 0; i < w; i++) put_back(fb, x + i, y, col);
+}
+
+void flux_fb_vline(flux_fb_t *fb, int x, int y, int h, uint32_t col) {
+    for (int j = 0; j < h; j++) put_back(fb, x, y + j, col);
+}
+
+void flux_fb_text_shadow(flux_fb_t *fb, int x, int y, const char *s, uint32_t col, int scale) {
+    /* Schattenfarbe: deutlich dunkler als der Vordergrund */
+    uint32_t shadow = (uint32_t)(((col >> 16) & 0xFF) * 2 / 10) << 16 |
+                      (uint32_t)(((col >>  8) & 0xFF) * 2 / 10) <<  8 |
+                      (uint32_t)( (col        & 0xFF) * 2 / 10);
+    flux_fb_text(fb, x + 2, y + 2, s, shadow, scale);
+    flux_fb_text(fb, x,     y,     s, col,    scale);
+}
+
 void flux_fb_present(flux_fb_t *fb) {
     if (!fb->mmio) return; /* Mock-Framebuffer (flux_fb_open_null) -- nichts zu kopieren */
     int row_bytes = fb->width * (fb->bpp / 8);
