@@ -325,11 +325,9 @@ int main(int argc, char *argv[]) {
     }
     save_ppm(&fb, outdir, "28_semantic_search");
 
-    /* 29 -- Spracheingabe-Overlay (Aufnahme laueft 7 Sekunden) */
+    /* 29 -- Spracheingabe-Overlay (animiert, Aufnahme laeuft 7 s) */
     flux_ui_set_accent(0x4FD1C5);
-    flux_ui_draw_assistant(&fb, "Was ist das Wetter heute?",
-                            "", "Das Wetter heute ist sonnig und angenehm warm.", 0);
-    flux_ui_draw_voice_overlay(&fb, 7);
+    flux_ui_draw_voice_overlay(&fb, 7, 6);
     save_ppm(&fb, outdir, "29_voice_overlay");
 
     /* 30 -- Ehrlicher Cloud-Hinweis (kein API-Key konfiguriert) */

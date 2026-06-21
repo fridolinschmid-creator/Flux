@@ -632,6 +632,7 @@ static int  memory_scroll = 0;
 /* Spracheingabe */
 static int    voice_active  = 0;   /* 1 = Aufnahme laeuft, Overlay sichtbar */
 static time_t voice_start_t = 0;
+static int    voice_frame   = 0;   /* Animationszaehler des Aufnahme-Indikators */
 
 /* Semantische KI-Suche */
 #define SRCH_MAX 8
@@ -1167,7 +1168,10 @@ int main(void) {
         fd_set rfds;
         FD_ZERO(&rfds);
         int maxfd = have_input ? flux_input_add_fds(&in, &rfds) : -1;
-        struct timeval tv = { .tv_sec = 1, .tv_usec = 0 };
+        /* Waehrend der Aufnahme schneller ticken (~10 fps) fuer eine fluessige
+         * Mikrofon-Animation, sonst 1 s (stromsparend). */
+        struct timeval tv = voice_active ? (struct timeval){ 0, 100000 }
+                                         : (struct timeval){ 1, 0 };
         int ready = (maxfd >= 0) ? select(maxfd + 1, &rfds, NULL, NULL, &tv) : (sleep(1), 0);
 
         if (ready <= 0) {
@@ -1184,11 +1188,10 @@ int main(void) {
                     flux_ui_draw_lock(&fb);
                 }
             }
-            /* Spracheingabe-Overlay: Timer jede Sekunde aktualisieren */
+            /* Spracheingabe: animierten Aufnahme-Indikator weiterzeichnen */
             if (voice_active && screen == FLUX_SCREEN_ASSISTANT) {
                 int elapsed = (int)(time(NULL) - voice_start_t);
-                flux_ui_draw_assistant(&fb, last_q, input_buf, answer_buf, 0);
-                flux_ui_draw_voice_overlay(&fb, elapsed);
+                flux_ui_draw_voice_overlay(&fb, elapsed, voice_frame++);
             }
             /* Zombie-Kinder (TTS-Prozesse) aufraumen */
             while (waitpid(-1, NULL, WNOHANG) > 0) {}
@@ -2287,8 +2290,8 @@ int main(void) {
                 } else if (flux_voice_start()) {
                     voice_active = 1;
                     voice_start_t = time(NULL);
-                    flux_ui_draw_assistant(&fb, last_q, input_buf, answer_buf, 0);
-                    flux_ui_draw_voice_overlay(&fb, 0);
+                    voice_frame = 0;
+                    flux_ui_draw_voice_overlay(&fb, 0, voice_frame++);
                 } else {
                     snprintf(answer_buf, sizeof(answer_buf),
                              "Aufnahme konnte nicht gestartet werden.");

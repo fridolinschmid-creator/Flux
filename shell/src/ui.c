@@ -42,6 +42,7 @@ static void fill_circle(flux_fb_t *fb, int cx, int cy, int r, uint32_t col);
 static void draw_ring(flux_fb_t *fb, int cx, int cy, int r, int thick, uint32_t col);
 static void draw_setting_icon(flux_fb_t *fb, int icon, int cx, int cy, int s, uint32_t col);
 static void fill_round_rect(flux_fb_t *fb, int x, int y, int w, int h, int r, uint32_t col);
+static void draw_thick_line(flux_fb_t *fb, int x0, int y0, int x1, int y1, int t, uint32_t col);
 
 /* ---- Statusleiste (oben, fast alle Bildschirme) -------------------- */
 
@@ -790,32 +791,63 @@ static int draw_bubble(flux_fb_t *fb, const char *text, int y,
 
 /* ---- Hilfsfunktion: Eingabeleiste zeichnen (Assistent + Bearbeiten) -- */
 
+/* Symbole der Eingabeleiste: Kopieren, Einfuegen, Mikrofon, Haken (OK).
+ * bg ist die Knopf-Hintergrundfarbe (fuer "ausgestanzte" Innenflaechen). */
+typedef enum { INICON_COPY, INICON_PASTE, INICON_MIC, INICON_CHECK } input_icon_t;
+
+static void draw_input_icon(flux_fb_t *fb, input_icon_t icon, int cx, int cy,
+                            int s, uint32_t col, uint32_t bg) {
+    switch (icon) {
+        case INICON_COPY: {                       /* zwei Seiten uebereinander */
+            int w = s*9/16, h = s*11/16;
+            fill_round_rect(fb, cx-w/2-3, cy-h/2-3, w, h, 2, col);
+            fill_round_rect(fb, cx-w/2-1, cy-h/2-1, w-4, h-4, 2, bg);
+            fill_round_rect(fb, cx-w/2+3, cy-h/2+3, w, h, 2, col);
+            fill_round_rect(fb, cx-w/2+5, cy-h/2+5, w-4, h-4, 2, bg);
+            break; }
+        case INICON_PASTE: {                      /* Klemmbrett mit Clip */
+            int w = s*5/8, h = s*3/4;
+            fill_round_rect(fb, cx-w/2, cy-h/2, w, h, 2, col);
+            fill_round_rect(fb, cx-w/2+3, cy-h/2+5, w-6, h-8, 1, bg);
+            flux_fb_fill_rect(fb, cx-4, cy-h/2-2, 8, 5, col);   /* Clip oben */
+            break; }
+        case INICON_MIC: {                        /* Kapsel + Buegel + Fuss */
+            int bw = 2*s/5;
+            fill_round_rect(fb, cx-bw/2, cy-s/2, bw, s*3/5, bw/2, col); /* Koerper */
+            draw_ring(fb, cx, cy - s/12, s*7/20, 2, col);              /* Buegel */
+            flux_fb_fill_rect(fb, cx, cy - s/12, 1, 0, col);
+            flux_fb_fill_rect(fb, cx-1, cy+s/4, 2, s/6, col);          /* Stiel */
+            flux_fb_fill_rect(fb, cx-s/5, cy+s*2/5, 2*s/5, 2, col);    /* Fuss */
+            break; }
+        case INICON_CHECK: {                      /* Haken */
+            draw_thick_line(fb, cx-s/3, cy, cx-s/12, cy+s/4, 4, col);
+            draw_thick_line(fb, cx-s/12, cy+s/4, cx+s/3, cy-s/4, 4, col);
+            break; }
+    }
+}
+
 static void draw_input_bar(flux_fb_t *fb, int input_y, const char *prompt_text,
                              int show_mic) {
     flux_fb_fill_rect(fb, 0, input_y, fb->width, INPUT_BAR_H, COL_STATUSBAR);
+    int icy = input_y + INPUT_BAR_H / 2;
 
-    /* Rechts: MIC-Knopf (Assistent) oder OK-Knopf (Bearbeiten) */
+    /* Rechts: Mikrofon-Knopf (Assistent) bzw. Haken-Knopf (Bearbeiten) */
     int mic_x = fb->width - MIC_BTN_W;
     flux_fb_fill_rect(fb, mic_x + 4, input_y + 4, MIC_BTN_W - 8, INPUT_BAR_H - 8,
                        COL_KEY_SPEC);
-    const char *mic_label = show_mic ? "MIC" : "OK";
-    int mlw = flux_fb_text_width(mic_label, 2);
-    flux_fb_text(fb, mic_x + (MIC_BTN_W - mlw) / 2,
-                 input_y + (INPUT_BAR_H - 16) / 2, mic_label, COL_ACCENT, 2);
+    int mcx = mic_x + MIC_BTN_W / 2;
+    if (show_mic) draw_input_icon(fb, INICON_MIC,   mcx, icy, 26, COL_ACCENT, COL_KEY_SPEC);
+    else          draw_input_icon(fb, INICON_CHECK, mcx, icy, 26, COL_ACCENT, COL_KEY_SPEC);
 
-    /* Links vom MIC: [V] Einfuegen */
+    /* Links vom Mikrofon: Einfuegen */
     int paste_x = mic_x - CLIP_BTN_W;
     flux_fb_fill_rect(fb, paste_x + 3, input_y + 4, CLIP_BTN_W - 6, INPUT_BAR_H - 8, COL_KEY);
-    int pw = flux_fb_text_width("V", 2);
-    flux_fb_text(fb, paste_x + (CLIP_BTN_W - pw) / 2,
-                 input_y + (INPUT_BAR_H - 16) / 2, "V", COL_DIM, 2);
+    draw_input_icon(fb, INICON_PASTE, paste_x + CLIP_BTN_W/2, icy, 24, COL_DIM, COL_KEY);
 
-    /* Links vom Einfuegen: [C] Kopieren */
+    /* Links vom Einfuegen: Kopieren */
     int copy_x = paste_x - CLIP_BTN_W;
     flux_fb_fill_rect(fb, copy_x + 3, input_y + 4, CLIP_BTN_W - 6, INPUT_BAR_H - 8, COL_KEY);
-    int cw = flux_fb_text_width("C", 2);
-    flux_fb_text(fb, copy_x + (CLIP_BTN_W - cw) / 2,
-                 input_y + (INPUT_BAR_H - 16) / 2, "C", COL_DIM, 2);
+    draw_input_icon(fb, INICON_COPY, copy_x + CLIP_BTN_W/2, icy, 24, COL_DIM, COL_KEY);
 
     /* Eingabetext links -- auf den Platz vor den Knoepfen beschneiden und
      * das ENDE zeigen (mitlaufender Cursor), damit nichts ueberlappt. */
@@ -2573,63 +2605,55 @@ int flux_ui_search_hit(const flux_fb_t *fb, int x, int y,
 
 /* ---- Spracheingabe-Overlay ----------------------------------------- */
 
-void flux_ui_draw_voice_overlay(flux_fb_t *fb, int elapsed_s) {
+/* Dreieckswelle 0..amp (fuer weiches Pulsieren ohne libm). */
+static int tri_wave(int x, int period, int amp) {
+    if (period < 2) period = 2;
+    int m = x % period; if (m < 0) m += period;
+    int half = period / 2;
+    int v = (m < half) ? m : (period - m);
+    return v * amp / half;
+}
+
+/* Animierter Aufnahme-Indikator: Mikrofon + pulsierende Ringe +
+ * laufende Wellenform. frame zaehlt mit jedem Redraw hoch (~10 fps). */
+void flux_ui_draw_voice_overlay(flux_fb_t *fb, int elapsed_s, int frame) {
     int w = fb->width, h = fb->height;
+    int cx = w / 2, cy = h / 2 - 40;
+    const uint32_t RED = 0xE05252;
 
-    /* Halbdurchsichtiger Schleier */
-    for (int i = 0; i < w * h; i++) {
-        uint32_t px = fb->back[i];
-        fb->back[i] = ((px >> 1) & 0x7F7F7F) | 0x060010;
+    flux_fb_clear(fb, 0x0A0613);
+
+    /* Pulsierende Ringe (weich ueber Dreieckswelle) */
+    for (int i = 0; i < 3; i++) {
+        int r = 58 + i*18 + tri_wave(frame + i*5, 16, 12);
+        uint32_t c = (i == 0) ? RED : (i == 1) ? 0x7A2330 : 0x49202A;
+        draw_ring(fb, cx, cy, r, 3, c);
     }
 
-    /* Pulsierender Ring -- Radius abhaengig von Zeit */
-    int pulse = elapsed_s % 2; /* 0 oder 1 */
-    int cx = w / 2, cy = h / 2;
-    int outer_r = 72 + pulse * 8;
-    int inner_r = 52;
+    /* Mikrofon in der Mitte (leichtes Aufpulsieren) */
+    int msz = 70 + tri_wave(frame, 16, 6);
+    draw_input_icon(fb, INICON_MIC, cx, cy, msz, RED, 0x0A0613);
 
-    for (int dy = -outer_r; dy <= outer_r; dy++) {
-        for (int dx = -outer_r; dx <= outer_r; dx++) {
-            int d2 = dx*dx + dy*dy;
-            if (d2 <= outer_r*outer_r && d2 > inner_r*inner_r) {
-                int px = cx+dx, py = cy+dy;
-                if (px>=0 && px<w && py>=0 && py<h) {
-                    /* Rot mit leichter Transparenz */
-                    uint32_t old = fb->back[py*w+px];
-                    uint32_t r = 0xE0, g = 0x30, b = 0x30;
-                    /* Blend 70% rot + 30% background */
-                    uint32_t br = (old >> 16) & 0xFF;
-                    uint32_t bg = (old >>  8) & 0xFF;
-                    uint32_t bb =  old        & 0xFF;
-                    fb->back[py*w+px] = (((r*7+br*3)/10) << 16) |
-                                        (((g*7+bg*3)/10) <<  8) |
-                                         ((b*7+bb*3)/10);
-                }
-            }
-        }
+    /* Laufende Wellenform unter dem Mikrofon */
+    int bars = 11, bw = 5, gap = 7;
+    int x0 = cx - (bars*bw + (bars-1)*gap) / 2;
+    int wy = cy + 96;
+    for (int i = 0; i < bars; i++) {
+        int bh = 4 + tri_wave(frame*2 + i*3, 14, 30);
+        flux_fb_fill_rect(fb, x0 + i*(bw+gap), wy - bh, bw, bh*2, RED);
     }
-
-    /* Mikrofon-Punkt in der Mitte */
-    int dot_r = 22;
-    for (int dy = -dot_r; dy <= dot_r; dy++)
-        for (int dx = -dot_r; dx <= dot_r; dx++)
-            if (dx*dx+dy*dy <= dot_r*dot_r) {
-                int px=cx+dx, py=cy+dy;
-                if (px>=0 && px<w && py>=0 && py<h)
-                    fb->back[py*w+px] = 0xE05252;
-            }
 
     /* Timer */
     char timer_buf[16];
     int m = elapsed_s / 60, s = elapsed_s % 60;
     snprintf(timer_buf, sizeof(timer_buf), "%02d:%02d", m, s);
     int tw = flux_fb_text_width(timer_buf, 4);
-    flux_fb_text(fb, (w-tw)/2, cy + outer_r + 14, timer_buf, 0xE05252, 4);
+    flux_fb_text(fb, (w-tw)/2, wy + 36, timer_buf, RED, 4);
 
     /* Anweisung */
     const char *hint = "Sprich jetzt -- nochmal tippen zum Stoppen";
     tw = flux_fb_text_width(hint, 2);
-    flux_fb_text(fb, (w-tw)/2, cy + outer_r + 58, hint, COL_DIM, 2);
+    flux_fb_text(fb, (w-tw)/2, wy + 84, hint, COL_DIM, 2);
 
     flux_fb_present(fb);
 }

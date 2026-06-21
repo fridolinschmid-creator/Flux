@@ -249,10 +249,11 @@ int flux_ui_search_hit(const flux_fb_t *fb, int x, int y,
 
 /* ---- Spracheingabe-Overlay ----------------------------------------- */
 
-/* Zeichnet den Aufnahme-Indikator ueber dem aktuellen Screen.
- * elapsed_s: Aufnahmedauer in Sekunden (fuer Timer).
- * Ruft flux_fb_present() auf. */
-void flux_ui_draw_voice_overlay(flux_fb_t *fb, int elapsed_s);
+/* Zeichnet den animierten Aufnahme-Indikator (eigenstaendiges Vollbild:
+ * Mikrofon + pulsierende Ringe + laufende Wellenform).
+ * elapsed_s: Aufnahmedauer in Sekunden (Timer). frame: Animationszaehler
+ * (mit jedem Redraw erhoehen). Ruft flux_fb_present() auf. */
+void flux_ui_draw_voice_overlay(flux_fb_t *fb, int elapsed_s, int frame);
 
 /* ---- Meeting-Mitschrift -------------------------------------------- */
 
