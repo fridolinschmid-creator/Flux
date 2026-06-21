@@ -232,7 +232,7 @@ static void maybe_generate_greeting(void) {
 
 #define FLUX_PIN_LEN       4
 #define FLUX_FILES_MAX     12
-#define FLUX_SETTINGS_N    8    /* E-Mail als 1 Eintrag (Adresse + App-Passwort) */
+#define FLUX_SETTINGS_N    9    /* + Web-Suche (SearXNG-URL) */
 #define VIEWER_CONTENT_MAX 32768
 
 typedef enum {
@@ -263,6 +263,7 @@ static const char *setting_keys[FLUX_SETTINGS_N] = {
     "__active_key",     /* -> api_key | deepseek_key | nvidia_key */
     "__active_model",   /* -> anthropic_model | deepseek_model | nvidia_model */
     "__email",          /* E-Mail-Adresse + App-Passwort (leitet SMTP/IMAP ab) */
+    "searxng_url",      /* Web-Suche ueber eigene SearXNG-Instanz (z.B. MacBook) */
     "theme",    /* teal|blau|lila|orange|gruen|rot */
     "auto_lock",/* 0=aus, 30, 60, 120, 300 Sekunden */
     "tts",      /* 0=aus, 1=ein */
@@ -273,6 +274,7 @@ static const char *setting_labels[FLUX_SETTINGS_N] = {
     "API-Key (Anbieter)",
     "Modell (Anbieter)",
     "E-Mail Einstellungen", /* Adresse + App-Passwort, Rest automatisch */
+    "Web-Suche (SearXNG)",  /* URL der eigenen SearXNG-Instanz */
     "Farbthema",    /* teal/blau/lila/orange/gruen/rot */
     "Auto-Sperre",  /* 0=aus */
     "Sprache (TTS)",/* 0=aus, 1=ein */
@@ -283,6 +285,7 @@ static const int setting_secret[FLUX_SETTINGS_N] = {
     1, /* active key */
     0, /* active model */
     0, /* email (zeigt Adresse) */
+    0, /* searxng_url */
     0, 0, 0,       /* theme/auto_lock/tts */
 };
 

@@ -1210,12 +1210,169 @@ static int tool_mail_read(const char *arg, char *out, size_t cap) {
     return 1;
 }
 
+/* ---- web_search (SearXNG) -------------------------------------------- */
+
+/* Liest den String-Wert von "key" innerhalb von [s, end) nach out.
+ * Gibt 1 bei Erfolg. Dekodiert die wichtigsten JSON-Escapes. */
+static int json_field(const char *s, const char *end, const char *key,
+                      char *out, size_t cap) {
+    char pat[48];
+    snprintf(pat, sizeof(pat), "\"%s\"", key);
+    const char *p = strstr(s, pat);
+    if (!p || p >= end) return 0;
+    p += strlen(pat);
+    while (p < end && (*p == ' ' || *p == ':')) p++;
+    if (p >= end || *p != '"') return 0;
+    p++;
+    size_t o = 0;
+    while (p < end && *p != '"' && o + 1 < cap) {
+        if (*p == '\\' && p + 1 < end) {
+            p++;
+            switch (*p) {
+                case 'n': case 't': case 'r': out[o++] = ' '; break;
+                case 'u':
+                    /* \uXXXX -> UTF-8 (BMP), damit Umlaute/Striche korrekt
+                     * bei der KI ankommen */
+                    if (p + 4 < end) {
+                        char hx[5] = { p[1], p[2], p[3], p[4], 0 };
+                        unsigned v = (unsigned)strtol(hx, NULL, 16);
+                        if (v < 0x80) {
+                            out[o++] = (char)v;
+                        } else if (v < 0x800 && o + 2 < cap) {
+                            out[o++] = (char)(0xC0 | (v >> 6));
+                            out[o++] = (char)(0x80 | (v & 0x3F));
+                        } else if (o + 3 < cap) {
+                            out[o++] = (char)(0xE0 | (v >> 12));
+                            out[o++] = (char)(0x80 | ((v >> 6) & 0x3F));
+                            out[o++] = (char)(0x80 | (v & 0x3F));
+                        }
+                        p += 4;
+                    }
+                    break;
+                default: out[o++] = *p; break;
+            }
+        } else {
+            out[o++] = *p;
+        }
+        p++;
+    }
+    out[o] = '\0';
+    return 1;
+}
+
+/* Parst die SearXNG-JSON-Antwort und schreibt bis zu max_results Treffer
+ * (Titel/URL/Auszug) als lesbaren Text nach out. Gibt die Trefferzahl. */
+static int parse_searxng(const char *resp, char *out, size_t cap, int max_results) {
+    const char *p = strstr(resp, "\"results\"");
+    if (!p) return 0;
+    p = strchr(p, '[');
+    if (!p) return 0;
+    p++;
+
+    int n = 0;
+    while (*p && n < max_results) {
+        while (*p && *p != '{' && *p != ']') p++;
+        if (*p != '{') break;
+
+        /* zugehoeriges '}' finden -- String-bewusst (Klammern in Werten ignorieren) */
+        const char *obj = p, *q = p;
+        int depth = 0, instr = 0;
+        for (; *q; q++) {
+            if (instr) { if (*q == '\\') { if (q[1]) q++; continue; } if (*q == '"') instr = 0; continue; }
+            if (*q == '"') { instr = 1; continue; }
+            if (*q == '{') depth++;
+            else if (*q == '}') { depth--; if (depth == 0) { q++; break; } }
+        }
+        const char *objend = q;
+
+        char title[200] = {0}, url[400] = {0}, content[300] = {0};
+        int ht = json_field(obj, objend, "title", title, sizeof(title));
+        int hu = json_field(obj, objend, "url", url, sizeof(url));
+        json_field(obj, objend, "content", content, sizeof(content));
+
+        if (ht || hu) {
+            size_t ol = strlen(out);
+            snprintf(out + ol, cap - ol, "%d. %s\n   %s\n%s%s%s",
+                     n + 1, title[0] ? title : "(ohne Titel)",
+                     url,
+                     content[0] ? "   " : "", content, content[0] ? "\n" : "");
+            n++;
+        }
+        p = objend;
+    }
+    return n;
+}
+
+static int tool_web_search(const char *arg, char *out, size_t cap) {
+    if (!arg || !*arg) {
+        snprintf(out, cap, "Fehler: kein Suchbegriff angegeben");
+        return 1;
+    }
+    char base[256] = {0};
+    if (!flux_config_get("searxng_url", base, sizeof(base)) || !base[0]) {
+        snprintf(out, cap,
+                 "Keine SearXNG-Instanz konfiguriert. Trage searxng_url in den "
+                 "Einstellungen ein (z.B. http://macbook.local:8888) -- die Instanz "
+                 "laeuft auf deinem MacBook und muss das JSON-Format erlauben.");
+        return 1;
+    }
+    size_t bl = strlen(base);
+    while (bl > 0 && base[bl-1] == '/') base[--bl] = '\0';
+
+    CURL *curl = curl_easy_init();
+    if (!curl) { snprintf(out, cap, "Fehler: curl nicht verfuegbar"); return 1; }
+
+    char *q = curl_easy_escape(curl, arg, 0);
+    char url[1024];
+    snprintf(url, sizeof(url),
+             "%s/search?q=%s&format=json&language=de&safesearch=1",
+             base, q ? q : "");
+    if (q) curl_free(q);
+
+    char respbuf[16384]; respbuf[0] = '\0';
+    struct membuf mb = { .data = respbuf, .len = 0, .cap = sizeof(respbuf) };
+
+    curl_easy_setopt(curl, CURLOPT_URL, url);
+    curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, curl_write_cb);
+    curl_easy_setopt(curl, CURLOPT_WRITEDATA, &mb);
+    curl_easy_setopt(curl, CURLOPT_TIMEOUT, 12L);
+    curl_easy_setopt(curl, CURLOPT_USERAGENT, "flux-os/1.0");
+    curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
+
+    CURLcode res = curl_easy_perform(curl);
+    long http = 0;
+    curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &http);
+    curl_easy_cleanup(curl);
+
+    if (res != CURLE_OK) {
+        snprintf(out, cap,
+                 "SearXNG nicht erreichbar (%s). Laeuft die Instanz auf dem "
+                 "MacBook und ist das Geraet im selben Netz?",
+                 curl_easy_strerror(res));
+        return 1;
+    }
+    if (http == 403 || strstr(respbuf, "\"results\"") == NULL) {
+        snprintf(out, cap,
+                 "Keine Treffer oder JSON-Format nicht aktiviert. Erlaube in der "
+                 "SearXNG-settings.yml 'formats: [html, json]' und starte neu.");
+        return 1;
+    }
+
+    char header[300];
+    snprintf(header, sizeof(header), "Web-Suchergebnisse fuer \"%s\":\n", arg);
+    snprintf(out, cap, "%s", header);
+    int n = parse_searxng(respbuf, out, cap, 5);
+    if (n == 0) snprintf(out, cap, "Keine Treffer fuer \"%s\".", arg);
+    return 1;
+}
+
 /* ---- Dispatch -------------------------------------------------------- */
 
 int flux_tool_exec(const char *name, const char *arg,
                    char *out, size_t out_cap) {
     if (strcmp(name, "mail_unread")      == 0) return tool_mail_unread(arg, out, out_cap);
     if (strcmp(name, "mail_read")        == 0) return tool_mail_read(arg, out, out_cap);
+    if (strcmp(name, "web_search")       == 0) return tool_web_search(arg, out, out_cap);
     if (strcmp(name, "date_time")        == 0) return tool_date_time(arg, out, out_cap);
     if (strcmp(name, "weather")          == 0) return tool_weather(arg, out, out_cap);
     if (strcmp(name, "file_read")        == 0) return tool_file_read(arg, out, out_cap);
@@ -1289,7 +1446,9 @@ const char *flux_tools_description(void) {
         "  memory_delete   -- Gespeicherte Info loeschen. ARG: Suchbegriff\n"
         "  mail_unread     -- Ungelesene E-Mails abrufen (Von/Betreff/Datum, fuer Zusammenfassungen). ARG: (leer)\n"
         "  mail_read       -- Text einer E-Mail lesen. ARG: UID (aus mail_unread)\n"
-        "Verwende Tools NUR wenn Echtzeitdaten benoetigt werden (Wetter, Dateien, Berechnung usw.). "
+        "  web_search      -- Im Internet suchen (aktuelle Infos/News/Fakten). ARG: Suchbegriff\n"
+        "Verwende Tools NUR wenn Echtzeitdaten benoetigt werden (Wetter, Dateien, Berechnung, "
+        "aktuelle Infos via web_search usw.). "
         "Wenn der Nutzer dir persoenliche Infos nennt (Name, Geburtstag, Praeferenz), "
         "speichere diese SOFORT mit memory_save -- ohne explizite Aufforderung. "
         "Normale Fragen beantworte ohne Tools.";

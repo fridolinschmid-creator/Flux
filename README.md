@@ -272,6 +272,35 @@ Wer die Felder lieber direkt setzt, kann das weiterhin in
 `/etc/flux/flux.conf` tun (`smtp_host/port/user/pass/from`,
 `imap_host/port/user/pass`).
 
+### Web-Suche (SearXNG, optional)
+Die KI-Anbieter (DeepSeek/NVIDIA/Anthropic) suchen über die API **nicht**
+selbst im Netz. Flux bringt dafür ein eigenes, anbieter-unabhängiges Tool
+`web_search` mit, das eine **eigene SearXNG-Instanz** abfragt — bewusst
+selbst gehostet (eigener Index, keine Profilbildung, kein API-Key im Gerät).
+
+Empfohlenes Setup: SearXNG läuft auf dem **MacBook** (Backend), das Flux-Gerät
+fragt es im selben Netz ab.
+
+1. SearXNG auf dem MacBook starten (am einfachsten via Docker):
+   ```bash
+   docker run --rm -p 8888:8080 -v ./searxng:/etc/searxng searxng/searxng
+   ```
+2. In `searxng/settings.yml` das **JSON-Format aktivieren** (sonst antwortet
+   SearXNG mit HTTP 403):
+   ```yaml
+   search:
+     formats:
+       - html
+       - json
+   ```
+3. In Flux unter **Einstellungen → „Web-Suche (SearXNG)"** die URL eintragen,
+   z. B. `http://macbook.local:8888` (oder die IP des MacBooks). Direkt in
+   `/etc/flux/flux.conf`: `searxng_url=http://macbook.local:8888`.
+
+Danach kann jeder KI-Anbieter über `web_search` aktuelle Infos holen
+(„Suche im Internet nach …"). Später lässt sich dieselbe Konfiguration auf
+einen produktiven SearXNG-/Such-Proxy umstellen, ohne Code-Änderung.
+
 ---
 
 ## Roadmap
