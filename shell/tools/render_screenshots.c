@@ -58,6 +58,12 @@ int main(int argc, char *argv[]) {
     flux_ui_draw_assistant(&fb, "", "", "", 0);
     save_ppm(&fb, outdir, "04_assistent_leer");
 
+    /* 04b -- Homescreen-Eingangsanimation (Knoepfe poppen auf) */
+    flux_ui_set_quick_reveal(2, 50);
+    flux_ui_draw_assistant(&fb, "", "", "", 0);
+    save_ppm(&fb, outdir, "04b_home_anim");
+    flux_ui_set_quick_reveal(4, 100);
+
     /* 05 -- Assistent: tippt Frage */
     flux_ui_draw_assistant(&fb, "", "schreibe eine E-Mail an Max", "", 0);
     save_ppm(&fb, outdir, "05_assistent_tipp");

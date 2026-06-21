@@ -40,6 +40,8 @@ void flux_ui_set_accent(uint32_t rgb) { g_accent = rgb; }
 /* Vorwaerts-Deklarationen (Definitionen weiter unten im Animations-Teil). */
 static void fill_circle(flux_fb_t *fb, int cx, int cy, int r, uint32_t col);
 static void draw_ring(flux_fb_t *fb, int cx, int cy, int r, int thick, uint32_t col);
+static void draw_setting_icon(flux_fb_t *fb, int icon, int cx, int cy, int s, uint32_t col);
+static void fill_round_rect(flux_fb_t *fb, int x, int y, int w, int h, int r, uint32_t col);
 
 /* ---- Statusleiste (oben, fast alle Bildschirme) -------------------- */
 
@@ -465,15 +467,66 @@ int flux_ui_pin_hit(const flux_fb_t *fb, int x, int y, char *out_digit, int *out
 
 /* ---- Schnellzugriff-Leiste (nur Assistenten-Bildschirm) -------------- */
 
+/* Eingangsanimation der Schnellzugriff-Knoepfe: Anzahl voll sichtbarer
+ * Knoepfe und Aufpopp-Skalierung des hereinkommenden. Standard = alle voll. */
+static int s_quick_shown = 4;
+static int s_quick_grow  = 100;
+void flux_ui_set_quick_reveal(int shown, int grow_pct) {
+    s_quick_shown = shown; s_quick_grow = grow_pct;
+}
+
+/* Kleine Navigations-Symbole fuer die Schnellzugriff-Leiste. */
+typedef enum { NAV_GEAR, NAV_FOLDER, NAV_CALENDAR, NAV_PERSON } nav_icon_t;
+
+static void draw_nav_icon(flux_fb_t *fb, nav_icon_t kind, int cx, int cy, int s,
+                          uint32_t col) {
+    if (s < 6) return;
+    switch (kind) {
+        case NAV_GEAR: {
+            draw_ring(fb, cx, cy, s*2/5, 3, col);
+            fill_circle(fb, cx, cy, s/8, col);
+            for (int a = 0; a < 8; a++) {                 /* Zaehne */
+                int dx = (a==0||a==4)?0 : (a<4?1:-1);
+                int dy = (a==2||a==6)?0 : (a<2||a>6?-1:1);
+                flux_fb_fill_rect(fb, cx + dx*s/2 - 1, cy + dy*s/2 - 1, 3, 3, col);
+            }
+            break; }
+        case NAV_FOLDER: {
+            int w = s*4/5, h = s*3/5;
+            flux_fb_fill_rect(fb, cx-w/2, cy-h/2, w/2, 4, col);          /* Reiter */
+            fill_round_rect(fb, cx-w/2, cy-h/2+3, w, h, 3, col);
+            flux_fb_fill_rect(fb, cx-w/2+3, cy-h/2+8, w-6, h-11, COL_KEY);/* Innen */
+            break; }
+        case NAV_CALENDAR: {
+            int w = s*4/5, h = s*3/4;
+            fill_round_rect(fb, cx-w/2, cy-h/2, w, h, 3, col);
+            flux_fb_fill_rect(fb, cx-w/2+3, cy-h/2+7, w-6, h-10, COL_KEY);
+            flux_fb_fill_rect(fb, cx-w/4, cy-h/2-3, 3, 6, col);          /* Ringe */
+            flux_fb_fill_rect(fb, cx+w/4, cy-h/2-3, 3, 6, col);
+            break; }
+        case NAV_PERSON: {
+            fill_circle(fb, cx, cy-s/5, s/5, col);                       /* Kopf */
+            int w = s*3/5;
+            fill_round_rect(fb, cx-w/2, cy+s/8, w, s/3, 6, col);         /* Schultern */
+            break; }
+    }
+}
+
 static void draw_quickrow(flux_fb_t *fb) {
     int y = STATUSBAR_H;
     int bw = fb->width / 4;
     static const char *labels[4] = { "Einst.", "Dateien", "Kalender", "Kontakte" };
+    static const nav_icon_t icons[4] = { NAV_GEAR, NAV_FOLDER, NAV_CALENDAR, NAV_PERSON };
     for (int i = 0; i < 4; i++) {
         int bx = i * bw;
         flux_fb_fill_rect(fb, bx + 2, y + 2, bw - 4, QUICKROW_H - 4, COL_KEY);
+
+        int grow = (i < s_quick_shown) ? 100 : (i == s_quick_shown ? s_quick_grow : 0);
+        if (grow <= 0) continue;             /* noch nicht hereingekommen */
+        int isz = 22 * grow / 100;
+        draw_nav_icon(fb, icons[i], bx + bw/2, y + 18, isz, COL_ACCENT);
         int tw = flux_fb_text_width(labels[i], 2);
-        flux_fb_text(fb, bx + (bw - tw) / 2, y + (QUICKROW_H - 16) / 2, labels[i], COL_TEXT, 2);
+        flux_fb_text(fb, bx + (bw - tw) / 2, y + QUICKROW_H - 22, labels[i], COL_TEXT, 2);
     }
 }
 
@@ -793,12 +846,14 @@ void flux_ui_draw_assistant(flux_fb_t *fb, const char *last_q,
     int has_a = (answer && *answer);
 
     if (!has_q && !thinking && !has_a) {
-        /* Leerer Zustand: kleine Kopfzeile + Tipp-Hinweis */
-        flux_fb_text(fb, 16, cy, "Frag Flux", COL_ACCENT, 3);
-        cy += 36;
-        draw_wrapped(fb, 16, cy, fb->width - 32,
-                     "Tippe deine Frage. Sage \"Einstellungen\" oder "
-                     "\"Dateien\" fuer direkten Zugriff.",
+        /* Leerer Zustand: grosses KI-Symbol + Begruessung mittig */
+        int icy = chat_top + (input_y - chat_top) / 2 - 30;
+        draw_setting_icon(fb, FLUX_SICON_AI, fb->width / 2, icy, 64, COL_ACCENT);
+        const char *h = "Frag Flux";
+        int hw = flux_fb_text_width(h, 3);
+        flux_fb_text(fb, (fb->width - hw) / 2, icy + 52, h, COL_ACCENT, 3);
+        draw_wrapped(fb, 24, icy + 86, fb->width - 48,
+                     "Tippe deine Frage oder nutze die Symbole oben.",
                      COL_DIM, 2, 26);
     } else {
         /* Nutzer-Blase rechts (gruen-teal) */

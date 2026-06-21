@@ -70,6 +70,10 @@ int flux_ui_kbd_hit(const flux_fb_t *fb, int x, int y,
  * 1 = "Einstellungen", 2 = "Dateien". */
 int flux_ui_quickrow_hit(const flux_fb_t *fb, int x, int y);
 
+/* Eingangsanimation der Schnellzugriff-Knoepfe: 'shown' Knoepfe voll,
+ * der naechste auf grow_pct (0-100). Standard 4/100 (alle sichtbar). */
+void flux_ui_set_quick_reveal(int shown, int grow_pct);
+
 /* Mikrofon-Knopf rechts neben der Eingabezeile. */
 int flux_ui_mic_hit(const flux_fb_t *fb, int x, int y);
 

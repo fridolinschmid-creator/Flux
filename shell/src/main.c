@@ -148,6 +148,28 @@ static void animate_settings_intro(flux_fb_t *fb, flux_input_t *in,
     flux_ui_draw_settings(fb, labels, values, n);  /* sauberes Endbild */
 }
 
+/* Eingangsanimation des Homescreens nach dem Entsperren: die vier
+ * Schnellzugriff-Knoepfe poppen nacheinander auf. Tap = 4x, zweiter Tap
+ * ueberspringt. Setzt die Anzeige danach wieder auf "alle sichtbar". */
+static void animate_home_intro(flux_fb_t *fb, flux_input_t *in,
+                               const char *last_q, const char *input_buf,
+                               const char *answer_buf) {
+    const int FPB = 4;             /* Frames pro Knopf */
+    int base_delay = 16000, speed = 1;
+    int total = 4 * FPB;
+    for (int f = 0; f <= total; f++) {
+        flux_event_t ev = flux_input_poll(in);
+        if (ev.type == FLUX_EV_TAP) { if (speed >= 4) break; speed = 4; }
+        int shown = f / FPB;
+        int grow  = (f % FPB) * 100 / FPB;
+        flux_ui_set_quick_reveal(shown, grow);
+        flux_ui_draw_assistant(fb, last_q, input_buf, answer_buf, 0);
+        usleep(base_delay / speed);
+    }
+    flux_ui_set_quick_reveal(4, 100);
+    flux_ui_draw_assistant(fb, last_q, input_buf, answer_buf, 0);
+}
+
 /* Slide-in-von-links fuer Zurueck-Navigationen (neuer Screen kommt von links). */
 static void animate_slide_from_left(flux_fb_t *fb, uint32_t *old_buf) {
     if (!old_buf || !fb->mmio) return;
@@ -1292,10 +1314,12 @@ int main(void) {
                     screen = FLUX_SCREEN_ASSISTANT;
                     input_buf[0] = '\0';
                     answer_buf[0] = '\0';
+                    flux_ui_set_quick_reveal(0, 0);     /* Knoepfe erst verbergen */
                     uint32_t *old = capture_frame(&fb);
                     flux_ui_draw_assistant(&fb, last_q, input_buf, answer_buf, 0);
                     animate_slide_in(&fb, old);
                     free(old);
+                    animate_home_intro(&fb, &in, last_q, input_buf, answer_buf);
                 }
             }
             continue;
@@ -1335,10 +1359,12 @@ int main(void) {
                     screen = FLUX_SCREEN_ASSISTANT;
                     input_buf[0] = '\0';
                     answer_buf[0] = '\0';
+                    flux_ui_set_quick_reveal(0, 0);
                     uint32_t *old = capture_frame(&fb);
                     flux_ui_draw_assistant(&fb, last_q, input_buf, answer_buf, 0);
                     animate_slide_in(&fb, old);
                     free(old);
+                    animate_home_intro(&fb, &in, last_q, input_buf, answer_buf);
                 } else {
                     pin_error = 1;
                     flux_ui_draw_pin(&fb, pin_len, pin_error);
