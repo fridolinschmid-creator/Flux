@@ -121,6 +121,33 @@ static void animate_action(flux_fb_t *fb, flux_anim_kind_t kind,
     }
 }
 
+/* Eingangsanimation der Einstellungen: die Zeilen fliegen nacheinander
+ * (abwechselnd von links/rechts) herein, ihr Symbol "poppt" auf. Ein Tap
+ * beschleunigt auf 4x, ein weiterer Tap ueberspringt den Rest -- damit man
+ * produktiv bleibt. labels/values muessen vorher geladen sein. */
+static void animate_settings_intro(flux_fb_t *fb, flux_input_t *in,
+                                   const char **labels, const char **values, int n) {
+    const int FPR = 5;             /* Frames pro Zeile */
+    int base_delay = 16000;        /* ~60 fps */
+    int speed = 1;
+    int total = n * FPR;
+    for (int f = 0; f <= total; f++) {
+        flux_event_t ev = flux_input_poll(in);
+        if (ev.type == FLUX_EV_TAP) {
+            if (speed >= 4) break;  /* zweiter Tap -> ueberspringen */
+            speed = 4;              /* erster Tap -> 4x schneller */
+        }
+        int shown = f / FPR;
+        int sub   = f % FPR;
+        int slide = (FPR - sub) * 80 / FPR;      /* 80..0 px */
+        int grow  = sub * 100 / FPR;             /* 0..100 % */
+        int dir   = (shown % 2) ? -1 : 1;        /* abwechselnd links/rechts */
+        flux_ui_draw_settings_reveal(fb, labels, values, n, shown, slide, grow, dir);
+        usleep(base_delay / speed);
+    }
+    flux_ui_draw_settings(fb, labels, values, n);  /* sauberes Endbild */
+}
+
 /* Slide-in-von-links fuer Zurueck-Navigationen (neuer Screen kommt von links). */
 static void animate_slide_from_left(flux_fb_t *fb, uint32_t *old_buf) {
     if (!old_buf || !fb->mmio) return;
@@ -301,6 +328,20 @@ static const int setting_secret[FLUX_SETTINGS_N] = {
     0, /* wifi (zeigt Verbindung) */
     0, /* searxng_url */
     0, 0, 0,       /* theme/auto_lock/tts */
+};
+
+/* Symbol je Einstellungs-Zeile (parallel zu setting_keys). */
+static const int setting_icons[FLUX_SETTINGS_N] = {
+    FLUX_SICON_LOCK,   /* pin */
+    FLUX_SICON_AI,     /* ai_provider */
+    FLUX_SICON_KEY,    /* __active_key */
+    FLUX_SICON_CHIP,   /* __active_model */
+    FLUX_SICON_MAIL,   /* __email */
+    FLUX_SICON_WIFI,   /* __wifi */
+    FLUX_SICON_SEARCH, /* searxng_url */
+    FLUX_SICON_THEME,  /* theme */
+    FLUX_SICON_CLOCK,  /* auto_lock */
+    FLUX_SICON_SPEAKER,/* tts */
 };
 
 /* Aktuell gewaehlter Anbieter aus der Config (Standard: anthropic). */
@@ -1062,6 +1103,7 @@ int main(void) {
 
     /* Farbthema vor dem ersten Zeichnen laden */
     apply_theme();
+    flux_ui_set_setting_icons(setting_icons);   /* Symbole fuer Einstellungen */
     maybe_generate_greeting();
     /* Kalender auf aktuellen Monat initialisieren */
     {
@@ -2173,11 +2215,9 @@ int main(void) {
             if (quick == 1) {
                 load_settings_values();
                 animate_ripple(&fb, ev.x, ev.y);
-                uint32_t *old = capture_frame(&fb);
                 screen = FLUX_SCREEN_SETTINGS;
-                flux_ui_draw_settings(&fb, setting_labels, setting_values, FLUX_SETTINGS_N);
-                animate_slide_in(&fb, old);
-                free(old);
+                animate_settings_intro(&fb, &in, setting_labels, setting_values,
+                                       FLUX_SETTINGS_N);
                 continue;
             } else if (quick == 2) {
                 strcpy(files_path, "/");
@@ -2281,11 +2321,9 @@ int main(void) {
             if (strcasecmp(input_buf, "einstellungen") == 0 || strcasecmp(input_buf, "settings") == 0) {
                 input_buf[0] = '\0';
                 load_settings_values();
-                uint32_t *old = capture_frame(&fb);
                 screen = FLUX_SCREEN_SETTINGS;
-                flux_ui_draw_settings(&fb, setting_labels, setting_values, FLUX_SETTINGS_N);
-                animate_slide_in(&fb, old);
-                free(old);
+                animate_settings_intro(&fb, &in, setting_labels, setting_values,
+                                       FLUX_SETTINGS_N);
                 continue;
             }
             if (strcasecmp(input_buf, "dateien") == 0 || strcasecmp(input_buf, "files") == 0) {

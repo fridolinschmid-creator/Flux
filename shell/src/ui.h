@@ -99,6 +99,23 @@ void flux_ui_set_edit_title(const char *title);
  * dem Aufruf, ui.c weiss nichts ueber die Konfigurationsdatei). */
 
 void flux_ui_draw_settings(flux_fb_t *fb, const char **labels, const char **values, int n);
+
+/* Symbol-IDs fuer die Einstellungs-Zeilen (links neben dem Text). */
+enum {
+    FLUX_SICON_NONE = 0, FLUX_SICON_LOCK, FLUX_SICON_AI, FLUX_SICON_KEY,
+    FLUX_SICON_CHIP, FLUX_SICON_MAIL, FLUX_SICON_WIFI, FLUX_SICON_SEARCH,
+    FLUX_SICON_THEME, FLUX_SICON_CLOCK, FLUX_SICON_SPEAKER,
+};
+
+/* Setzt das Symbol-Array fuer die Einstellungen (parallel zu labels). */
+void flux_ui_set_setting_icons(const int *icons);
+
+/* Zwischenframe der Einstellungs-Eingangsanimation: rows 0..shown-1 voll,
+ * die hereinkommende Zeile 'shown' um slide_px versetzt, ihr Symbol auf
+ * grow_pct (0-100) skaliert. dir: +1 von rechts, -1 von links. */
+void flux_ui_draw_settings_reveal(flux_fb_t *fb, const char **labels,
+                                  const char **values, int n, int shown,
+                                  int slide_px, int grow_pct, int dir);
 /* Gibt 1 zurueck und setzt *out_index bei Treffer auf eine Zeile,
  * oder setzt *out_back auf 1, wenn der Zurueck-Knopf getroffen wurde. */
 int flux_ui_list_hit(const flux_fb_t *fb, int x, int y, int n, int *out_index, int *out_back);

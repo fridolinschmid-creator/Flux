@@ -37,6 +37,10 @@ void flux_ui_set_accent(uint32_t rgb) { g_accent = rgb; }
 #define LIST_MAX_ROWS 12
 #define PIN_LEN 4
 
+/* Vorwaerts-Deklarationen (Definitionen weiter unten im Animations-Teil). */
+static void fill_circle(flux_fb_t *fb, int cx, int cy, int r, uint32_t col);
+static void draw_ring(flux_fb_t *fb, int cx, int cy, int r, int thick, uint32_t col);
+
 /* ---- Statusleiste (oben, fast alle Bildschirme) -------------------- */
 
 /* Liest Batteriefuellstand aus sysfs (0-100, oder -1 wenn nicht verfuegbar). */
@@ -1088,6 +1092,100 @@ int flux_ui_list_hit(const flux_fb_t *fb, int x, int y, int n, int *out_index, i
 
 /* ---- Einstellungen ----------------------------------------------------- */
 
+static const int *s_setting_icons = NULL;
+void flux_ui_set_setting_icons(const int *icons) { s_setting_icons = icons; }
+
+/* Zeichnet ein kleines Symbol (zentriert bei cx,cy, Kantenmass s). */
+static void draw_setting_icon(flux_fb_t *fb, int icon, int cx, int cy, int s,
+                              uint32_t col) {
+    if (s < 6) return;
+    switch (icon) {
+        case FLUX_SICON_LOCK: {
+            int bw = s*7/10, bh = s/2;
+            draw_ring(fb, cx, cy - bh/4, s*7/20, 2, col);                 /* Buegel */
+            fill_round_rect(fb, cx-bw/2, cy-bh/4, bw, bh, 3, col);        /* Koerper */
+            break; }
+        case FLUX_SICON_AI: {
+            int bw = s*7/10, bh = s*6/10;
+            flux_fb_fill_rect(fb, cx-1, cy-bh/2 - s/6, 2, s/6, col);      /* Antenne */
+            fill_round_rect(fb, cx-bw/2, cy-bh/2, bw, bh, 4, col);        /* Kopf */
+            fill_circle(fb, cx-bw/5, cy, s/12+1, COL_BG);                 /* Augen */
+            fill_circle(fb, cx+bw/5, cy, s/12+1, COL_BG);
+            break; }
+        case FLUX_SICON_KEY: {
+            draw_ring(fb, cx-s/5, cy, s/4, 2, col);                       /* Griff */
+            flux_fb_fill_rect(fb, cx-s/12, cy-1, s/2, 3, col);            /* Schaft */
+            flux_fb_fill_rect(fb, cx+s/6, cy+2, 2, s/6, col);            /* Zaehne */
+            flux_fb_fill_rect(fb, cx+s/3, cy+2, 2, s/6, col);
+            break; }
+        case FLUX_SICON_CHIP: {
+            int b = s*6/10;
+            flux_fb_fill_rect(fb, cx-b/2, cy-b/2, b, b, col);
+            flux_fb_fill_rect(fb, cx-b/6, cy-b/6, b/3, b/3, COL_BG);     /* Kern */
+            for (int i = -1; i <= 1; i++) {                              /* Pins */
+                flux_fb_fill_rect(fb, cx+i*b/3-1, cy-b/2-3, 2, 3, col);
+                flux_fb_fill_rect(fb, cx+i*b/3-1, cy+b/2,   2, 3, col);
+                flux_fb_fill_rect(fb, cx-b/2-3, cy+i*b/3-1, 3, 2, col);
+                flux_fb_fill_rect(fb, cx+b/2,   cy+i*b/3-1, 3, 2, col);
+            }
+            break; }
+        case FLUX_SICON_MAIL: {
+            int w = s*7/10, h = s/2;
+            flux_fb_fill_rect(fb, cx-w/2, cy-h/2, w, h, col);
+            draw_thick_line(fb, cx-w/2, cy-h/2, cx, cy, 2, COL_BG);      /* Klappe */
+            draw_thick_line(fb, cx+w/2, cy-h/2, cx, cy, 2, COL_BG);
+            break; }
+        case FLUX_SICON_WIFI: {
+            int bw = s/6;
+            for (int i = 0; i < 3; i++) {
+                int hh = s/5 + i*s/5;
+                flux_fb_fill_rect(fb, cx-s/3 + i*(bw+2), cy+s/4 - hh, bw, hh, col);
+            }
+            break; }
+        case FLUX_SICON_SEARCH: {
+            draw_ring(fb, cx-2, cy-2, s/4, 2, col);                      /* Lupe */
+            draw_thick_line(fb, cx+s/12, cy+s/12, cx+s/3, cy+s/3, 3, col);
+            break; }
+        case FLUX_SICON_THEME: {                                        /* Farbpalette */
+            fill_circle(fb, cx-s/6, cy-s/12, s/6, col);
+            fill_circle(fb, cx+s/6, cy-s/12, s/6, 0xF97316);
+            fill_circle(fb, cx,      cy+s/6, s/6, 0xA855F7);
+            break; }
+        case FLUX_SICON_CLOCK: {
+            draw_ring(fb, cx, cy, s*2/5, 2, col);
+            draw_thick_line(fb, cx, cy, cx, cy-s/4, 2, col);
+            draw_thick_line(fb, cx, cy, cx+s/5, cy, 2, col);
+            break; }
+        case FLUX_SICON_SPEAKER: {
+            flux_fb_fill_rect(fb, cx-s/3, cy-s/8, s/6, s/4, col);        /* Box */
+            for (int i = 0; i < s/4; i++)                                /* Kegel */
+                flux_fb_fill_rect(fb, cx-s/3+s/6+i, cy-s/8-i, 2, s/4+2*i, col);
+            draw_ring(fb, cx+s/6, cy, s/4, 2, col);                      /* Schallwelle */
+            break; }
+        default: break;
+    }
+}
+
+/* Zeichnet eine Einstellungs-Zeile. x_off verschiebt sie horizontal
+ * (Eingangsanimation), grow_pct skaliert das Symbol (0-100), dim dimmt. */
+static void draw_setting_row(flux_fb_t *fb, list_row_geom_t r, const char *label,
+                             const char *value, int icon, int x_off,
+                             int grow_pct, int dim) {
+    int x = r.x + x_off;
+    uint32_t row_col = dim ? 0x141A24 : COL_ROW;
+    flux_fb_fill_rect(fb, x, r.y, r.w, r.h, row_col);
+
+    int text_x = x + 14;
+    if (icon && icon != FLUX_SICON_NONE) {
+        int s = 26 * grow_pct / 100;
+        draw_setting_icon(fb, icon, x + 28, r.y + r.h/2, s,
+                          dim ? COL_DIM : COL_ACCENT);
+        text_x = x + 56;
+    }
+    flux_fb_text(fb, text_x, r.y + 8, label, dim ? COL_DIM : COL_TEXT, 2);
+    flux_fb_text(fb, text_x, r.y + r.h - 24, value, COL_DIM, 2);
+}
+
 void flux_ui_draw_settings(flux_fb_t *fb, const char **labels, const char **values, int n) {
     flux_fb_clear(fb, COL_BG);
     draw_statusbar(fb);
@@ -1095,11 +1193,29 @@ void flux_ui_draw_settings(flux_fb_t *fb, const char **labels, const char **valu
 
     list_row_geom_t rows[LIST_MAX_ROWS];
     int rn = build_list_rows(fb, n, rows);
-    for (int i = 0; i < rn; i++) {
-        flux_fb_fill_rect(fb, rows[i].x, rows[i].y, rows[i].w, rows[i].h, COL_ROW);
-        flux_fb_text(fb, rows[i].x + 12, rows[i].y + 8, labels[i], COL_TEXT, 2);
-        flux_fb_text(fb, rows[i].x + 12, rows[i].y + rows[i].h - 24, values[i], COL_DIM, 2);
-    }
+    for (int i = 0; i < rn; i++)
+        draw_setting_row(fb, rows[i], labels[i], values[i],
+                         s_setting_icons ? s_setting_icons[i] : 0, 0, 100, 0);
+    draw_back_bar(fb, "Zurueck");
+    flux_fb_present(fb);
+}
+
+void flux_ui_draw_settings_reveal(flux_fb_t *fb, const char **labels,
+                                  const char **values, int n, int shown,
+                                  int slide_px, int grow_pct, int dir) {
+    flux_fb_clear(fb, COL_BG);
+    draw_statusbar(fb);
+    flux_fb_text(fb, 16, STATUSBAR_H + 12, "Einstellungen", COL_ACCENT, 3);
+
+    list_row_geom_t rows[LIST_MAX_ROWS];
+    int rn = build_list_rows(fb, n, rows);
+    for (int i = 0; i < rn && i < shown; i++)
+        draw_setting_row(fb, rows[i], labels[i], values[i],
+                         s_setting_icons ? s_setting_icons[i] : 0, 0, 100, 0);
+    if (shown < rn)
+        draw_setting_row(fb, rows[shown], labels[shown], values[shown],
+                         s_setting_icons ? s_setting_icons[shown] : 0,
+                         dir * slide_px, grow_pct < 10 ? 10 : grow_pct, 1);
     draw_back_bar(fb, "Zurueck");
     flux_fb_present(fb);
 }
