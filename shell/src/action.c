@@ -14,17 +14,27 @@ const char *flux_action_type_label(flux_action_type_t type) {
 }
 
 static flux_action_type_t parse_type(const char *s) {
-    if (strcasecmp(s, "mail") == 0) return FLUX_ACTION_MAIL;
+    while (*s == ' ') s++;
+    if (strcasecmp(s, "mail") == 0 || strcasecmp(s, "email") == 0 ||
+        strcasecmp(s, "e-mail") == 0) return FLUX_ACTION_MAIL;
     if (strcasecmp(s, "sms") == 0)  return FLUX_ACTION_SMS;
-    if (strcasecmp(s, "call") == 0) return FLUX_ACTION_CALL;
+    if (strcasecmp(s, "call") == 0 || strcasecmp(s, "anruf") == 0) return FLUX_ACTION_CALL;
     return FLUX_ACTION_NONE;
 }
 
 int flux_action_parse(const char *answer, flux_action_t *out) {
     memset(out, 0, sizeof(*out));
-    if (strncmp(answer, "ACTION:", 7) != 0) return 0;
 
-    const char *p = answer + 7;
+    /* "ACTION:" am Anfang ODER an einem Zeilenanfang finden -- manche
+     * Modelle schreiben etwas Vortext vor den Aktionsblock. */
+    const char *a = answer;
+    if (strncmp(a, "ACTION:", 7) != 0) {
+        const char *nl = strstr(a, "\nACTION:");
+        if (!nl) return 0;
+        a = nl + 1;
+    }
+
+    const char *p = a + 7;
     const char *line_end = strchr(p, '\n');
     if (!line_end) return 0;
 

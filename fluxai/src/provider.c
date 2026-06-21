@@ -25,6 +25,10 @@
  * konfigurierbar (mit sinnvollem Standard).
  * ========================================================================== */
 
+/* Maximale Anzahl aufeinanderfolgender Tool-Schritte pro Anfrage
+ * (Agenten-Schleife) -- verhindert Endlosschleifen. */
+#define FLUX_MAX_TOOL_STEPS 6
+
 typedef enum { FMT_ANTHROPIC, FMT_OPENAI } api_format_t;
 
 typedef struct {
@@ -348,28 +352,42 @@ static int api_call(const flux_provider_def_t *prov, const char *api_key,
     return ok;
 }
 
-/* Prueft ob die KI-Antwort ein Tool-Aufruf ist und parst ihn.
- * Erwartet: "TOOL:<name>\nARG:<arg>" */
+/* Prueft ob die KI-Antwort einen Tool-Aufruf enthaelt und parst ihn.
+ * Erwartet eine Zeile "TOOL:<name>" gefolgt von "ARG:<arg>" -- die Zeile
+ * darf auch NACH etwas Vortext stehen (manche Modelle schreiben z.B.
+ * "Gespeichert.\n\nTOOL:..."). */
 static int parse_tool_call(const char *response,
                             char *tool_name, size_t name_cap,
                             char *tool_arg,  size_t arg_cap) {
-    if (strncmp(response, "TOOL:", 5) != 0) return 0;
-    const char *p = response + 5;
+    /* "TOOL:" am Anfang oder an einem Zeilenanfang finden */
+    const char *p = NULL;
+    if (strncmp(response, "TOOL:", 5) == 0) {
+        p = response + 5;
+    } else {
+        const char *nl = strstr(response, "\nTOOL:");
+        if (!nl) return 0;
+        p = nl + 6;
+    }
 
     const char *nl = strchr(p, '\n');
     if (!nl) return 0;
     size_t nlen = (size_t)(nl - p);
+    while (nlen > 0 && (p[nlen-1] == '\r' || p[nlen-1] == ' ')) nlen--;
     if (nlen >= name_cap) nlen = name_cap - 1;
     memcpy(tool_name, p, nlen);
     tool_name[nlen] = '\0';
 
     p = nl + 1;
+    /* eventuelle Leerzeilen vor ARG: ueberspringen */
+    while (*p == '\n' || *p == '\r') p++;
     if (strncmp(p, "ARG:", 4) != 0) {
         tool_arg[0] = '\0';
         return 1;
     }
     p += 4;
-    size_t alen = strlen(p);
+    /* ARG geht bis Zeilenende (Tool-Argumente sind einzeilig) */
+    const char *aend = strchr(p, '\n');
+    size_t alen = aend ? (size_t)(aend - p) : strlen(p);
     while (alen > 0 && (p[alen-1] == '\n' || p[alen-1] == '\r')) alen--;
     if (alen >= arg_cap) alen = arg_cap - 1;
     memcpy(tool_arg, p, alen);
@@ -384,6 +402,14 @@ static int parse_tool_call(const char *response,
     "(Namen, Beziehungen, Geburtstage, Praeferenzen, Preise, wichtige Fakten), " \
     "speichere diese SOFORT mit dem memory_save-Tool, bevor du antwortest. " \
     "Bestaetigung: 'Notiert.' oder 'Gespeichert.' genuegt. " \
+    "Du kannst MEHRERE Tools nacheinander aufrufen -- eines pro Antwort. " \
+    "Enthaelt eine Anfrage mehrere Aufgaben (z.B. Wecker stellen UND eine Mail " \
+    "schreiben), erledige JEDE Teilaufgabe. Fuehre eindeutige Aufgaben wie " \
+    "Wecker/Erinnerungen/Notizen SOFORT aus, ohne nachzufragen. Frage hoechstens " \
+    "zu EINER Teilaufgabe nach und erledige die anderen trotzdem. " \
+    "Sollst du eine Mail/SMS an eine Person senden, deren Adresse/Nummer du " \
+    "nicht kennst, rufe ZUERST contacts_search mit dem Namen auf und nutze " \
+    "das Ergebnis, statt nachzufragen. " \
     "WENN der Nutzer eindeutig eine E-Mail senden, eine SMS senden oder " \
     "einen Anruf taetigen moechte UND du Empfaenger und Inhalt sicher " \
     "ableiten kannst, antworte AUSSCHLIESSLICH in diesem Format:\n" \
@@ -392,7 +418,7 @@ static int parse_tool_call(const char *response,
     "SUBJECT:<Betreff, nur bei mail>\n" \
     "BODY:\n" \
     "<Text>\n" \
-    "Falls Empfaenger oder Inhalt unklar sind, frage nach. "
+    "Falls Empfaenger oder Inhalt wirklich unklar sind, frage nach. "
 
 static void build_system_prompt(char *system_prompt, size_t cap) {
     time_t _t = time(NULL); struct tm _tm; localtime_r(&_t, &_tm);
@@ -445,30 +471,40 @@ void flux_provider_ask(const char *question, char *out, size_t out_cap) {
     if (!api_call(prov, api_key, model, system_prompt, question, out, out_cap, 1))
         return;
 
-    /* Tool-Aufruf? */
-    char tool_name[64], tool_arg[1024];
-    if (!parse_tool_call(out, tool_name, sizeof(tool_name),
-                              tool_arg, sizeof(tool_arg))) {
-        ctx_add(question, out);
-        return;
+    /* Agenten-Schleife: solange die Antwort ein Tool-Aufruf ist, das Tool
+     * ausfuehren, das Ergebnis anhaengen und erneut fragen. So koennen
+     * mehrere Tools nacheinander laufen (z.B. Kontakt suchen -> Mail) und
+     * am Ende eine normale Antwort ODER ein ACTION:-Vorschlag stehen. */
+    char log[6144] = {0};   /* laufendes Protokoll der Tool-Schritte */
+    for (int step = 0; step < FLUX_MAX_TOOL_STEPS; step++) {
+        char tool_name[64], tool_arg[1024];
+        if (!parse_tool_call(out, tool_name, sizeof(tool_name),
+                                  tool_arg, sizeof(tool_arg)))
+            break; /* normale Antwort oder ACTION: -- fertig */
+
+        char tool_result[4096];
+        snprintf(tool_result, sizeof(tool_result),
+                 "Fehler: unbekanntes Tool '%s'", tool_name);
+        flux_tool_exec(tool_name, tool_arg, tool_result, sizeof(tool_result));
+
+        size_t ll = strlen(log);
+        snprintf(log + ll, sizeof(log) - ll,
+                 "- %s(%s) => %.400s\n", tool_name, tool_arg, tool_result);
+
+        char followup[8192];
+        snprintf(followup, sizeof(followup),
+                 "Urspruengliche Anfrage: \"%s\"\n\n"
+                 "Bereits ausgefuehrte Schritte (Tool => Ergebnis):\n%s\n"
+                 "Wenn fuer die Anfrage noch ein weiterer Schritt noetig ist, "
+                 "rufe das naechste Tool auf (NUR im Format TOOL:/ARG:). "
+                 "Wenn eine Mail/SMS/ein Anruf zu bestaetigen ist, antworte im "
+                 "ACTION:-Format. Sonst antworte final auf Deutsch, kurz und klar "
+                 "und fasse zusammen, was erledigt wurde.",
+                 question, log);
+
+        if (!api_call(prov, api_key, model, system_prompt, followup, out, out_cap, 0))
+            return;
     }
 
-    /* Tool ausfuehren */
-    char tool_result[4096];
-    snprintf(tool_result, sizeof(tool_result),
-             "Fehler: unbekanntes Tool '%s'", tool_name);
-    flux_tool_exec(tool_name, tool_arg, tool_result, sizeof(tool_result));
-
-    /* Zweiter API-Aufruf mit Tool-Ergebnis als Kontext. */
-    char followup[8192];
-    snprintf(followup, sizeof(followup),
-             "Urspruengliche Frage: \"%s\"\n"
-             "Du hast Tool '%s' mit Argument '%s' aufgerufen.\n"
-             "Ergebnis des Tools:\n%s\n\n"
-             "Beantworte jetzt die urspruengliche Frage mit diesen Daten. "
-             "Antworte auf Deutsch, kurz und klar.",
-             question, tool_name, tool_arg, tool_result);
-
-    if (api_call(prov, api_key, model, system_prompt, followup, out, out_cap, 0))
-        ctx_add(question, out);
+    ctx_add(question, out);
 }
