@@ -24,14 +24,16 @@ void flux_ui_set_accent(uint32_t rgb) { g_accent = rgb; }
 #define COL_BUBBLE_AI    0x1A2535  /* KI-Blase: dunkelblau */
 #define COL_CARD         0x1C2840  /* Karten-Hintergrund im Bestaetigungs-Dialog */
 #define COL_DIVIDER      0x2A3850  /* Trennlinie */
-#define CLIP_BTN_W       48        /* Breite der Kopieren-/Einfuegen-Knoepfe */
+#define CLIP_BTN_W       56        /* Breite der Kopieren-/Einfuegen-Knoepfe */
 
-#define STATUSBAR_H  40
-#define QUICKROW_H   56
-#define INPUT_BAR_H  64
+/* Layout-Hoehen -- grosszuegig fuer Touch-Bedienung (Ziel: >= 56px je
+ * antippbares Element, vgl. iOS 44pt / Material 48dp auf HiDPI). */
+#define STATUSBAR_H  48
+#define QUICKROW_H   64
+#define INPUT_BAR_H  72
 #define MIC_BTN_W    INPUT_BAR_H
-#define TITLE_AREA_H 64
-#define LIST_BACK_H  64
+#define TITLE_AREA_H 72
+#define LIST_BACK_H  72
 #define LIST_MAX_ROWS 12
 #define PIN_LEN 4
 
@@ -168,9 +170,9 @@ typedef struct {
 } kbd_key_geom_t;
 
 static int kbd_key_h(const flux_fb_t *fb) {
-    int h = fb->width / 9;
-    if (h > 72) h = 72;
-    if (h < 40) h = 40;
+    int h = fb->width / 8;   /* etwas hoehere Tasten fuer den Daumen */
+    if (h > 84) h = 84;
+    if (h < 54) h = 54;
     return h;
 }
 
@@ -289,8 +291,8 @@ void flux_ui_draw_lock(flux_fb_t *fb) {
     /* Touch-first: Wischen ist die primaere Geste, Enter bleibt als
      * Fallback fuer reine Tastatur-Hardware (siehe input.c). */
     const char *hint = "Nach oben wischen zum Entsperren";
-    int hw = flux_fb_text_width(hint, 3);
-    flux_fb_text(fb, (fb->width - hw) / 2, fb->height - 70, hint, COL_ACCENT, 3);
+    int hw = flux_fb_text_width(hint, 2);
+    flux_fb_text(fb, (fb->width - hw) / 2, fb->height - 66, hint, COL_ACCENT, 2);
 
     /* Kleiner Wisch-Pfeil als visueller Hinweis -- ein gefuelltes
      * Dreieck aus drei schmalen, nach oben schrumpfenden Balken. */
@@ -758,9 +760,14 @@ static void draw_input_bar(flux_fb_t *fb, int input_y, const char *prompt_text,
     flux_fb_text(fb, copy_x + (CLIP_BTN_W - cw) / 2,
                  input_y + (INPUT_BAR_H - 16) / 2, "C", COL_DIM, 2);
 
-    /* Eingabetext links (wird ggf. von Knoepfen ueberlagert, falls zu lang) */
-    if (prompt_text)
-        flux_fb_text(fb, 12, input_y + (INPUT_BAR_H - 21) / 2, prompt_text, COL_TEXT, 3);
+    /* Eingabetext links -- auf den Platz vor den Knoepfen beschneiden und
+     * das ENDE zeigen (mitlaufender Cursor), damit nichts ueberlappt. */
+    if (prompt_text && prompt_text[0]) {
+        int avail = copy_x - 12 - 6;
+        const char *s = prompt_text;
+        while (*s && flux_fb_text_width(s, 3) > avail) s++;
+        flux_fb_text(fb, 12, input_y + (INPUT_BAR_H - 21) / 2, s, COL_TEXT, 3);
+    }
 }
 
 void flux_ui_draw_assistant(flux_fb_t *fb, const char *last_q,
@@ -889,15 +896,15 @@ void flux_ui_draw_confirm(flux_fb_t *fb, const char *type_label,
     int cx = card_x + 14;
     int cy = card_y + 12;
 
-    /* An: */
+    /* An: -- Wert dynamisch hinter dem Label platzieren (kein Ueberlappen) */
     flux_fb_text(fb, cx, cy, "An:", COL_DIM, 2);
-    flux_fb_text(fb, cx + 38, cy, to, COL_ACCENT, 2);
+    flux_fb_text(fb, cx + flux_fb_text_width("An: ", 2), cy, to, COL_ACCENT, 2);
     cy += 28;
 
     /* Betreff: (optional) */
     if (subject && subject[0]) {
         flux_fb_text(fb, cx, cy, "Betreff:", COL_DIM, 2);
-        flux_fb_text(fb, cx + 80, cy, subject, COL_TEXT, 2);
+        flux_fb_text(fb, cx + flux_fb_text_width("Betreff: ", 2), cy, subject, COL_TEXT, 2);
         cy += 28;
     }
 
@@ -981,7 +988,7 @@ static int build_list_rows(const flux_fb_t *fb, int n, list_row_geom_t *out) {
     int avail = bottom - top;
     int row_h = avail / n;
     if (row_h > 96) row_h = 96;
-    if (row_h < 56) row_h = 56;
+    if (row_h < 64) row_h = 64;
     for (int i = 0; i < n; i++) {
         out[i].x = 8;
         out[i].y = top + i * row_h;

@@ -141,8 +141,11 @@ void flux_fb_text(flux_fb_t *fb, int x, int y, const char *s, uint32_t rgb, int 
         int ry = y + (int)(miny * scale);
         int rw = (int)((maxx - minx) * scale);
         int rh = (int)((maxy - miny) * scale);
-        if (rw < scale) rw = scale;
-        if (rh < scale) rh = scale;
+        /* Strichstaerke: groessere Schrift bekommt etwas mehr Gewicht, damit
+         * der duenne stb_easy_font-Strich auf dem Handy gut lesbar bleibt. */
+        int weight = scale + (scale >= 3 ? 1 : 0);
+        if (rw < weight) rw = weight;
+        if (rh < weight) rh = weight;
         flux_fb_fill_rect(fb, rx, ry, rw, rh, rgb);
     }
 }
