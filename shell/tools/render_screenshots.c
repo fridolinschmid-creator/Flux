@@ -123,15 +123,21 @@ int main(int argc, char *argv[]) {
 
     /* 13 -- Einstellungen */
     const char *setting_labels[] = {
-        "PIN-Code", "SMTP-Server", "SMTP-Port",
-        "SMTP-Benutzer", "SMTP-Passwort", "Absender-Adresse", "Cloud-API-Key"
+        "PIN-Code", "KI-Anbieter", "API-Key (Anbieter)", "Modell (Anbieter)",
+        "E-Mail Einstellungen", "Farbthema", "Auto-Sperre", "Sprache (TTS)"
     };
     const char *setting_values[] = {
-        "gesetzt", "smtp.icloud.com", "587",
-        "ich@icloud.com", "********", "ich@icloud.com", "gesetzt"
+        "gesetzt", "DeepSeek", "********", "deepseek-chat",
+        "ich@icloud.com", "teal", "60", "1"
     };
-    flux_ui_draw_settings(&fb, setting_labels, setting_values, 7);
+    flux_ui_draw_settings(&fb, setting_labels, setting_values, 8);
     save_ppm(&fb, outdir, "13_einstellungen");
+
+    /* 13b -- E-Mail-Einrichtung: App-Passwort-Schritt */
+    flux_ui_set_edit_title("App-Passwort");
+    flux_ui_draw_edit_body(&fb, "");
+    save_ppm(&fb, outdir, "13b_email_passwort");
+    flux_ui_set_edit_title(NULL);
 
     /* 14 -- Dateibrowser (keine Auswahl) */
     const char *names[] = { "..", "Documents", "Pictures", "Music", "Videos", "flux.conf" };

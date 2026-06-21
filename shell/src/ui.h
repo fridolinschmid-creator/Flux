@@ -86,6 +86,9 @@ flux_confirm_hit_t flux_ui_confirm_hit(const flux_fb_t *fb, int x, int y);
 
 void flux_ui_draw_edit_body(flux_fb_t *fb, const char *body);
 
+/* Setzt den Titel der Bearbeiten-Maske (NULL/leer -> "Text bearbeiten"). */
+void flux_ui_set_edit_title(const char *title);
+
 /* ---- Einstellungen -------------------------------------------------
  * labels/values sind Anzeige-Strings (main.c maskiert Geheimnisse vor
  * dem Aufruf, ui.c weiss nichts ueber die Konfigurationsdatei). */

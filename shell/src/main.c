@@ -232,7 +232,7 @@ static void maybe_generate_greeting(void) {
 
 #define FLUX_PIN_LEN       4
 #define FLUX_FILES_MAX     12
-#define FLUX_SETTINGS_N    12   /* + KI-Anbieter (Key/Modell kontextabhaengig) */
+#define FLUX_SETTINGS_N    8    /* E-Mail als 1 Eintrag (Adresse + App-Passwort) */
 #define VIEWER_CONTENT_MAX 32768
 
 typedef enum {
@@ -240,7 +240,12 @@ typedef enum {
     EDIT_ACTION_BODY,
     EDIT_SETTING_FIELD,
     EDIT_NEW_FOLDER,
+    EDIT_EMAIL_ADDR,    /* Schritt 1: E-Mail-Adresse */
+    EDIT_EMAIL_PASS,    /* Schritt 2: App-Passwort */
 } edit_target_t;
+
+/* Zwischengespeicherte E-Mail-Adresse zwischen Schritt 1 und 2. */
+static char email_pending[256] = {0};
 
 /* ---- Einstellungen: Feldliste -------------------------------------
  * main.c maskiert Geheimnisse, bevor sie an ui.c gehen (siehe ui.h) --
@@ -255,7 +260,7 @@ static const char *setting_keys[FLUX_SETTINGS_N] = {
     "ai_provider",      /* anthropic|deepseek|nvidia -- per Tap durchschalten */
     "__active_key",     /* -> api_key | deepseek_key | nvidia_key */
     "__active_model",   /* -> anthropic_model | deepseek_model | nvidia_model */
-    "smtp_host", "smtp_port", "smtp_user", "smtp_pass", "smtp_from",
+    "__email",          /* E-Mail-Adresse + App-Passwort (leitet SMTP/IMAP ab) */
     "theme",    /* teal|blau|lila|orange|gruen|rot */
     "auto_lock",/* 0=aus, 30, 60, 120, 300 Sekunden */
     "tts",      /* 0=aus, 1=ein */
@@ -265,8 +270,7 @@ static const char *setting_labels[FLUX_SETTINGS_N] = {
     "KI-Anbieter",          /* tippen schaltet anthropic/deepseek/nvidia */
     "API-Key (Anbieter)",
     "Modell (Anbieter)",
-    "SMTP-Server", "SMTP-Port", "SMTP-Benutzer",
-    "SMTP-Passwort", "Absender-Adresse",
+    "E-Mail Einstellungen", /* Adresse + App-Passwort, Rest automatisch */
     "Farbthema",    /* teal/blau/lila/orange/gruen/rot */
     "Auto-Sperre",  /* 0=aus */
     "Sprache (TTS)",/* 0=aus, 1=ein */
@@ -276,7 +280,7 @@ static const int setting_secret[FLUX_SETTINGS_N] = {
     0, /* provider */
     1, /* active key */
     0, /* active model */
-    0, 0, 0, 1, 0, /* smtp host/port/user/pass/from */
+    0, /* email (zeigt Adresse) */
     0, 0, 0,       /* theme/auto_lock/tts */
 };
 
@@ -301,7 +305,65 @@ static const char *resolve_setting_key(const char *key) {
         if (!strcmp(prov, "nvidia"))   return "nvidia_model";
         return "anthropic_model";
     }
+    /* E-Mail-Eintrag zeigt die konfigurierte Absenderadresse an */
+    if (!strcmp(key, "__email")) return "smtp_from";
     return key;
+}
+
+/* Leitet SMTP-/IMAP-Server und -Ports aus der E-Mail-Domain ab und schreibt
+ * alle noetigen Config-Keys. So muss der Nutzer nur Adresse + App-Passwort
+ * eingeben; Hosts/Ports und Benutzernamen werden automatisch gesetzt. */
+static void email_account_apply(const char *email, const char *pass) {
+    const char *at = strrchr(email, '@');
+    if (!at || !at[1]) return; /* ungueltige Adresse -> nichts aendern */
+
+    char domain[128];
+    snprintf(domain, sizeof(domain), "%s", at + 1);
+    for (char *p = domain; *p; p++)
+        if (*p >= 'A' && *p <= 'Z') *p += 32;
+
+    struct { const char *dom, *sh, *sp, *ih, *ip; } tbl[] = {
+        { "gmail.com",     "smtp.gmail.com",         "587", "imap.gmail.com",          "993" },
+        { "googlemail.com","smtp.gmail.com",         "587", "imap.gmail.com",          "993" },
+        { "outlook.com",   "smtp-mail.outlook.com",  "587", "outlook.office365.com",   "993" },
+        { "hotmail.com",   "smtp-mail.outlook.com",  "587", "outlook.office365.com",   "993" },
+        { "live.com",      "smtp-mail.outlook.com",  "587", "outlook.office365.com",   "993" },
+        { "msn.com",       "smtp-mail.outlook.com",  "587", "outlook.office365.com",   "993" },
+        { "icloud.com",    "smtp.mail.me.com",       "587", "imap.mail.me.com",        "993" },
+        { "me.com",        "smtp.mail.me.com",       "587", "imap.mail.me.com",        "993" },
+        { "mac.com",       "smtp.mail.me.com",       "587", "imap.mail.me.com",        "993" },
+        { "yahoo.com",     "smtp.mail.yahoo.com",    "587", "imap.mail.yahoo.com",     "993" },
+        { "gmx.de",        "mail.gmx.net",           "587", "imap.gmx.net",            "993" },
+        { "gmx.net",       "mail.gmx.net",           "587", "imap.gmx.net",            "993" },
+        { "gmx.com",       "mail.gmx.com",           "587", "imap.gmx.com",            "993" },
+        { "web.de",        "smtp.web.de",            "587", "imap.web.de",             "993" },
+        { "t-online.de",   "securesmtp.t-online.de", "587", "secureimap.t-online.de",  "993" },
+        { "posteo.de",     "posteo.de",              "587", "posteo.de",               "993" },
+        { "mailbox.org",   "smtp.mailbox.org",       "587", "imap.mailbox.org",        "993" },
+        { NULL, NULL, NULL, NULL, NULL }
+    };
+
+    const char *sh = NULL, *sp = NULL, *ih = NULL, *ip = NULL;
+    for (int i = 0; tbl[i].dom; i++)
+        if (strcmp(domain, tbl[i].dom) == 0) {
+            sh = tbl[i].sh; sp = tbl[i].sp; ih = tbl[i].ih; ip = tbl[i].ip; break;
+        }
+
+    char sh_buf[160], ih_buf[160];
+    if (!sh) { /* unbekannte Domain: gaengige Konvention smtp./imap.<domain> */
+        snprintf(sh_buf, sizeof(sh_buf), "smtp.%s", domain); sh = sh_buf; sp = "587";
+        snprintf(ih_buf, sizeof(ih_buf), "imap.%s", domain); ih = ih_buf; ip = "993";
+    }
+
+    flux_config_set("smtp_host", sh);
+    flux_config_set("smtp_port", sp);
+    flux_config_set("smtp_user", email);
+    flux_config_set("smtp_pass", pass);
+    flux_config_set("smtp_from", email);
+    flux_config_set("imap_host", ih);
+    flux_config_set("imap_port", ip);
+    flux_config_set("imap_user", email);
+    flux_config_set("imap_pass", pass);
 }
 
 /* Standardmodell des aktiven Anbieters (muss mit fluxai/src/provider.c
@@ -1196,6 +1258,7 @@ int main(void) {
             } else if (hit == FLUX_CONFIRM_EDIT) {
                 snprintf(edit_buf, sizeof(edit_buf), "%s", pending_action.body);
                 edit_target = EDIT_ACTION_BODY;
+                flux_ui_set_edit_title("Text bearbeiten");
                 uint32_t *old = capture_frame(&fb);
                 screen = FLUX_SCREEN_EDIT_BODY;
                 flux_ui_draw_edit_body(&fb, edit_buf);
@@ -1291,8 +1354,35 @@ int main(void) {
                                        file_n, file_truncated, file_selected);
                     animate_slide_in(&fb, old);
                     free(old);
+                } else if (edit_target == EDIT_EMAIL_ADDR) {
+                    /* Adresse merken, dann Schritt 2: App-Passwort abfragen */
+                    snprintf(email_pending, sizeof(email_pending), "%s", edit_buf);
+                    if (!email_pending[0]) {
+                        /* leer -> abbrechen, zurueck zu den Einstellungen */
+                        flux_ui_set_edit_title(NULL);
+                        load_settings_values();
+                        screen = FLUX_SCREEN_SETTINGS;
+                        flux_ui_draw_settings(&fb, setting_labels, setting_values, FLUX_SETTINGS_N);
+                    } else {
+                        edit_target = EDIT_EMAIL_PASS;
+                        edit_buf[0] = '\0';
+                        flux_ui_set_edit_title("App-Passwort");
+                        flux_ui_draw_edit_body(&fb, edit_buf);
+                    }
+                } else if (edit_target == EDIT_EMAIL_PASS) {
+                    /* Konto ableiten + speichern (SMTP/IMAP automatisch) */
+                    if (edit_buf[0]) email_account_apply(email_pending, edit_buf);
+                    email_pending[0] = '\0';
+                    flux_ui_set_edit_title(NULL);
+                    load_settings_values();
+                    uint32_t *old = capture_frame(&fb);
+                    screen = FLUX_SCREEN_SETTINGS;
+                    flux_ui_draw_settings(&fb, setting_labels, setting_values, FLUX_SETTINGS_N);
+                    animate_slide_in(&fb, old);
+                    free(old);
                 } else {
                     apply_setting_edit(edit_setting_index, edit_buf);
+                    flux_ui_set_edit_title(NULL);
                     load_settings_values();
                     uint32_t *old = capture_frame(&fb);
                     screen = FLUX_SCREEN_SETTINGS;
@@ -1333,11 +1423,23 @@ int main(void) {
                 flux_config_set("ai_provider", next);
                 load_settings_values();
                 flux_ui_draw_settings(&fb, setting_labels, setting_values, FLUX_SETTINGS_N);
+            } else if (strcmp(setting_keys[idx], "__email") == 0) {
+                /* Schritt 1: E-Mail-Adresse (mit aktueller Adresse vorbelegt) */
+                edit_target = EDIT_EMAIL_ADDR;
+                email_pending[0] = '\0';
+                flux_config_get("smtp_from", edit_buf, sizeof(edit_buf));
+                flux_ui_set_edit_title("E-Mail-Adresse");
+                uint32_t *old = capture_frame(&fb);
+                screen = FLUX_SCREEN_EDIT_BODY;
+                flux_ui_draw_edit_body(&fb, edit_buf);
+                animate_slide_in(&fb, old);
+                free(old);
             } else {
                 edit_target = EDIT_SETTING_FIELD;
                 edit_setting_index = idx;
                 if (setting_secret[idx]) edit_buf[0] = '\0';
                 else flux_config_get(resolve_setting_key(setting_keys[idx]), edit_buf, sizeof(edit_buf));
+                flux_ui_set_edit_title(setting_labels[idx]);
                 uint32_t *old = capture_frame(&fb);
                 screen = FLUX_SCREEN_EDIT_BODY;
                 flux_ui_draw_edit_body(&fb, edit_buf);
@@ -1386,6 +1488,7 @@ int main(void) {
             if (ev.type == FLUX_EV_TAP && flux_ui_files_new_btn_hit(&fb, ev.x, ev.y)) {
                 edit_buf[0] = '\0';
                 edit_target = EDIT_NEW_FOLDER;
+                flux_ui_set_edit_title("Neuer Ordner-Name");
                 uint32_t *old = capture_frame(&fb);
                 screen = FLUX_SCREEN_EDIT_BODY;
                 flux_ui_draw_edit_body(&fb, edit_buf);

@@ -939,10 +939,19 @@ flux_confirm_hit_t flux_ui_confirm_hit(const flux_fb_t *fb, int x, int y) {
 
 /* ---- Text bearbeiten (vor dem Senden einer Aktion) -------------------- */
 
+/* Titel der Bearbeiten-Maske -- vom Aufrufer setzbar (z.B. "App-Passwort"),
+ * Standard "Text bearbeiten". */
+static char s_edit_title[64] = "Text bearbeiten";
+
+void flux_ui_set_edit_title(const char *title) {
+    if (title && title[0]) snprintf(s_edit_title, sizeof(s_edit_title), "%s", title);
+    else snprintf(s_edit_title, sizeof(s_edit_title), "Text bearbeiten");
+}
+
 void flux_ui_draw_edit_body(flux_fb_t *fb, const char *body) {
     flux_fb_clear(fb, COL_BG);
     draw_statusbar(fb);
-    flux_fb_text(fb, 16, STATUSBAR_H + 16, "Text bearbeiten", COL_ACCENT, 3);
+    flux_fb_text(fb, 16, STATUSBAR_H + 16, s_edit_title, COL_ACCENT, 3);
 
     /* Text als bearbeitbare Blase (hellerer Hintergrund = aktiv) */
     int text_y = STATUSBAR_H + 64;
