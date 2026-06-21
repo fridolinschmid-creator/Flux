@@ -313,6 +313,13 @@ int main(int argc, char *argv[]) {
     flux_ui_draw_voice_overlay(&fb, 7);
     save_ppm(&fb, outdir, "29_voice_overlay");
 
+    /* 30 -- Ehrlicher Cloud-Hinweis (kein API-Key konfiguriert) */
+    flux_ui_draw_assistant(&fb, "wer bist du?", "",
+        "Kein Cloud-Zugang konfiguriert. Trage in den Einstellungen einen "
+        "API-Key fuer den gewaehlten Anbieter ein (oder waehle einen anderen "
+        "Anbieter).", 0);
+    save_ppm(&fb, outdir, "30_cloud_fallback");
+
     flux_fb_close(&fb);
     printf("\nFertig! PPM -> PNG: convert %s/XX.ppm %s/XX.png\n", outdir, outdir);
     return 0;

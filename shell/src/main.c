@@ -238,6 +238,8 @@ static void maybe_generate_greeting(void) {
 typedef enum {
     EDIT_NONE = 0,
     EDIT_ACTION_BODY,
+    EDIT_ACTION_TO,       /* Empfaenger im Bestaetigungs-Dialog aendern */
+    EDIT_ACTION_SUBJECT,  /* Betreff im Bestaetigungs-Dialog aendern */
     EDIT_SETTING_FIELD,
     EDIT_NEW_FOLDER,
     EDIT_EMAIL_ADDR,    /* Schritt 1: E-Mail-Adresse */
@@ -1247,7 +1249,8 @@ int main(void) {
 
         if (screen == FLUX_SCREEN_CONFIRM) {
             if (ev.type != FLUX_EV_TAP) continue;
-            flux_confirm_hit_t hit = flux_ui_confirm_hit(&fb, ev.x, ev.y);
+            flux_confirm_hit_t hit = flux_ui_confirm_hit(&fb, ev.x, ev.y,
+                                                         pending_action.subject[0] != 0);
             if (hit == FLUX_CONFIRM_CANCEL) {
                 uint32_t *old = capture_frame(&fb);
                 screen = FLUX_SCREEN_ASSISTANT;
@@ -1255,10 +1258,23 @@ int main(void) {
                 flux_ui_draw_assistant(&fb, last_q, input_buf, answer_buf, 0);
                 animate_slide_in(&fb, old);
                 free(old);
-            } else if (hit == FLUX_CONFIRM_EDIT) {
-                snprintf(edit_buf, sizeof(edit_buf), "%s", pending_action.body);
-                edit_target = EDIT_ACTION_BODY;
-                flux_ui_set_edit_title("Text bearbeiten");
+            } else if (hit == FLUX_CONFIRM_EDIT_TO ||
+                       hit == FLUX_CONFIRM_EDIT_SUBJECT ||
+                       hit == FLUX_CONFIRM_EDIT_BODY) {
+                /* Direkt die angetippte Zeile bearbeiten -- kein extra Knopf */
+                if (hit == FLUX_CONFIRM_EDIT_TO) {
+                    snprintf(edit_buf, sizeof(edit_buf), "%s", pending_action.to);
+                    edit_target = EDIT_ACTION_TO;
+                    flux_ui_set_edit_title("Empfaenger");
+                } else if (hit == FLUX_CONFIRM_EDIT_SUBJECT) {
+                    snprintf(edit_buf, sizeof(edit_buf), "%s", pending_action.subject);
+                    edit_target = EDIT_ACTION_SUBJECT;
+                    flux_ui_set_edit_title("Betreff");
+                } else {
+                    snprintf(edit_buf, sizeof(edit_buf), "%s", pending_action.body);
+                    edit_target = EDIT_ACTION_BODY;
+                    flux_ui_set_edit_title("Nachricht");
+                }
                 uint32_t *old = capture_frame(&fb);
                 screen = FLUX_SCREEN_EDIT_BODY;
                 flux_ui_draw_edit_body(&fb, edit_buf);
@@ -1328,8 +1344,16 @@ int main(void) {
                 flux_ui_draw_edit_body(&fb, edit_buf);
             } else if (kind == FLUX_EV_ENTER) {
                 edit_body_enter:
-                if (edit_target == EDIT_ACTION_BODY) {
-                    snprintf(pending_action.body, sizeof(pending_action.body), "%s", edit_buf);
+                if (edit_target == EDIT_ACTION_BODY ||
+                    edit_target == EDIT_ACTION_TO ||
+                    edit_target == EDIT_ACTION_SUBJECT) {
+                    if (edit_target == EDIT_ACTION_TO)
+                        snprintf(pending_action.to, sizeof(pending_action.to), "%s", edit_buf);
+                    else if (edit_target == EDIT_ACTION_SUBJECT)
+                        snprintf(pending_action.subject, sizeof(pending_action.subject), "%s", edit_buf);
+                    else
+                        snprintf(pending_action.body, sizeof(pending_action.body), "%s", edit_buf);
+                    flux_ui_set_edit_title(NULL);
                     uint32_t *old = capture_frame(&fb);
                     screen = FLUX_SCREEN_CONFIRM;
                     flux_ui_draw_confirm(&fb, flux_action_type_label(pending_action.type),

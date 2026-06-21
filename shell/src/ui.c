@@ -856,19 +856,96 @@ int flux_ui_paste_hit(const flux_fb_t *fb, int x, int y) {
 /* ---- Bestaetigungs-Dialog (KI will Mail/SMS/Anruf ausloesen) --------
  * Das Apple-artige "bist du sicher?" aus der Aufgabenstellung: die KI
  * fuehrt nie direkt etwas aus, sie schlaegt nur vor (siehe
- * shell/src/action.c). Drei grosse Knoepfe statt eines Mini-Dialogs --
- * "alles muss groesser sein" gilt hier besonders, weil eine
- * Fehlbedienung hier tatsaechlich etwas verschickt. */
+ * shell/src/action.c). Kein "Bearbeiten"-Knopf -- man tippt direkt auf
+ * die Zeile (Empfaenger/Betreff/Nachricht), die man aendern will. Unten
+ * nur zwei grosse Knoepfe mit Symbol: Abbrechen (X) und Senden (Pfeil). */
 
 typedef struct { int x, y, w, h; } btn_geom_t;
 
-static void build_confirm_buttons(const flux_fb_t *fb, btn_geom_t out[3]) {
-    int h = 80;
+/* Gefuelltes Rechteck mit abgerundeten Ecken (radius r). */
+static void fill_round_rect(flux_fb_t *fb, int x, int y, int w, int h,
+                            int r, uint32_t col) {
+    if (r * 2 > w) r = w / 2;
+    if (r * 2 > h) r = h / 2;
+    for (int j = 0; j < h; j++) {
+        for (int i = 0; i < w; i++) {
+            int dx = (i < r) ? (r - i) : (i >= w - r) ? (i - (w - r - 1)) : 0;
+            int dy = (j < r) ? (r - j) : (j >= h - r) ? (j - (h - r - 1)) : 0;
+            if (dx && dy && dx * dx + dy * dy > r * r) continue;
+            flux_fb_set_px(fb, x + i, y + j, col);
+        }
+    }
+}
+
+/* Dicke Linie (Bresenham mit Strichbreite t). */
+static void draw_thick_line(flux_fb_t *fb, int x0, int y0, int x1, int y1,
+                            int t, uint32_t col) {
+    int dx = abs(x1 - x0), sx = x0 < x1 ? 1 : -1;
+    int dy = -abs(y1 - y0), sy = y0 < y1 ? 1 : -1;
+    int err = dx + dy;
+    int h = t / 2;
+    for (;;) {
+        flux_fb_fill_rect(fb, x0 - h, y0 - h, t, t, col);
+        if (x0 == x1 && y0 == y1) break;
+        int e2 = 2 * err;
+        if (e2 >= dy) { err += dy; x0 += sx; }
+        if (e2 <= dx) { err += dx; y0 += sy; }
+    }
+}
+
+/* Nach rechts zeigendes gefuelltes Dreieck (Sende-Pfeil), Spitze rechts. */
+static void draw_send_arrow(flux_fb_t *fb, int cx, int cy, int s, uint32_t col) {
+    for (int i = 0; i < s; i++) {
+        int hh = (s - i) * 7 / 10;       /* Hoehe nimmt zur Spitze ab */
+        flux_fb_fill_rect(fb, cx - s / 2 + i, cy - hh, 2, 2 * hh, col);
+    }
+    /* kleiner Schaft links fuer Papierflieger-Anmutung */
+    flux_fb_fill_rect(fb, cx - s / 2 - s / 3, cy - 1, s / 3, 3, col);
+}
+
+/* Symbol-Knopf unten: abgerundete Pille + Icon + Beschriftung. */
+static void draw_action_button(flux_fb_t *fb, btn_geom_t b, uint32_t col,
+                               const char *label, int is_send) {
+    int m = 8; /* Aussenabstand zwischen den Knoepfen */
+    int bx = b.x + m, by = b.y + m / 2;
+    int bw = b.w - 2 * m, bh = b.h - m;
+    fill_round_rect(fb, bx, by, bw, bh, 18, col);
+
+    int icx = bx + bw / 2;
+    int icy = by + bh / 2 - 8;
+    if (is_send) {
+        draw_send_arrow(fb, icx + 2, icy, 22, COL_TEXT);
+    } else {
+        draw_thick_line(fb, icx - 9, icy - 9, icx + 9, icy + 9, 4, COL_TEXT);
+        draw_thick_line(fb, icx + 9, icy - 9, icx - 9, icy + 9, 4, COL_TEXT);
+    }
+    int tw = flux_fb_text_width(label, 2);
+    flux_fb_text(fb, bx + (bw - tw) / 2, by + bh - 24, label, COL_TEXT, 2);
+}
+
+static void build_confirm_buttons(const flux_fb_t *fb, btn_geom_t out[2]) {
+    int h = 92;
     int y = fb->height - h;
-    int w = fb->width / 3;
-    out[0] = (btn_geom_t){ 0,     y, w, h };
-    out[1] = (btn_geom_t){ w,     y, w, h };
-    out[2] = (btn_geom_t){ 2 * w, y, fb->width - 2 * w, h };
+    int w = fb->width / 2;
+    out[0] = (btn_geom_t){ 0, y, w, h };               /* Abbrechen */
+    out[1] = (btn_geom_t){ w, y, fb->width - w, h };   /* Senden */
+}
+
+/* Gemeinsame Geometrie der antippbaren Zeilen -- von Draw UND Hit genutzt,
+ * damit beide nie auseinanderlaufen. */
+static void confirm_layout(const flux_fb_t *fb, int has_subject,
+                           int *card_x, int *card_y, int *card_w, int *card_h,
+                           int *to_y, int *subj_y, int *div_y, int *body_y) {
+    btn_geom_t btn[2];
+    build_confirm_buttons(fb, btn);
+    *card_x = 10;
+    *card_y = STATUSBAR_H + 78;
+    *card_w = fb->width - 2 * (*card_x);
+    *card_h = btn[0].y - *card_y - 8;
+    *to_y   = *card_y + 14;
+    *subj_y = *to_y + 36;
+    *div_y  = (has_subject ? *subj_y : *to_y) + 36;
+    *body_y = *div_y + 12;
 }
 
 void flux_ui_draw_confirm(flux_fb_t *fb, const char *type_label,
@@ -876,71 +953,66 @@ void flux_ui_draw_confirm(flux_fb_t *fb, const char *type_label,
     flux_fb_clear(fb, COL_BG);
     draw_statusbar(fb);
 
-    /* Kopfzeile: Aktionstyp gross zentriert */
+    int has_subject = (subject && subject[0]) ? 1 : 0;
+
+    /* Kopfzeile + dezenter Hinweis */
     char header[80];
     snprintf(header, sizeof(header), "%s senden?", type_label);
     int hw = flux_fb_text_width(header, 4);
-    flux_fb_text(fb, (fb->width - hw) / 2, STATUSBAR_H + 14, header, COL_ACCENT, 4);
+    flux_fb_text(fb, (fb->width - hw) / 2, STATUSBAR_H + 12, header, COL_ACCENT, 4);
+    const char *hint = "Tippe auf eine Zeile zum Aendern";
+    int hiw = flux_fb_text_width(hint, 2);
+    flux_fb_text(fb, (fb->width - hiw) / 2, STATUSBAR_H + 52, hint, COL_DIM, 2);
 
-    /* Aktions-Knoepfe ganz unten */
-    btn_geom_t btn[3];
-    build_confirm_buttons(fb, btn);
-
-    /* Karte zwischen Kopfzeile und Knoepfen */
-    int card_x = 10;
-    int card_y = STATUSBAR_H + 68;
-    int card_w = fb->width - 2 * card_x;
-    int card_h = btn[0].y - card_y - 6;
-    flux_fb_fill_rect(fb, card_x, card_y, card_w, card_h, COL_CARD);
+    int card_x, card_y, card_w, card_h, to_y, subj_y, div_y, body_y;
+    confirm_layout(fb, has_subject, &card_x, &card_y, &card_w, &card_h,
+                   &to_y, &subj_y, &div_y, &body_y);
+    fill_round_rect(fb, card_x, card_y, card_w, card_h, 14, COL_CARD);
 
     int cx = card_x + 14;
-    int cy = card_y + 12;
 
-    /* An: -- Wert dynamisch hinter dem Label platzieren (kein Ueberlappen) */
-    flux_fb_text(fb, cx, cy, "An:", COL_DIM, 2);
-    flux_fb_text(fb, cx + flux_fb_text_width("An: ", 2), cy, to, COL_ACCENT, 2);
-    cy += 28;
+    /* An: -- antippbar */
+    flux_fb_text(fb, cx, to_y, "An:", COL_DIM, 2);
+    flux_fb_text(fb, cx + flux_fb_text_width("An: ", 2), to_y,
+                 to[0] ? to : "(tippen)", COL_ACCENT, 2);
 
-    /* Betreff: (optional) */
-    if (subject && subject[0]) {
-        flux_fb_text(fb, cx, cy, "Betreff:", COL_DIM, 2);
-        flux_fb_text(fb, cx + flux_fb_text_width("Betreff: ", 2), cy, subject, COL_TEXT, 2);
-        cy += 28;
+    /* Betreff: (nur Mail) -- antippbar */
+    if (has_subject) {
+        flux_fb_text(fb, cx, subj_y, "Betreff:", COL_DIM, 2);
+        flux_fb_text(fb, cx + flux_fb_text_width("Betreff: ", 2), subj_y,
+                     subject, COL_TEXT, 2);
     }
 
-    /* Trennlinie */
-    flux_fb_fill_rect(fb, cx, cy, card_w - 28, 2, COL_DIVIDER);
-    cy += 10;
+    /* Trennlinie + Nachrichtentext -- antippbar */
+    flux_fb_fill_rect(fb, cx, div_y, card_w - 28, 2, COL_DIVIDER);
+    draw_wrapped(fb, cx, body_y, card_w - 28, body[0] ? body : "(tippen)",
+                 COL_TEXT, 2, 26);
 
-    /* Nachrichtentext */
-    draw_wrapped(fb, cx, cy, card_w - 28, body, COL_TEXT, 2, 26);
+    /* Zwei Symbol-Knoepfe unten */
+    btn_geom_t btn[2];
+    build_confirm_buttons(fb, btn);
+    draw_action_button(fb, btn[0], COL_CANCEL, "Abbrechen", 0);
+    draw_action_button(fb, btn[1], COL_SEND,   "Senden",    1);
 
-    /* Aktions-Knoepfe */
-    static const char *labels[3] = { "Bearbeiten", "Abbrechen", "Senden" };
-    const uint32_t cols[3] = { COL_KEY_SPEC, COL_CANCEL, COL_SEND };
-    for (int i = 0; i < 3; i++) {
-        flux_fb_fill_rect(fb, btn[i].x + 3, btn[i].y + 3,
-                           btn[i].w - 6, btn[i].h - 6, cols[i]);
-        int tw = flux_fb_text_width(labels[i], 2);
-        flux_fb_text(fb, btn[i].x + (btn[i].w - tw) / 2,
-                     btn[i].y + (btn[i].h - 16) / 2, labels[i], COL_TEXT, 2);
-    }
     flux_fb_present(fb);
 }
 
-flux_confirm_hit_t flux_ui_confirm_hit(const flux_fb_t *fb, int x, int y) {
-    btn_geom_t btn[3];
+flux_confirm_hit_t flux_ui_confirm_hit(const flux_fb_t *fb, int x, int y, int has_subject) {
+    btn_geom_t btn[2];
     build_confirm_buttons(fb, btn);
-    for (int i = 0; i < 3; i++) {
-        if (x >= btn[i].x && x < btn[i].x + btn[i].w &&
-            y >= btn[i].y && y < btn[i].y + btn[i].h) {
-            switch (i) {
-                case 0: return FLUX_CONFIRM_EDIT;
-                case 1: return FLUX_CONFIRM_CANCEL;
-                default: return FLUX_CONFIRM_SEND;
-            }
-        }
+    if (y >= btn[0].y) {
+        return (x < fb->width / 2) ? FLUX_CONFIRM_CANCEL : FLUX_CONFIRM_SEND;
     }
+
+    int card_x, card_y, card_w, card_h, to_y, subj_y, div_y, body_y;
+    confirm_layout(fb, has_subject, &card_x, &card_y, &card_w, &card_h,
+                   &to_y, &subj_y, &div_y, &body_y);
+    if (x < card_x || x >= card_x + card_w) return FLUX_CONFIRM_NONE;
+
+    if (y >= to_y - 8 && y < to_y + 28) return FLUX_CONFIRM_EDIT_TO;
+    if (has_subject && y >= subj_y - 8 && y < subj_y + 28)
+        return FLUX_CONFIRM_EDIT_SUBJECT;
+    if (y >= body_y - 8 && y < card_y + card_h) return FLUX_CONFIRM_EDIT_BODY;
     return FLUX_CONFIRM_NONE;
 }
 

@@ -34,9 +34,11 @@ typedef enum {
 
 typedef enum {
     FLUX_CONFIRM_NONE = 0,
-    FLUX_CONFIRM_EDIT,
     FLUX_CONFIRM_CANCEL,
     FLUX_CONFIRM_SEND,
+    FLUX_CONFIRM_EDIT_TO,       /* Tap auf den Empfaenger */
+    FLUX_CONFIRM_EDIT_SUBJECT,  /* Tap auf den Betreff */
+    FLUX_CONFIRM_EDIT_BODY,     /* Tap auf den Nachrichtentext */
 } flux_confirm_hit_t;
 
 /* ---- Lockscreen / PIN ------------------------------------------- */
@@ -80,7 +82,9 @@ int flux_ui_paste_hit(const flux_fb_t *fb, int x, int y);
 
 void flux_ui_draw_confirm(flux_fb_t *fb, const char *type_label,
                            const char *to, const char *subject, const char *body);
-flux_confirm_hit_t flux_ui_confirm_hit(const flux_fb_t *fb, int x, int y);
+/* has_subject: 1 wenn eine Betreff-Zeile angezeigt wird (nur bei Mail) --
+ * noetig, damit der Hit-Test die antippbaren Zeilen richtig zuordnet. */
+flux_confirm_hit_t flux_ui_confirm_hit(const flux_fb_t *fb, int x, int y, int has_subject);
 
 /* ---- Text bearbeiten (vor dem Senden einer Aktion) ---------------- */
 
