@@ -1468,6 +1468,100 @@ void flux_ui_draw_ripple(flux_fb_t *fb, int cx, int cy, int frame) {
     flux_fb_fill_rect(fb, x + s - thick, y, thick, s, col);
 }
 
+/* ---- Animierte Aktions-Symbole -------------------------------------- */
+
+static void fill_circle(flux_fb_t *fb, int cx, int cy, int r, uint32_t col) {
+    for (int dy = -r; dy <= r; dy++)
+        for (int dx = -r; dx <= r; dx++)
+            if (dx * dx + dy * dy <= r * r)
+                flux_fb_set_px(fb, cx + dx, cy + dy, col);
+}
+
+static void draw_ring(flux_fb_t *fb, int cx, int cy, int r, int thick, uint32_t col) {
+    int ri = r - thick; if (ri < 0) ri = 0;
+    for (int dy = -r; dy <= r; dy++)
+        for (int dx = -r; dx <= r; dx++) {
+            int d2 = dx * dx + dy * dy;
+            if (d2 <= r * r && d2 >= ri * ri)
+                flux_fb_set_px(fb, cx + dx, cy + dy, col);
+        }
+}
+
+void flux_ui_draw_action_anim(flux_fb_t *fb, flux_anim_kind_t kind,
+                              int frame, const char *caption) {
+    flux_fb_clear(fb, COL_BG);
+    draw_statusbar(fb);
+    int cx = fb->width / 2;
+    int cy = fb->height / 2 - 20;
+
+    switch (kind) {
+        case FLUX_ANIM_MAIL: {
+            /* Papierflieger fliegt nach rechts-oben, mit verblassender Spur */
+            int t = frame % 24;
+            int px = cx - 60 + t * 5;
+            int py = cy + 22 - t * 2;
+            for (int i = 1; i <= 3; i++) {
+                int sx = px - i * 15, sy = py + i * 6;
+                if (sx > 16) flux_fb_fill_rect(fb, sx, sy, 7, 3, 0x33485F);
+            }
+            draw_send_arrow(fb, px, py, 34, COL_ACCENT);
+            break;
+        }
+        case FLUX_ANIM_SMS: {
+            int bw = 130, bh = 76, bx = cx - bw / 2, by = cy - bh / 2;
+            fill_round_rect(fb, bx, by, bw, bh, 16, COL_CARD);
+            flux_fb_fill_rect(fb, bx + 20, by + bh - 2, 16, 12, COL_CARD); /* Zipfel */
+            int lit = (frame / 4) % 4;
+            for (int i = 0; i < 3; i++)
+                fill_circle(fb, bx + 32 + i * 33, by + bh / 2, 8,
+                            (i < lit) ? COL_ACCENT : 0x44566B);
+            break;
+        }
+        case FLUX_ANIM_CALL: {
+            /* pulsierende Ringe + zentraler "Hoerer" */
+            for (int i = 0; i < 3; i++) {
+                int r = 30 + ((frame * 4 + i * 16) % 48);
+                uint32_t c = (r < 50) ? COL_ACCENT : (r < 66) ? 0x2F7C74 : 0x21534E;
+                draw_ring(fb, cx, cy, r, 3, c);
+            }
+            fill_circle(fb, cx, cy, 24, COL_SEND);
+            draw_thick_line(fb, cx - 9, cy - 9, cx + 9, cy + 9, 6, COL_TEXT);
+            break;
+        }
+        case FLUX_ANIM_SCAN: {
+            /* WLAN-Balken leuchten nacheinander auf */
+            int lit = (frame / 3) % 4;
+            int bw = 24, gap = 14, basey = cy + 34;
+            int x0 = cx - (bw * 3 + gap * 2) / 2;
+            for (int i = 0; i < 3; i++) {
+                int h = 22 + i * 24;
+                uint32_t c = ((i + 1) <= lit) ? COL_ACCENT : 0x33485F;
+                flux_fb_fill_rect(fb, x0 + i * (bw + gap), basey - h, bw, h, c);
+            }
+            break;
+        }
+        case FLUX_ANIM_OK: {
+            fill_circle(fb, cx, cy, 46, COL_SEND);
+            draw_thick_line(fb, cx - 22, cy + 2, cx - 6, cy + 18, 6, COL_TEXT);
+            if (frame > 3)
+                draw_thick_line(fb, cx - 6, cy + 18, cx + 24, cy - 16, 6, COL_TEXT);
+            break;
+        }
+        case FLUX_ANIM_FAIL: {
+            fill_circle(fb, cx, cy, 46, COL_CANCEL);
+            draw_thick_line(fb, cx - 20, cy - 20, cx + 20, cy + 20, 6, COL_TEXT);
+            draw_thick_line(fb, cx + 20, cy - 20, cx - 20, cy + 20, 6, COL_TEXT);
+            break;
+        }
+    }
+
+    if (caption && caption[0]) {
+        int tw = flux_fb_text_width(caption, 2);
+        flux_fb_text(fb, (fb->width - tw) / 2, cy + 96, caption, COL_DIM, 2);
+    }
+    flux_fb_present(fb);
+}
+
 /* ---- Kalender -------------------------------------------------------- */
 
 #define CAL_HEADER_H    52

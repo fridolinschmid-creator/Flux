@@ -331,6 +331,14 @@ int main(int argc, char *argv[]) {
     }
     save_ppm(&fb, outdir, "31_wlan");
 
+    /* 32-34 -- animierte Aktions-Symbole (je ein Frame) */
+    flux_ui_draw_action_anim(&fb, FLUX_ANIM_MAIL, 10, "max@example.com");
+    save_ppm(&fb, outdir, "32_anim_mail");
+    flux_ui_draw_action_anim(&fb, FLUX_ANIM_CALL, 6, "Stefan Schmied");
+    save_ppm(&fb, outdir, "33_anim_anruf");
+    flux_ui_draw_action_anim(&fb, FLUX_ANIM_SCAN, 7, "WLAN-Suche");
+    save_ppm(&fb, outdir, "34_anim_wlan_suche");
+
     flux_fb_close(&fb);
     printf("\nFertig! PPM -> PNG: convert %s/XX.ppm %s/XX.png\n", outdir, outdir);
     return 0;

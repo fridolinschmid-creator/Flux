@@ -127,28 +127,35 @@ int flux_wifi_parse_scan(const char *text, flux_wifi_net_t *out, int max) {
 
 /* ---- Live-Scan ------------------------------------------------------- */
 
-int flux_wifi_scan(flux_wifi_net_t *out, int max) {
+void flux_wifi_scan_trigger(void) {
     const char *iface = wifi_iface();
-    if (!iface) return -1;
-
+    if (!iface) return;
     char cmd[256];
-    /* Scan anstossen (Ergebnis ignorieren) */
     snprintf(cmd, sizeof(cmd), "wpa_cli -i %s scan >/dev/null 2>&1", iface);
     if (system(cmd) != 0) { /* trotzdem versuchen, Ergebnisse zu lesen */ }
-    sleep(2); /* dem Treiber Zeit zum Scannen geben */
+}
 
+int flux_wifi_scan_results(flux_wifi_net_t *out, int max) {
+    const char *iface = wifi_iface();
+    if (!iface) return -1;
+    char cmd[256];
     snprintf(cmd, sizeof(cmd), "wpa_cli -i %s scan_results 2>/dev/null", iface);
     FILE *f = popen(cmd, "r");
     if (!f) return -1;
-    char text[8192]; size_t total = 0;
-    size_t r;
+    char text[8192]; size_t total = 0, r;
     while (total + 1 < sizeof(text) &&
            (r = fread(text + total, 1, sizeof(text) - 1 - total, f)) > 0)
         total += r;
     text[total] = '\0';
     pclose(f);
-
     return flux_wifi_parse_scan(text, out, max);
+}
+
+int flux_wifi_scan(flux_wifi_net_t *out, int max) {
+    if (!wifi_iface()) return -1;
+    flux_wifi_scan_trigger();
+    sleep(2); /* dem Treiber Zeit zum Scannen geben */
+    return flux_wifi_scan_results(out, max);
 }
 
 /* ---- Verbinden ------------------------------------------------------- */

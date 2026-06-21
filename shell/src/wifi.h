@@ -23,8 +23,15 @@ int flux_wifi_available(void);
  * zurueck. Reine Funktion -- fuer Unit-Tests exponiert. */
 int flux_wifi_parse_scan(const char *text, flux_wifi_net_t *out, int max);
 
-/* Scannt aktiv (Trigger + Ergebnisse). Gibt Anzahl Netze (>=0) oder -1. */
+/* Scannt aktiv (Trigger + 2s warten + Ergebnisse). Anzahl Netze oder -1. */
 int flux_wifi_scan(flux_wifi_net_t *out, int max);
+
+/* Scan nur anstossen (kehrt sofort zurueck) -- erlaubt der UI, waehrend der
+ * Wartezeit ein animiertes Symbol zu zeigen. */
+void flux_wifi_scan_trigger(void);
+
+/* Scan-Ergebnisse abholen und parsen (nach scan_trigger + kurzer Wartezeit). */
+int flux_wifi_scan_results(flux_wifi_net_t *out, int max);
 
 /* Verbindet mit ssid (pass darf "" sein fuer offene Netze).
  * Schreibt eine Status-/Fehlermeldung nach msg. Gibt 1 bei Erfolg. */

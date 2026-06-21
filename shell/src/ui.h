@@ -256,6 +256,23 @@ int flux_ui_meeting_hit(const flux_fb_t *fb, int x, int y,
  * scroll: erster sichtbarer Eintrag (fuer vertikales Scrollen). */
 void flux_ui_draw_memory(flux_fb_t *fb, const char **entries, int n, int scroll);
 
+/* ---- Animierte Aktions-Symbole ------------------------------------- *
+ * Vollbild-Overlay mit einem grossen animierten Symbol statt Textmeldung
+ * (Mail senden, Anruf, WLAN-Suche, Erfolg/Fehler). frame zaehlt hoch und
+ * treibt die Animation; caption ist eine optionale kleine Beschriftung
+ * (z.B. der Empfaenger) -- NULL fuer keine. */
+typedef enum {
+    FLUX_ANIM_MAIL,
+    FLUX_ANIM_SMS,
+    FLUX_ANIM_CALL,
+    FLUX_ANIM_SCAN,
+    FLUX_ANIM_OK,
+    FLUX_ANIM_FAIL,
+} flux_anim_kind_t;
+
+void flux_ui_draw_action_anim(flux_fb_t *fb, flux_anim_kind_t kind,
+                              int frame, const char *caption);
+
 /* ---- WLAN ----------------------------------------------------------- *
  * names/metas parallel (SSID + "Signal 80% - gesichert"). current: aktuell
  * verbundene SSID (leer = nicht verbunden). scanning: 1 waehrend des Scans.

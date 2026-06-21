@@ -112,6 +112,15 @@ static void animate_ripple(flux_fb_t *fb, int cx, int cy) {
     free(saved);
 }
 
+/* Spielt ein animiertes Aktions-Symbol fuer 'frames' Bilder ab. */
+static void animate_action(flux_fb_t *fb, flux_anim_kind_t kind,
+                           const char *caption, int frames, int delay_us) {
+    for (int f = 0; f < frames; f++) {
+        flux_ui_draw_action_anim(fb, kind, f, caption);
+        usleep(delay_us);
+    }
+}
+
 /* Slide-in-von-links fuer Zurueck-Navigationen (neuer Screen kommt von links). */
 static void animate_slide_from_left(flux_fb_t *fb, uint32_t *old_buf) {
     if (!old_buf || !fb->mmio) return;
@@ -581,10 +590,19 @@ static char        wifi_current[64]  = {0};
 static char        wifi_sel_ssid[64] = {0};
 static int         wifi_sel_secured  = 0;
 
-/* Scannt WLAN-Netze und befuellt die Anzeigepuffer. */
-static void wifi_rescan(void) {
+/* Scannt WLAN-Netze und befuellt die Anzeigepuffer. Zeigt waehrend der
+ * Wartezeit ein animiertes WLAN-Such-Symbol (statt Text). */
+static void wifi_rescan(flux_fb_t *fb) {
     flux_wifi_current(wifi_current, sizeof(wifi_current));
-    wifi_n = flux_wifi_scan(wifi_nets, WIFI_MAX);
+    wifi_n = 0;
+    if (!flux_wifi_available()) return;
+
+    flux_wifi_scan_trigger();
+    for (int f = 0; f < 30 && fb; f++) {           /* ~2 s animiert */
+        flux_ui_draw_action_anim(fb, FLUX_ANIM_SCAN, f, "WLAN-Suche");
+        usleep(66000);
+    }
+    wifi_n = flux_wifi_scan_results(wifi_nets, WIFI_MAX);
     if (wifi_n < 0) wifi_n = 0;
     for (int i = 0; i < wifi_n; i++) {
         snprintf(wifi_names_buf[i], sizeof(wifi_names_buf[0]), "%s", wifi_nets[i].ssid);
@@ -1323,14 +1341,29 @@ int main(void) {
                 animate_slide_in(&fb, old);
                 free(old);
             } else if (hit == FLUX_CONFIRM_SEND) {
+                /* Animiertes Symbol statt Textmeldung: Papierflieger (Mail),
+                 * Sprechblase (SMS) bzw. pulsierende Ringe (Anruf). */
+                flux_anim_kind_t ak =
+                    pending_action.type == FLUX_ACTION_CALL ? FLUX_ANIM_CALL :
+                    pending_action.type == FLUX_ACTION_SMS  ? FLUX_ANIM_SMS  :
+                                                              FLUX_ANIM_MAIL;
+                char cap[80];
+                snprintf(cap, sizeof(cap), "%.60s", pending_action.to);
+                animate_action(&fb, ak, cap,
+                               ak == FLUX_ANIM_CALL ? 30 : 18, 60000);
+
                 char req[FLUX_MAX_LINE];
                 flux_action_build_request(&pending_action, req, sizeof(req));
                 flux_ipc_send_raw(req, answer_buf, sizeof(answer_buf));
-                uint32_t *old = capture_frame(&fb);
+
+                /* Ergebnis-Symbol: Haken bei klarem Erfolg, X bei Fehler. */
+                int ok  = strstr(answer_buf, "gesendet") || strstr(answer_buf, "Verbunden");
+                int err = strstr(answer_buf, "fehlgeschlagen") || strstr(answer_buf, "Fehler");
+                if (ok)       animate_action(&fb, FLUX_ANIM_OK,   NULL, 10, 45000);
+                else if (err) animate_action(&fb, FLUX_ANIM_FAIL, NULL,  8, 60000);
+
                 screen = FLUX_SCREEN_ASSISTANT;
                 flux_ui_draw_assistant(&fb, last_q, input_buf, answer_buf, 0);
-                animate_slide_in(&fb, old);
-                free(old);
             }
             continue;
         }
@@ -1451,7 +1484,7 @@ int main(void) {
                     char msg[160];
                     flux_wifi_connect(wifi_sel_ssid, edit_buf, msg, sizeof(msg));
                     flux_ui_set_edit_title(NULL);
-                    wifi_rescan();
+                    wifi_rescan(&fb);
                     uint32_t *old = capture_frame(&fb);
                     screen = FLUX_SCREEN_WIFI;
                     flux_ui_draw_wifi(&fb, wifi_current, wifi_names_p, wifi_metas_p,
@@ -1502,14 +1535,9 @@ int main(void) {
                 load_settings_values();
                 flux_ui_draw_settings(&fb, setting_labels, setting_values, FLUX_SETTINGS_N);
             } else if (strcmp(setting_keys[idx], "__wifi") == 0) {
-                /* WLAN-Screen oeffnen und sofort scannen */
-                uint32_t *old = capture_frame(&fb);
+                /* WLAN-Screen oeffnen; wifi_rescan zeigt das animierte Such-Symbol */
                 screen = FLUX_SCREEN_WIFI;
-                flux_ui_draw_wifi(&fb, wifi_current, wifi_names_p, wifi_metas_p,
-                                  0, 1, !flux_wifi_available());  /* "Suche ..." */
-                animate_slide_in(&fb, old);
-                free(old);
-                wifi_rescan();
+                wifi_rescan(&fb);
                 flux_ui_draw_wifi(&fb, wifi_current, wifi_names_p, wifi_metas_p,
                                   wifi_n, 0, !flux_wifi_available());
             } else if (strcmp(setting_keys[idx], "__email") == 0) {
@@ -1554,9 +1582,7 @@ int main(void) {
             if (back) {
                 if (wifi_n == 0) {
                     /* untere Leiste = "Aktualisieren" bei leerer Liste */
-                    flux_ui_draw_wifi(&fb, wifi_current, wifi_names_p, wifi_metas_p,
-                                      0, 1, !flux_wifi_available());
-                    wifi_rescan();
+                    wifi_rescan(&fb);
                     flux_ui_draw_wifi(&fb, wifi_current, wifi_names_p, wifi_metas_p,
                                       wifi_n, 0, !flux_wifi_available());
                 } else {
@@ -1582,7 +1608,7 @@ int main(void) {
                 } else {
                     char msg[160];
                     flux_wifi_connect(wifi_sel_ssid, "", msg, sizeof(msg));
-                    wifi_rescan();
+                    wifi_rescan(&fb);
                     flux_ui_draw_wifi(&fb, wifi_current, wifi_names_p, wifi_metas_p,
                                       wifi_n, 0, !flux_wifi_available());
                 }
