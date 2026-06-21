@@ -109,7 +109,7 @@ int flux_provider_available(void) {
 }
 
 /* --- Conversation context (last CTX_MAX turns) --- */
-#define CTX_MAX 3
+#define CTX_MAX 12
 typedef struct { char q[256]; char a[512]; } ctx_turn_t;
 static ctx_turn_t ctx_history[CTX_MAX];
 static int        ctx_n = 0;

@@ -1085,7 +1085,7 @@ static void load_files(const char *path) {
 static void files_go_parent(void) {
     char *slash = strrchr(files_path, '/');
     if (slash && slash != files_path) *slash = '\0';
-    else strcpy(files_path, "/");
+    else { files_path[0] = '/'; files_path[1] = '\0'; }
     file_selected = -1;
 }
 

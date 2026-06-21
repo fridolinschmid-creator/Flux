@@ -4,7 +4,7 @@
 #   make
 CROSS_COMPILE ?=
 CC      := $(CROSS_COMPILE)gcc
-CFLAGS  ?= -O2 -Wall -Wextra -std=gnu11 -D_GNU_SOURCE
+CFLAGS  ?= -O2 -Wall -Wextra -Wformat-security -std=gnu11 -D_GNU_SOURCE
 LDFLAGS ?= -lm
 
 SRC := $(wildcard src/*.c) $(wildcard ../common/*.c)

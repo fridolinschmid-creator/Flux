@@ -20,6 +20,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#include <fcntl.h>
 #include <signal.h>
 #include <sys/wait.h>
 #include <sys/stat.h>
@@ -161,12 +162,19 @@ int flux_voice_stop_and_transcribe(char *out, size_t out_cap) {
      *   -np          -- Kein Fortschrittsbalken
      *   --output-txt -- Textausgabe in VOICE_WAV + ".txt"
      * whisper-cli schreibt das Ergebnis als <inputfile>.txt */
-    char cmd[1024];
-    snprintf(cmd, sizeof(cmd),
-             "%s -m %s -f %s -l de -nt -np --output-txt 2>/dev/null",
-             whisper, model, VOICE_WAV);
-    int ret = system(cmd);
-    (void)ret;
+    /* Whisper ohne system()-Shell-Injection */
+    pid_t pid = fork();
+    if (pid == 0) {
+        int devnull = open("/dev/null", O_WRONLY);
+        if (devnull >= 0) { dup2(devnull, STDERR_FILENO); close(devnull); }
+        char *argv[] = { (char *)whisper, "-m", (char *)model,
+                         "-f", VOICE_WAV, "-l", "de", "-nt", "-np",
+                         "--output-txt", NULL };
+        execvp(whisper, argv);
+        _exit(127);
+    }
+    if (pid > 0) { int ws; waitpid(pid, &ws, 0); }
+    (void)pid;
 
     /* Ergebnis lesen (whisper schreibt "<wav>.txt") */
     char txt_path[256];

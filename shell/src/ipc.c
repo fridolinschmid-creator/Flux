@@ -18,6 +18,11 @@ void flux_ipc_send_raw(const char *request, char *out, size_t out_cap) {
     addr.sun_family = AF_UNIX;
     strncpy(addr.sun_path, FLUX_SOCK_PATH, sizeof(addr.sun_path) - 1);
 
+    /* 5-Sekunden Timeout: Shell friert nicht ein wenn fluxaid haengt */
+    struct timeval tv = { .tv_sec = 5, .tv_usec = 0 };
+    setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+    setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
+
     if (connect(fd, (struct sockaddr *)&addr, sizeof(addr)) < 0) {
         snprintf(out, out_cap, "fluxaid laeuft nicht (kein Socket unter %s).", FLUX_SOCK_PATH);
         close(fd);
