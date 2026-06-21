@@ -115,11 +115,15 @@ void flux_fb_blend_rect(flux_fb_t *fb, int x, int y, int w, int h, uint32_t rgb,
 
 /* stb_easy_font liefert pro Buchstabenstrich ein Quad (4 Vertices a
  * 16 Byte: float x, float y, float z, uint8 color[4]). Wir rastern
- * jedes Quad als gefuelltes Rechteck in den Backbuffer. */
-void flux_fb_text(flux_fb_t *fb, int x, int y, const char *s, uint32_t rgb, int scale) {
-    char vbuf[64 * 1024];
-    int num_quads = stb_easy_font_print(0, 0, (char *)s, NULL, vbuf, sizeof(vbuf));
+ * jedes Quad als gefuelltes Rechteck in den Backbuffer.
+ * Unterstuetzt UTF-8: deutsche Umlaute werden als Basiszeichen + Punkte gerendert. */
 
+/* Rasterniert alle Quads eines einzelnen ASCII-Zeichens; gibt Zeichenbreite zurueck. */
+static int render_ascii_char(flux_fb_t *fb, int x, int y, char c, uint32_t rgb, int scale) {
+    char s[2] = {c, 0};
+    char vbuf[4096];
+    int num_quads = stb_easy_font_print(0, 0, s, NULL, vbuf, sizeof(vbuf));
+    int weight = scale + (scale >= 3 ? 1 : 0);
     for (int q = 0; q < num_quads; q++) {
         float qx[4], qy[4];
         for (int v = 0; v < 4; v++) {
@@ -127,31 +131,89 @@ void flux_fb_text(flux_fb_t *fb, int x, int y, const char *s, uint32_t rgb, int 
             float fx, fy;
             memcpy(&fx, base, 4);
             memcpy(&fy, base + 4, 4);
-            qx[v] = fx;
-            qy[v] = fy;
+            qx[v] = fx; qy[v] = fy;
         }
-        float minx = qx[0], maxx = qx[0], miny = qy[0], maxy = qy[0];
+        float minx=qx[0], maxx=qx[0], miny=qy[0], maxy=qy[0];
         for (int v = 1; v < 4; v++) {
             if (qx[v] < minx) minx = qx[v];
             if (qx[v] > maxx) maxx = qx[v];
             if (qy[v] < miny) miny = qy[v];
             if (qy[v] > maxy) maxy = qy[v];
         }
-        int rx = x + (int)(minx * scale);
-        int ry = y + (int)(miny * scale);
         int rw = (int)((maxx - minx) * scale);
         int rh = (int)((maxy - miny) * scale);
-        /* Strichstaerke: groessere Schrift bekommt etwas mehr Gewicht, damit
-         * der duenne stb_easy_font-Strich auf dem Handy gut lesbar bleibt. */
-        int weight = scale + (scale >= 3 ? 1 : 0);
         if (rw < weight) rw = weight;
         if (rh < weight) rh = weight;
-        flux_fb_fill_rect(fb, rx, ry, rw, rh, rgb);
+        flux_fb_fill_rect(fb, x + (int)(minx * scale), y + (int)(miny * scale), rw, rh, rgb);
+    }
+    return stb_easy_font_width(s) * scale;
+}
+
+/* Zwei Punkte ueber einem Buchstaben (Umlaut-Diaeresis). */
+static void draw_diaeresis(flux_fb_t *fb, int x, int char_w, int y, int scale, uint32_t rgb) {
+    int dot = (scale <= 2) ? 2 : scale;
+    int dot_y = y - dot - 1;
+    int third = char_w / 3;
+    flux_fb_fill_rect(fb, x + third - dot / 2,     dot_y, dot, dot, rgb);
+    flux_fb_fill_rect(fb, x + 2 * third - dot / 2, dot_y, dot, dot, rgb);
+}
+
+/* Dekodiert ein UTF-8-Codepoint (erstes Zeichen); gibt Basiszeichen und Flags zurueck.
+ * Returns Anzahl verbrauchter Bytes. base_char gesetzt, dots=1 fuer Umlaut, dbl=1 fuer ss (ß). */
+static int utf8_decode_german(const unsigned char *p, char *base_char, int *dots, int *dbl) {
+    *dots = 0; *dbl = 0; *base_char = '?';
+    if (p[0] < 0x80) { *base_char = (char)p[0]; return 1; }
+    if (p[0] == 0xC3 && p[1]) {
+        switch (p[1]) {
+            case 0xA4: *base_char='a'; *dots=1; return 2;  /* ä */
+            case 0xB6: *base_char='o'; *dots=1; return 2;  /* ö */
+            case 0xBC: *base_char='u'; *dots=1; return 2;  /* ü */
+            case 0x84: *base_char='A'; *dots=1; return 2;  /* Ä */
+            case 0x96: *base_char='O'; *dots=1; return 2;  /* Ö */
+            case 0x9C: *base_char='U'; *dots=1; return 2;  /* Ü */
+            case 0x9F: *base_char='s'; *dbl=1;  return 2;  /* ß -> ss */
+            case 0xA9: *base_char='e';           return 2;  /* é */
+            default: break;
+        }
+    }
+    /* Unbekannte Multibyte-Sequenz: ueberspringen */
+    if ((p[0] & 0xE0) == 0xC0) return 2;
+    if ((p[0] & 0xF0) == 0xE0) return 3;
+    if ((p[0] & 0xF8) == 0xF0) return 4;
+    return 1;
+}
+
+void flux_fb_text(flux_fb_t *fb, int x, int y, const char *s, uint32_t rgb, int scale) {
+    int cx = x;
+    const unsigned char *p = (const unsigned char *)s;
+    while (*p) {
+        char base; int dots, dbl;
+        int consumed = utf8_decode_german(p, &base, &dots, &dbl);
+        if (base != '?') {
+            int cw = render_ascii_char(fb, cx, y, base, rgb, scale);
+            if (dots) draw_diaeresis(fb, cx, cw, y, scale, rgb);
+            cx += cw;
+            if (dbl) cx += render_ascii_char(fb, cx, y, base, rgb, scale);
+        }
+        p += consumed;
     }
 }
 
 int flux_fb_text_width(const char *s, int scale) {
-    return stb_easy_font_width((char *)s) * scale;
+    int w = 0;
+    const unsigned char *p = (const unsigned char *)s;
+    while (*p) {
+        char base; int dots, dbl;
+        int consumed = utf8_decode_german(p, &base, &dots, &dbl);
+        if (base != '?') {
+            char buf[2] = {base, 0};
+            int cw = stb_easy_font_width(buf) * scale;
+            w += cw;
+            if (dbl) w += cw;
+        }
+        p += consumed;
+    }
+    return w;
 }
 
 /* ---- Erweiterte Primitive --------------------------------------------- */

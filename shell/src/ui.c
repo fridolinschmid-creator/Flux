@@ -53,6 +53,22 @@ void flux_ui_set_accent(uint32_t rgb) {
 #define LIST_MAX_ROWS 12
 #define PIN_LEN 4
 
+/* Deutsche Wochentage und Monate (strftime %A/%B sind englisch ohne setlocale). */
+static const char *s_de_wday[] = {
+    "Sonntag","Montag","Dienstag","Mittwoch","Donnerstag","Freitag","Samstag"
+};
+static const char *s_de_mon[] = {
+    "Januar","Februar","März","April","Mai","Juni",
+    "Juli","August","September","Oktober","November","Dezember"
+};
+
+static void format_german_date(char *buf, size_t cap, const struct tm *tm) {
+    snprintf(buf, cap, "%s, %d. %s",
+             s_de_wday[tm->tm_wday],
+             tm->tm_mday,
+             s_de_mon[tm->tm_mon]);
+}
+
 /* Vorwaerts-Deklarationen (Definitionen weiter unten im Animations-Teil). */
 static void fill_circle(flux_fb_t *fb, int cx, int cy, int r, uint32_t col);
 static void draw_ring(flux_fb_t *fb, int cx, int cy, int r, int thick, uint32_t col);
@@ -364,7 +380,7 @@ void flux_ui_draw_lock(flux_fb_t *fb) {
     localtime_r(&t, &tmv);
     char clock_buf[16], date_buf[64];
     strftime(clock_buf, sizeof(clock_buf), "%H:%M", &tmv);
-    strftime(date_buf, sizeof(date_buf), "%A, %d. %B", &tmv);
+    format_german_date(date_buf, sizeof(date_buf), &tmv);
 
     /* Riesige Zeit in der oberen Bildschirmhaelfte -- der "wow"-Moment */
     int scale_clock = fb->width / 110;
@@ -1236,10 +1252,13 @@ void flux_ui_draw_confirm(flux_fb_t *fb, const char *type_label,
 
     /* Kopfzeile */
     char header[80];
-    snprintf(header, sizeof(header), "%s senden?", type_label);
+    if (strcmp(type_label, "Anruf") == 0)
+        snprintf(header, sizeof(header), "Anrufen?");
+    else
+        snprintf(header, sizeof(header), "%s senden?", type_label);
     int hw = flux_fb_text_width(header, 3);
     flux_fb_text(fb, (fb->width - hw) / 2, STATUSBAR_H + 16, header, COL_TEXT, 3);
-    const char *hint = "Tippe auf eine Zeile zum Aendern";
+    const char *hint = "Tippe auf eine Zeile zum Ändern";
     int hiw = flux_fb_text_width(hint, 2);
     flux_fb_text(fb, (fb->width - hiw) / 2, STATUSBAR_H + 44, hint, COL_DIM, 2);
 
@@ -1295,11 +1314,15 @@ void flux_ui_draw_confirm(flux_fb_t *fb, const char *type_label,
     int b2x = btn[1].x + 6, b2y = btn[1].y + 10;
     int b2w = btn[1].w - 12, b2h = btn[1].h - 20;
     flux_fb_fill_gradient_v_rounded(fb, b2x, b2y, b2w, b2h, 12, 0x059669, 0x10B981);
-    /* Sende-Pfeil-Icon */
-    draw_send_arrow(fb, b2x + b2w / 2 - 6, b2y + b2h / 2, 20, 0xFFFFFF);
     {
-        int lw = flux_fb_text_width("Senden", 2);
-        flux_fb_text(fb, b2x + b2w / 2 - lw / 2 + 16, b2y + (b2h - 14) / 2, "Senden", 0xFFFFFF, 2);
+        const char *btn_label = (strcmp(type_label, "Anruf") == 0) ? "Anrufen" : "Senden";
+        int lw = flux_fb_text_width(btn_label, 2);
+        int icon_w = 14, gap = 5;
+        int total_w = icon_w + gap + lw;
+        int sx = b2x + (b2w - total_w) / 2;
+        int mid_y = b2y + b2h / 2;
+        draw_send_arrow(fb, sx + icon_w / 2, mid_y, icon_w, 0xFFFFFF);
+        flux_fb_text(fb, sx + icon_w + gap, mid_y - 7, btn_label, 0xFFFFFF, 2);
     }
 
     flux_fb_present(fb);
@@ -1522,7 +1545,7 @@ void flux_ui_draw_settings(flux_fb_t *fb, const char **labels, const char **valu
     for (int i = 0; i < rn; i++)
         draw_setting_row(fb, rows[i], labels[i], values[i],
                          s_setting_icons ? s_setting_icons[i] : 0, 0, 100, 0);
-    draw_back_bar(fb, "Zurueck");
+    draw_back_bar(fb, "Zurück");
     flux_fb_present(fb);
 }
 
@@ -1543,7 +1566,7 @@ void flux_ui_draw_settings_reveal(flux_fb_t *fb, const char **labels,
         draw_setting_row(fb, rows[shown], labels[shown], values[shown],
                          s_setting_icons ? s_setting_icons[shown] : 0,
                          dir * slide_px, grow_pct < 10 ? 10 : grow_pct, 1);
-    draw_back_bar(fb, "Zurueck");
+    draw_back_bar(fb, "Zurück");
     flux_fb_present(fb);
 }
 
@@ -1575,7 +1598,7 @@ void flux_ui_draw_wifi(flux_fb_t *fb, const char *current, const char **names,
         draw_wrapped(fb, 16, STATUSBAR_H + TITLE_AREA_H + 8, fb->width - 32,
                      "Kein WLAN-Geraet erkannt (oder wpa_cli fehlt).",
                      COL_DIM, 2, 26);
-        draw_back_bar(fb, "Zurueck");
+        draw_back_bar(fb, "Zurück");
         flux_fb_present(fb);
         return;
     }
@@ -1586,7 +1609,7 @@ void flux_ui_draw_wifi(flux_fb_t *fb, const char *current, const char **names,
             int bx = 16 + b * 16, bh = 8 + b * 6;
             fill_round_rect(fb, bx, STATUSBAR_H + TITLE_AREA_H + 36 - bh, 10, bh, 3, COL_ACCENT);
         }
-        draw_back_bar(fb, "Zurueck");
+        draw_back_bar(fb, "Zurück");
         flux_fb_present(fb);
         return;
     }
@@ -1622,7 +1645,7 @@ void flux_ui_draw_wifi(flux_fb_t *fb, const char *current, const char **names,
                             rows[i].y + rows[i].h/2 - 8, 2, COL_SEND);
         }
     }
-    draw_back_bar(fb, "Zurueck");
+    draw_back_bar(fb, "Zurück");
     flux_fb_present(fb);
 }
 
@@ -1691,13 +1714,13 @@ void flux_ui_draw_files(flux_fb_t *fb, const char *path, const char **names,
         int del_x = fb->width - FILES_DELETE_BTN_W - 10;
         fill_round_rect(fb, del_x, del_y, FILES_DELETE_BTN_W, FILES_DELETE_BTN_H, 8, 0x7F1D1D);
         flux_fb_hline(fb, del_x, del_y, FILES_DELETE_BTN_W, COL_DANGER);
-        const char *dlabel = "Loeschen";
+        const char *dlabel = "Löschen";
         int dlw = flux_fb_text_width(dlabel, 2);
         flux_fb_text(fb, del_x + (FILES_DELETE_BTN_W - dlw) / 2,
                      del_y + (FILES_DELETE_BTN_H - 16) / 2, dlabel, COL_DANGER, 2);
     }
 
-    draw_back_bar(fb, "Zurueck");
+    draw_back_bar(fb, "Zurück");
     flux_fb_present(fb);
 }
 
@@ -1772,7 +1795,7 @@ void flux_ui_draw_file_viewer(flux_fb_t *fb, const char *path,
                      text_bottom - 20, up, COL_DIM, 2);
     }
 
-    /* Geteilte Leiste unten: links "Zurueck", rechts "KI fragen".
+    /* Geteilte Leiste unten: links "Zurück", rechts "KI fragen".
      * Die KI-Schaltflaeche macht die Dokument-KI sichtbar (vorher nur
      * per Wisch-nach-rechts erreichbar, siehe flux_ui_viewer_hit). */
     {
@@ -1781,7 +1804,7 @@ void flux_ui_draw_file_viewer(flux_fb_t *fb, const char *path,
         int split = fb->width * 3 / 5;
         flux_fb_fill_rect(fb, split, by + 10, 1, LIST_BACK_H - 20, COL_DIVIDER);
 
-        const char *back_lbl = "Zurueck";
+        const char *back_lbl = "Zurück";
         int btw = flux_fb_text_width(back_lbl, 3);
         flux_fb_text(fb, (split - btw) / 2, by + (LIST_BACK_H - 21) / 2,
                      back_lbl, COL_DIM, 3);
@@ -1825,7 +1848,7 @@ void flux_ui_draw_notify(flux_fb_t *fb) {
     localtime_r(&t, &tmv);
     char clock_buf[16], date_buf[64];
     strftime(clock_buf, sizeof(clock_buf), "%H:%M", &tmv);
-    strftime(date_buf, sizeof(date_buf), "%A, %d. %B", &tmv);
+    format_german_date(date_buf, sizeof(date_buf), &tmv);
 
     int cw = flux_fb_text_width(clock_buf, 7);
     flux_fb_text_shadow(fb, (fb->width - cw) / 2, y, clock_buf, COL_TEXT, 7);
@@ -1885,6 +1908,7 @@ void flux_ui_draw_notify(flux_fb_t *fb) {
     }
 
     /* --- Alarme -------------------------------------------------------- */
+    int any_shown = 0;
     {
         FILE *f = fopen("/tmp/flux_alarms.txt", "r");
         if (f) {
@@ -1902,7 +1926,7 @@ void flux_ui_draw_notify(flux_fb_t *fb) {
                     y += 28;
                 }
                 flux_fb_text(fb, 24, y, line, COL_TEXT, 2);
-                y += 26; shown++;
+                y += 26; shown++; any_shown = 1;
             }
             fclose(f);
             if (shown) y += 8;
@@ -1927,15 +1951,24 @@ void flux_ui_draw_notify(flux_fb_t *fb) {
                     y += 28;
                 }
                 flux_fb_text(fb, 24, y, line, COL_TEXT, 2);
-                y += 26; shown++;
+                y += 26; shown++; any_shown = 1;
             }
             fclose(f);
         }
     }
 
-    /* Hinweis zum Schliessen */
+    /* Leer-Zustand wenn keine Benachrichtigungen */
+    if (!any_shown) {
+        fill_round_rect(fb, 12, y, fb->width - 24, 64, 10, COL_SURFACE);
+        const char *empty = "Keine Benachrichtigungen";
+        int ew = flux_fb_text_width(empty, 2);
+        flux_fb_text(fb, (fb->width - ew) / 2, y + 24, empty, COL_DIM, 2);
+        y += 74;
+    }
+
+    /* Hinweis zum Schließen */
     {
-        const char *hint = "Tippen zum Schliessen";
+        const char *hint = "Tippen zum Schließen";
         int hw = flux_fb_text_width(hint, 2);
         flux_fb_text(fb, (fb->width - hw) / 2, fb->height - 36, hint, COL_DIM, 2);
         flux_fb_hline(fb, (fb->width - hw) / 2, fb->height - 20,
@@ -2171,7 +2204,7 @@ void flux_ui_draw_calendar(flux_fb_t *fb, int year, int month,
         flux_fb_text(fb, 12, ev_y, "(Keine Termine)", COL_DIM, 2);
     }
 
-    draw_back_bar(fb, "Zurueck");
+    draw_back_bar(fb, "Zurück");
     flux_fb_present(fb);
 }
 
@@ -2242,7 +2275,7 @@ void flux_ui_draw_contacts(flux_fb_t *fb, const char **names,
         }
     }
 
-    draw_back_bar(fb, "Zurueck");
+    draw_back_bar(fb, "Zurück");
     flux_fb_present(fb);
 }
 
@@ -2306,7 +2339,7 @@ void flux_ui_draw_gallery(flux_fb_t *fb, const char **names, const char **dates,
         }
     }
 
-    draw_back_bar(fb, "Zurueck");
+    draw_back_bar(fb, "Zurück");
     flux_fb_present(fb);
 }
 
@@ -2399,7 +2432,7 @@ void flux_ui_draw_image_viewer(flux_fb_t *fb, const char *filename,
     flux_fb_fill_rect(fb, 0, btn_area_y, fb->width, IV_BTN_H, COL_BG);
     flux_fb_hline(fb, 0, btn_area_y, fb->width, COL_DIVIDER);
     int bw = fb->width / IV_BTN_COUNT;
-    const char *btn_labels[] = { "< Zurueck", "KI analyse", "Loeschen" };
+    const char *btn_labels[] = { "< Zurück", "KI analyse", "Löschen" };
     for (int i = 0; i < IV_BTN_COUNT; i++) {
         int bx = i * bw + 6;
         int byw = btn_area_y + 6;
@@ -2505,19 +2538,8 @@ void flux_ui_draw_ai_overlay(flux_fb_t *fb, const char *context_label,
             fill_round_rect(fb, cx, ry, cw, rh, 10, COL_SURFACE);
             flux_fb_fill_gradient_h(fb, cx, ry, cw, 3, COL_ACCENT, COL_ACCENT2);
 
-            const char *p = result_text;
-            int text_bottom = ry + rh - 52;
-            int ly = ry + 10;
-            while (*p && ly < text_bottom) {
-                char line[48]; int len = 0;
-                while (p[len] && p[len] != '\n' && len < 42) len++;
-                if (len == 0) { p++; ly += 17; continue; }
-                memcpy(line, p, (size_t)len); line[len] = '\0';
-                flux_fb_text(fb, cx + 12, ly, line, COL_TEXT, 2);
-                ly += 17;
-                p += len;
-                if (*p == '\n') p++;
-            }
+            draw_wrapped(fb, cx + 12, ry + 10, cw - 24,
+                         result_text, COL_TEXT, 2, 20);
 
             /* "Speichern"-Button */
             int sy = ry + rh - 46;
@@ -2618,7 +2640,7 @@ void flux_ui_draw_meeting(flux_fb_t *fb, int recording, int elapsed_s,
             draw_wrapped(fb, 22, tr_top + 8,
                          fb->width - 44, transcript, COL_TEXT, 2, tr_bot - tr_top - 16);
         } else {
-            const char *ph = recording ? "Transkription laueft ..." : "Kein Transkript";
+            const char *ph = recording ? "Transkription läuft ..." : "Kein Transkript";
             tw = flux_fb_text_width(ph, 2);
             flux_fb_text(fb, (fb->width - tw) / 2,
                          tr_top + (tr_bot - tr_top) / 2 - 8, ph, COL_DIM, 2);
@@ -2629,11 +2651,11 @@ void flux_ui_draw_meeting(flux_fb_t *fb, int recording, int elapsed_s,
     int save_y = fb->height - MTG_SAVE_H - MTG_BACK_H;
     flux_fb_fill_gradient_v_rounded(fb, 16, save_y + 4, fb->width - 32, MTG_SAVE_H - 8,
                                     8, COL_SEND, 0x059669);
-    tw = flux_fb_text_width("Speichern & Schliessen", 2);
+    tw = flux_fb_text_width("Speichern & Schließen", 2);
     flux_fb_text(fb, (fb->width - tw) / 2, save_y + (MTG_SAVE_H - 16) / 2,
-                 "Speichern & Schliessen", 0xFFFFFF, 2);
+                 "Speichern & Schließen", 0xFFFFFF, 2);
 
-    draw_back_bar(fb, "Zurueck");
+    draw_back_bar(fb, "Zurück");
     flux_fb_present(fb);
 }
 
@@ -2656,7 +2678,7 @@ void flux_ui_draw_memory(flux_fb_t *fb, const char **entries, int n, int scroll)
     draw_statusbar(fb);
 
     /* Header */
-    flux_fb_text(fb, 16, STATUSBAR_H + 10, "KI-Gedaechtnis", COL_TEXT, 3);
+    flux_fb_text(fb, 16, STATUSBAR_H + 10, "KI-Gedächtnis", COL_TEXT, 3);
     flux_fb_fill_gradient_h(fb, 16, STATUSBAR_H + 40, 148, 2, COL_ACCENT, COL_ACCENT2);
 
     int list_y = STATUSBAR_H + TITLE_AREA_H;
@@ -2668,7 +2690,7 @@ void flux_ui_draw_memory(flux_fb_t *fb, const char **entries, int n, int scroll)
         const char *empty = "Noch kein Wissen gespeichert.";
         int tw = flux_fb_text_width(empty, 2);
         flux_fb_text(fb, (fb->width - tw) / 2, ey + 28, empty, COL_DIM, 2);
-        draw_back_bar(fb, "Zurueck");
+        draw_back_bar(fb, "Zurück");
         flux_fb_present(fb);
         return;
     }
@@ -2698,19 +2720,8 @@ void flux_ui_draw_memory(flux_fb_t *fb, const char **entries, int n, int scroll)
                 flux_fb_text(fb, 22, ey + 8, ts_buf, COL_DIM, 1);
                 const char *text = end_bracket + 1;
                 while (*text == ' ') text++;
-                char line1[52] = {0}, line2[52] = {0};
-                int l1 = 0;
-                while (text[l1] && text[l1] != '\n' && l1 < 46) l1++;
-                memcpy(line1, text, (size_t)l1); line1[l1] = '\0';
-                flux_fb_text(fb, 18, ey + 26, line1, COL_TEXT, 2);
-                text += l1;
-                if (*text == '\n') text++;
-                if (*text) {
-                    int l2 = 0;
-                    while (text[l2] && text[l2] != '\n' && l2 < 46) l2++;
-                    memcpy(line2, text, (size_t)l2); line2[l2] = '\0';
-                    flux_fb_text(fb, 18, ey + 48, line2, COL_TEXT_MUTED, 2);
-                }
+                draw_wrapped(fb, 18, ey + 26, fb->width - 34,
+                             text, COL_TEXT, 2, 22);
             } else {
                 flux_fb_text(fb, 18, ey + 28, entry, COL_TEXT, 2);
             }
@@ -2727,7 +2738,7 @@ void flux_ui_draw_memory(flux_fb_t *fb, const char **entries, int n, int scroll)
         fill_round_rect(fb, fb->width - 5, bar_y, 4, bar_h, 2, COL_ACCENT);
     }
 
-    draw_back_bar(fb, "Zurueck");
+    draw_back_bar(fb, "Zurück");
     flux_fb_present(fb);
 }
 
@@ -2774,7 +2785,7 @@ int flux_ui_ai_overlay_hit(const flux_fb_t *fb, int x, int y,
 
 /* Source-Farben: Gedaechtnis, Kalender, Kontakte, Dateien, Foto, Notiz */
 static uint32_t srch_source_color(const char *line) {
-    if (strncmp(line, "Gedaechtnis:", 12) == 0 || strncmp(line, "Memory:", 7) == 0)
+    if (strncmp(line, "Gedächtnis:", 12) == 0 || strncmp(line, "Memory:", 7) == 0)
         return 0x4FD1C5; /* Teal */
     if (strncmp(line, "Kalender:", 9) == 0)
         return 0x3B82F6; /* Blau */
@@ -2826,7 +2837,7 @@ void flux_ui_draw_search(flux_fb_t *fb, const char *query,
         int sw = flux_fb_text_width("KI sucht...", 2);
         flux_fb_text(fb, (fb->width - sw) / 2, list_y + 16, "KI sucht...", COL_ACCENT, 2);
         flux_fb_text(fb, 20, list_y + 42,
-                     "Gedaechtnis, Kalender, Kontakte, Dateien", COL_DIM, 2);
+                     "Gedächtnis, Kalender, Kontakte, Dateien", COL_DIM, 2);
         draw_keyboard(fb);
         flux_fb_present(fb);
         return;
@@ -2839,12 +2850,12 @@ void flux_ui_draw_search(flux_fb_t *fb, const char *query,
     } else if (n == 0) {
         /* Intro cards */
         const char *sources[] = {
-            "Gedaechtnis", "Kalender", "Kontakte", "Dateien", "Fotos"
+            "Gedächtnis", "Kalender", "Kontakte", "Dateien", "Fotos"
         };
         static const uint32_t src_cols[] = {
             0x4FD1C5, 0x3B82F6, 0xA855F7, 0x6B7280, 0xF97316
         };
-        flux_fb_text(fb, 16, list_y + 2, "Tippe und druecke Enter", COL_TEXT_MUTED, 2);
+        flux_fb_text(fb, 16, list_y + 2, "Tippe und drücke Enter", COL_TEXT_MUTED, 2);
         int ey = list_y + 30;
         for (int i = 0; i < 5 && ey < kbd_top - 28; i++) {
             fill_round_rect(fb, 10, ey, fb->width - 20, 28, 6, COL_SURFACE);

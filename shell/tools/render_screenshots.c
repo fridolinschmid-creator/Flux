@@ -12,6 +12,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
+#include <time.h>
 #include <sys/stat.h>
 
 static void save_ppm(const flux_fb_t *fb, const char *dir, const char *name) {
@@ -34,6 +35,15 @@ int main(int argc, char *argv[]) {
     const char *outdir = (argc > 1) ? argv[1] : "/tmp/flux_screenshots";
     mkdir(outdir, 0755);
 
+    /* Aktuelle Zeit fuer realistische Demo-Daten (#1, #2) */
+    time_t now = time(NULL);
+    struct tm tmv;
+    localtime_r(&now, &tmv);
+    char ai_time_buf[32];
+    snprintf(ai_time_buf, sizeof(ai_time_buf), "Es ist %02d:%02d Uhr.",
+             tmv.tm_hour, tmv.tm_min);
+    int today_day = tmv.tm_mday;
+
     flux_fb_t fb;
     if (flux_fb_open_null(&fb, 480, 854) != 0) {
         fprintf(stderr, "flux_fb_open_null fehlgeschlagen\n");
@@ -43,6 +53,7 @@ int main(int argc, char *argv[]) {
     printf("Rendere Flux UI-Screenshots (480x854) nach %s/ ...\n", outdir);
 
     /* 01 -- Lockscreen */
+    flux_ui_set_accent(0x6366F1);
     flux_ui_draw_lock(&fb);
     save_ppm(&fb, outdir, "01_lockscreen");
 
@@ -55,6 +66,7 @@ int main(int argc, char *argv[]) {
     save_ppm(&fb, outdir, "03_pin_fehler");
 
     /* 04 -- Assistent leer */
+    flux_ui_set_accent(0x6366F1);
     flux_ui_draw_assistant(&fb, "", "", "", 0);
     save_ppm(&fb, outdir, "04_assistent_leer");
 
@@ -72,46 +84,46 @@ int main(int argc, char *argv[]) {
     flux_ui_draw_assistant(&fb, "schreibe eine E-Mail an Max", "", "", 1);
     save_ppm(&fb, outdir, "06_assistent_denkt");
 
-    /* 07 -- Assistent: normale Textantwort (keine Aktion) */
+    /* 07 -- Assistent: normale Textantwort (aktuelle Uhrzeit) */
     flux_ui_draw_assistant(&fb,
-        "wie spaet ist es?",
+        "wie spät ist es?",
         "",
-        "Es ist 14:35 Uhr.",
+        ai_time_buf,   /* #1: echte Uhrzeit */
         0);
     save_ppm(&fb, outdir, "07_assistent_antwort");
 
-    /* 08 -- Assistent: laengere Antwort */
+    /* 08 -- Assistent: längere Antwort (Indigo-Akzent bleibt) */
     flux_ui_draw_assistant(&fb,
-        "erklaer mir kurz wie Flux funktioniert",
+        "erkläre mir kurz wie Flux funktioniert",
         "",
         "Flux ist ein KI-zentriertes Mobil-OS. "
-        "Du entsperrst das Geraet und sprichst direkt mit der KI -- "
+        "Du entsperrst das Gerät und sprichst direkt mit der KI -- "
         "kein App-Grid, kein Suchen. "
-        "Einstellungen und Dateien erreichst du ueber die zwei "
-        "Knoepfe oben oder indem du sie einfach eintippst.",
+        "Einstellungen und Dateien erreichst du über die zwei "
+        "Knöpfe oben oder indem du sie einfach eintippst.",
         0);
     save_ppm(&fb, outdir, "08_assistent_lange_antwort");
 
-    /* 09 -- Bestaetigungs-Dialog: E-Mail */
+    /* 09 -- Bestätigungs-Dialog: E-Mail */
     flux_ui_draw_confirm(&fb,
         "E-Mail",
         "max@example.com",
         "Bin heute krank",
         "Hallo Max!\n\n"
         "Ich muss dir leider sagen, dass ich heute krank bin "
-        "und nicht ins Buero komme.\n\n"
-        "Viele Gruesse");
+        "und nicht ins Büro komme.\n\n"
+        "Viele Grüße");
     save_ppm(&fb, outdir, "09_bestaetigung_email");
 
-    /* 10 -- Bestaetigungs-Dialog: SMS */
+    /* 10 -- Bestätigungs-Dialog: SMS */
     flux_ui_draw_confirm(&fb,
         "SMS",
         "+49 151 12345678",
         "",
-        "Ich komme heute etwas spaeter, alles gut!");
+        "Ich komme heute etwas später, alles gut!");
     save_ppm(&fb, outdir, "10_bestaetigung_sms");
 
-    /* 11 -- Bestaetigungs-Dialog: Anruf */
+    /* 11 -- Bestätigungs-Dialog: Anruf */
     flux_ui_draw_confirm(&fb,
         "Anruf",
         "+49 151 12345678",
@@ -123,11 +135,11 @@ int main(int argc, char *argv[]) {
     flux_ui_draw_edit_body(&fb,
         "Hallo Max!\n\n"
         "Ich muss dir leider sagen, dass ich heute krank bin "
-        "und nicht ins Buero komme.\n\n"
-        "Viele Gruesse");
+        "und nicht ins Büro komme.\n\n"
+        "Viele Grüße");
     save_ppm(&fb, outdir, "12_text_bearbeiten");
 
-    /* 13 -- Einstellungen */
+    /* 13 -- Einstellungen (#13: TTS "Deutsch", #14: Auto-Sperre "60 s") */
     const char *setting_labels[] = {
         "PIN-Code", "KI-Anbieter", "API-Key (Anbieter)", "Modell (Anbieter)",
         "E-Mail Einstellungen", "WLAN", "Web-Suche (SearXNG)",
@@ -136,7 +148,7 @@ int main(int argc, char *argv[]) {
     const char *setting_values[] = {
         "gesetzt", "DeepSeek", "********", "deepseek-chat",
         "ich@icloud.com", "FritzBox 7590", "http://macbook.local:8888",
-        "teal", "60", "1"
+        "teal", "60 s", "Deutsch"    /* #13: Deutsch, #14: 60 s */
     };
     static const int setting_icons[] = {
         FLUX_SICON_LOCK, FLUX_SICON_AI, FLUX_SICON_KEY, FLUX_SICON_CHIP,
@@ -158,20 +170,20 @@ int main(int argc, char *argv[]) {
     save_ppm(&fb, outdir, "13b_email_passwort");
     flux_ui_set_edit_title(NULL);
 
-    /* 14 -- Dateibrowser (keine Auswahl) */
-    const char *names[] = { "..", "Documents", "Pictures", "Music", "Videos", "flux.conf" };
-    const char *metas[] = { "Ordner", "Ordner", "Ordner", "Ordner", "Ordner", "1.2 KB" };
-    flux_ui_draw_files(&fb, "/home/user", names, metas, 6, 0, -1);
+    /* 14 -- Dateibrowser (#12: kein ".." Eintrag) */
+    const char *names[] = { "Documents", "Pictures", "Music", "Videos", "flux.conf" };
+    const char *metas[] = { "Ordner", "Ordner", "Ordner", "Ordner", "1.2 KB" };
+    flux_ui_draw_files(&fb, "/home/user", names, metas, 5, 0, -1);
     save_ppm(&fb, outdir, "14_dateien");
 
     /* 15 -- Dateibrowser mit markierter Datei */
-    flux_ui_draw_files(&fb, "/home/user", names, metas, 6, 0, 5);
+    flux_ui_draw_files(&fb, "/home/user", names, metas, 5, 0, 4);
     save_ppm(&fb, outdir, "15_dateien_ausgewaehlt");
 
     /* 16 -- Datei-Betrachter */
     flux_ui_draw_file_viewer(&fb, "/home/user/notizen.txt",
         "Einkaufliste:\n"
-        "- Milch\n- Brot\n- Kaese\n- Aepfel\n\n"
+        "- Milch\n- Brot\n- Käse\n- Äpfel\n\n"
         "TODO:\n"
         "- Arzt anrufen\n"
         "- Mail an Chef schreiben\n"
@@ -185,23 +197,24 @@ int main(int argc, char *argv[]) {
 
     /* 18 -- Assistenten-Bildschirm mit blauem Farbthema */
     flux_ui_set_accent(0x3B82F6);
-    flux_ui_draw_assistant(&fb, "wie spaet ist es?", "", "Es ist 14:35 Uhr.", 0);
+    flux_ui_draw_assistant(&fb, "wie spät ist es?", "", ai_time_buf, 0);
     save_ppm(&fb, outdir, "18_assistent_blau");
+    flux_ui_set_accent(0x6366F1);  /* #8: Akzent zurücksetzen */
 
-    /* 19 -- Kalender (Juni 2026, Tag 18 ausgewaehlt) */
+    /* 19 -- Kalender (#2: aktueller Tag) */
     flux_ui_set_accent(0x4FD1C5);
     {
         const char *evs[] = {
             "2026-06-20 14:00 Arzttermin",
             "2026-06-25 09:00 Meeting mit Team",
         };
-        flux_ui_draw_calendar(&fb, 2026, 6, 18, 18, evs, 2);
+        flux_ui_draw_calendar(&fb, 2026, 6, today_day, today_day, evs, 2);
     }
     save_ppm(&fb, outdir, "19_kalender");
 
     /* 20 -- Kontakte */
     {
-        const char *cnames[] = { "Max Mueller", "Anna Schmidt", "Dr. Weber" };
+        const char *cnames[] = { "Max Müller", "Anna Schmidt", "Dr. Weber" };
         const char *cdetails[] = {
             "+49 151 12345678, max@example.com",
             "+49 170 9876543, anna@example.com",
@@ -210,18 +223,18 @@ int main(int argc, char *argv[]) {
         flux_ui_draw_contacts(&fb, cnames, cdetails, 3, 0);
     }
     save_ppm(&fb, outdir, "20_kontakte");
+    flux_ui_set_accent(0x6366F1);  /* #8: Akzent zurücksetzen */
 
-    /* 21 -- Fotogalerie (3 Fotos) */
+    /* 21 -- Fotogalerie (#11: .jpg statt .ppm) */
     {
-        const char *gnames[] = { "IMG_20260618_143022.ppm", "IMG_20260617_091530.ppm", "IMG_20260615_180240.ppm" };
+        const char *gnames[] = { "IMG_20260618_143022.jpg", "IMG_20260617_091530.jpg", "IMG_20260615_180240.jpg" };
         const char *gdates[] = { "18.06.2026", "17.06.2026", "15.06.2026" };
         flux_ui_draw_gallery(&fb, gnames, gdates, 3, 0);
     }
     save_ppm(&fb, outdir, "21_fotogalerie");
 
-    /* 22 -- Bild-Betrachter mit KI-Analyse */
+    /* 22 -- Bild-Betrachter mit KI-Analyse (#11: .jpg) */
     {
-        /* Test-Bild: Himmel-Gradient als Pixel-Array */
         const int IW = 480, IH = 380;
         uint32_t *test_img = malloc((size_t)IW * IH * sizeof(uint32_t));
         if (test_img) {
@@ -238,10 +251,10 @@ int main(int argc, char *argv[]) {
                     test_img[y * IW + x] = (r << 16) | (g << 8) | b;
                 }
             }
-            flux_ui_draw_image_viewer(&fb, "IMG_20260618_143022.ppm",
+            flux_ui_draw_image_viewer(&fb, "IMG_20260618_143022.jpg",
                 test_img, IW, IH,
                 "Das Bild zeigt einen klaren blauen Himmel\n"
-                "mit gruener Wiese. Aufgenommen im Freien,\n"
+                "mit grüner Wiese. Aufgenommen im Freien,\n"
                 "vermutlich Mitteleuropa.",
                 0);
             free(test_img);
@@ -249,25 +262,24 @@ int main(int argc, char *argv[]) {
     }
     save_ppm(&fb, outdir, "22_bild_betrachter");
 
-    /* 23 -- KI-Overlay ueber Datei-Betrachter (Wisch nach rechts) */
+    /* 23 -- KI-Overlay über Datei-Betrachter */
     flux_ui_draw_file_viewer(&fb, "/home/user/mietvertrag.txt",
         "Mietvertrag\n\nParagraph 1: Mietbeginn 01.07.2026\n"
-        "Paragraph 4: Kuendigungsfrist 3 Monate\n"
-        "Paragraph 8: Zutritt mit 24h Vorankuendigung\n",
+        "Paragraph 4: Kündigungsfrist 3 Monate\n"
+        "Paragraph 8: Zutritt mit 24h Vorankündigung\n",
         0);
     flux_ui_draw_ai_overlay(&fb,
         "Datei: mietvertrag.txt",
-        "Was ist ungewoehnlich an diesem Vertrag?",
-        "Paragraph 8 enthaelt eine unuebliche Klausel:\n"
-        "Der Vermieter darf die Wohnung mit nur 24h\n"
-        "Vorankuendigung betreten. Ueblich sind 48h.\n"
-        "Rechtlich ist das in Deutschland grenzwertig.");
+        "Was ist ungewöhnlich an diesem Vertrag?",
+        "Paragraph 8 enthält eine unübliche Klausel: "
+        "Der Vermieter darf die Wohnung mit nur 24h Vorankündigung betreten. "
+        "Üblich sind 48h. Rechtlich ist das in Deutschland grenzwertig.");
     save_ppm(&fb, outdir, "23_ki_overlay_datei");
 
-    /* 24 -- KI-Overlay ueber Kalender */
+    /* 24 -- KI-Overlay über Kalender (#2: aktueller Tag) */
     {
         const char *evs[] = { "2026-06-20 14:00 Arzttermin" };
-        flux_ui_draw_calendar(&fb, 2026, 6, 18, 18, evs, 1);
+        flux_ui_draw_calendar(&fb, 2026, 6, today_day, today_day, evs, 1);
     }
     flux_ui_draw_ai_overlay(&fb,
         "Kalender: Juni 2026",
@@ -275,12 +287,12 @@ int main(int argc, char *argv[]) {
         "");
     save_ppm(&fb, outdir, "24_ki_overlay_kalender");
 
-    /* 25 -- Lockscreen mit proaktiver KI-Benachrichtigung */
+    /* 25 -- Lockscreen mit proaktiver KI-Benachrichtigung (#3: konsistente Daten) */
     {
-        /* Simuliere die /tmp/flux_proactive.txt Datei */
         FILE *pf = fopen("/tmp/flux_proactive.txt", "w");
         if (pf) {
-            fprintf(pf, "Morgen hat Laura Geburtstag! Soll ich dir helfen eine Nachricht zu schreiben?\n");
+            /* Lauras Geburtstag ist am 15. März -- kein Widerspruch mehr */
+            fprintf(pf, "Übermorgen: Meeting mit Team um 09:00 – soll ich einen Reminder setzen?\n");
             fclose(pf);
         }
         flux_ui_set_accent(0x4FD1C5);
@@ -288,52 +300,53 @@ int main(int argc, char *argv[]) {
         save_ppm(&fb, outdir, "25_lockscreen_proaktiv");
         unlink("/tmp/flux_proactive.txt");
     }
+    flux_ui_set_accent(0x6366F1);  /* #8: Akzent zurücksetzen */
 
-    /* 26 -- Meeting-Mitschrift (Aufnahme laueft) */
-    flux_ui_set_accent(0xF97316); /* Orange fuer Meeting */
+    /* 26 -- Meeting-Mitschrift (Aufnahme läuft) */
+    flux_ui_set_accent(0xF97316);
     flux_ui_draw_meeting(&fb, 1, 423,
-        "Max: Wir muessen das Produkt bis Q3 fertig haben.\n"
+        "Max: Wir müssen das Produkt bis Q3 fertig haben.\n"
         "Anna: Der Backend-Service braucht noch 3 Wochen.\n"
         "Max: Okay, dann priorisieren wir den MVP.",
-        "Aufnahme laueft...");
+        "Aufnahme läuft...");
     save_ppm(&fb, outdir, "26_meeting_aufnahme");
+    flux_ui_set_accent(0x6366F1);  /* #8: Akzent zurücksetzen */
 
-    /* 27 -- KI-Gedaechtnis (memory screen) */
+    /* 27 -- KI-Gedächtnis (#3: Lauras Geburtstag konsistent am 15. März) */
     flux_ui_set_accent(0x4FD1C5);
     {
         const char *mem_entries[] = {
-            "[2026-06-15 10:22] Meine Frau heisst Laura und hat am 15. Maerz Geburtstag",
+            "[2026-06-15 10:22] Meine Frau heißt Laura und hat am 15. März Geburtstag",
             "[2026-06-16 14:05] Ich bin Softwareentwickler und arbeite bei Acme GmbH",
             "[2026-06-17 08:30] Ich trinke morgens keinen Kaffee, nur Tee",
-            "[2026-06-18 19:47] Lieblingsrestaurant: Trattoria Bella Vista in der Hauptstrasse",
+            "[2026-06-18 19:47] Lieblingsrestaurant: Trattoria Bella Vista in der Hauptstraße",
             "[2026-06-19 11:13] Mein Auto ist ein blauer VW Golf, Kennzeichen M-AB 1234",
         };
         flux_ui_draw_memory(&fb, mem_entries, 5, 0);
     }
     save_ppm(&fb, outdir, "27_ki_gedaechtnis");
 
-    /* 28 -- Semantische KI-Suche (Ergebnisliste) */
-    flux_ui_set_accent(0x4FD1C5);
+    /* 28 -- Semantische KI-Suche (#3: Lauras Geburtstag konsistent) */
     {
         const char *results[] = {
-            "Gedaechtnis: Meine Frau heisst Laura und hat am 15. Maerz Geburtstag",
+            "Gedächtnis: Meine Frau heißt Laura und hat am 15. März Geburtstag",
             "Kalender: 2026-03-15 Lauras Geburtstag",
             "Kontakte: Laura Mustermann, +49 151 12345678",
-            "Notizen: Geschenkideen fuer Laura: Buch, Schmuck, Konzerttickets",
+            "Notizen: Geschenkideen für Laura: Buch, Schmuck, Konzerttickets",
         };
         flux_ui_draw_search(&fb, "Laura", results, 4, 0);
     }
     save_ppm(&fb, outdir, "28_semantic_search");
 
-    /* 29 -- Spracheingabe-Overlay (animiert, Aufnahme laeuft 7 s) */
-    flux_ui_set_accent(0x4FD1C5);
+    /* 29 -- Spracheingabe-Overlay (animiert, Aufnahme läuft 7 s) */
     flux_ui_draw_voice_overlay(&fb, 7, 6);
     save_ppm(&fb, outdir, "29_voice_overlay");
+    flux_ui_set_accent(0x6366F1);  /* #8: Akzent zurücksetzen */
 
     /* 30 -- Ehrlicher Cloud-Hinweis (kein API-Key konfiguriert) */
     flux_ui_draw_assistant(&fb, "wer bist du?", "",
         "Kein Cloud-Zugang konfiguriert. Trage in den Einstellungen einen "
-        "API-Key fuer den gewaehlten Anbieter ein (oder waehle einen anderen "
+        "API-Key für den gewählten Anbieter ein (oder wähle einen anderen "
         "Anbieter).", 0);
     save_ppm(&fb, outdir, "30_cloud_fallback");
 
