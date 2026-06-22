@@ -206,7 +206,7 @@ erst nach „Geplant" hochziehen, wenn sie bewertet und priorisiert sind.
 _(keine laufende unterbrochene Iteration)_
 
 ### Geplant (priorisiert, oberster zuerst)
-- [ ] whisper.cpp im Rootfs-Overlay bündeln: Buildroot-Paket oder Cross-compiled Binary + ggml-tiny.bin Modell, damit Transkription ohne externe Abhängigkeit klappt
+_(leer — Roadmap abgearbeitet)_
 
 ### Ideen aus Recherche (unsortiert, noch zu bewerten)
 _(noch keine Einträge — wird mit jeder Iteration befüllt)_
@@ -223,3 +223,4 @@ _(noch keine Einträge — wird mit jeder Iteration befüllt)_
 - [x] `note_search` + `note_delete` Tools: Notizen nach Stichwort durchsuchen / alle Notizen mit Stichwort löschen (rename-atomare Löschung) — Compile-Test bestanden
 - [x] `calendar_delete` Tool: Termine per Stichwort löschen (rename-atomare Löschung, Kommentarzeilen bleiben erhalten) — Compile-Test bestanden
 - [x] `alarm_list` + `alarm_delete` + `reminder_list` + `reminder_delete` Tools: Alarme/Erinnerungen auflisten und per Suchbegriff löschen (rename-atomare Löschung, /tmp/flux_alarms.txt + /tmp/flux_reminders.txt) — Compile-Test bestanden
+- [x] whisper.cpp Rootfs-Overlay-Bundling: `build/build-whisper.sh` (cross-kompiliert whisper-cli für aarch64, lädt ggml-tiny.bin ~75 MB); `voice.c` sucht jetzt ggml-tiny.bin vor ggml-small.bin; Overlay-Verzeichnis `build/overlay/usr/share/whisper/` angelegt — kein QEMU-Test (Build-Skript setzt Buildroot-Toolchain voraus)

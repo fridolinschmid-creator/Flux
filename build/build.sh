@@ -32,6 +32,11 @@ SYSROOT="$("${CROSS_PREFIX}gcc" -print-sysroot)"
 echo "==> Cross-Compiler: ${CROSS_PREFIX}gcc"
 echo "==> Sysroot:        $SYSROOT"
 
+echo "==> [1b/3] Optional: whisper.cpp + ggml-tiny.bin ins Overlay bündeln"
+echo "           (Einmalig ausfuehren, benoetigt cmake + wget/curl):"
+echo "           FLUX_BUILDROOT_OUT=$OUT_DIR ./build/build-whisper.sh"
+echo
+
 echo "==> [2/3] flux-shell + fluxaid mit Buildroot-Toolchain bauen"
 make -C "$ROOT_DIR/shell"  clean
 make -C "$ROOT_DIR/fluxai" clean

@@ -7,11 +7,17 @@
  * Modell, gibt flux_voice_can_record() / flux_voice_can_transcribe()
  * 0 zurueck und der Aufrufer zeigt eine freundliche Fehlermeldung.
  *
- * Modell-Pfade (in Reihenfolge probiert):
+ * Modell-Pfade (in Reihenfolge probiert, tiny vor small -- tiny wird
+ * per build/build-whisper.sh ins Rootfs-Overlay gebundelt):
+ *   /usr/share/whisper/ggml-tiny.bin      (via build-whisper.sh, bevorzugt)
  *   /usr/share/whisper/ggml-small.bin
+ *   /usr/local/share/whisper/ggml-tiny.bin
  *   /usr/local/share/whisper/ggml-small.bin
+ *   /home/user/whisper/ggml-tiny.bin
  *   /home/user/whisper/ggml-small.bin
+ *   /opt/whisper/ggml-tiny.bin
  *   /opt/whisper/ggml-small.bin
+ *   /tmp/ggml-tiny.bin
  *   /tmp/ggml-small.bin
  */
 #include "voice.h"
@@ -68,11 +74,17 @@ static const char *find_whisper(void) {
 }
 
 static const char *find_model(void) {
+    /* tiny zuerst: wird per build/build-whisper.sh gebundelt (~75 MB, schneller) */
     static const char *models[] = {
+        "/usr/share/whisper/ggml-tiny.bin",
         "/usr/share/whisper/ggml-small.bin",
+        "/usr/local/share/whisper/ggml-tiny.bin",
         "/usr/local/share/whisper/ggml-small.bin",
+        "/home/user/whisper/ggml-tiny.bin",
         "/home/user/whisper/ggml-small.bin",
+        "/opt/whisper/ggml-tiny.bin",
         "/opt/whisper/ggml-small.bin",
+        "/tmp/ggml-tiny.bin",
         "/tmp/ggml-small.bin",
         NULL
     };

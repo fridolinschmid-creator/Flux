@@ -1,0 +1,4 @@
+# Zielverzeichnis fuer ggml-tiny.bin (build/build-whisper.sh legt es hier ab).
+# Das .bin-Modell ist zu gross fuer Git (~75 MB) und wird zur Build-Zeit
+# heruntergeladen. Dieses Verzeichnis wird beim Build ins Rootfs-Overlay
+# eingebettet; voice.c sucht das Modell unter /usr/share/whisper/ggml-tiny.bin.
