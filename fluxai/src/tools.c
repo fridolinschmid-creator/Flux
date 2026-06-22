@@ -26,6 +26,10 @@
  *   memory_list      -- Alle KI-Erinnerungen anzeigen, ARG: (leer)
  *   memory_search    -- KI-Erinnerungen durchsuchen, ARG: Suchbegriff
  *   memory_delete    -- Erinnerungen loeschen, ARG: Suchbegriff
+ *   alarm_list       -- Gesetzte Alarme anzeigen, ARG: (leer)
+ *   alarm_delete     -- Alarm loeschen (alle mit Suchbegriff), ARG: Suchbegriff
+ *   reminder_list    -- Gesetzte Erinnerungen anzeigen, ARG: (leer)
+ *   reminder_delete  -- Erinnerung loeschen (alle mit Suchbegriff), ARG: Suchbegriff
  */
 #include "tools.h"
 #include "vision.h"
@@ -714,6 +718,47 @@ static int tool_alarm_set(const char *arg, char *out, size_t cap) {
     return 1;
 }
 
+/* ---- alarm_list / alarm_delete --------------------------------------- */
+
+static int tool_alarm_list(const char *arg, char *out, size_t cap) {
+    (void)arg;
+    FILE *f = fopen("/tmp/flux_alarms.txt", "r");
+    if (!f) { snprintf(out, cap, "Keine Alarme gesetzt."); return 1; }
+    size_t pos = snprintf(out, cap, "Gesetzte Alarme:\n");
+    char line[256]; int n = 0;
+    while (fgets(line, sizeof(line), f) && pos + 2 < cap) {
+        size_t ll = strlen(line);
+        if (pos + ll + 1 < cap) { memcpy(out + pos, line, ll); pos += ll; out[pos] = '\0'; }
+        n++;
+    }
+    fclose(f);
+    if (!n) snprintf(out, cap, "Keine Alarme gesetzt.");
+    return 1;
+}
+
+static int tool_alarm_delete(const char *arg, char *out, size_t cap) {
+    if (!arg || !*arg) {
+        snprintf(out, cap, "Fehler: kein Suchbegriff angegeben");
+        return 1;
+    }
+    const char *path = "/tmp/flux_alarms.txt";
+    FILE *f = fopen(path, "r");
+    if (!f) { snprintf(out, cap, "Keine Alarme gesetzt."); return 1; }
+    char tmppath[128]; snprintf(tmppath, sizeof(tmppath), "%s.tmp", path);
+    FILE *tf = fopen(tmppath, "w");
+    if (!tf) { fclose(f); snprintf(out, cap, "Fehler: Datei nicht schreibbar."); return 1; }
+    char line[256]; int deleted = 0;
+    while (fgets(line, sizeof(line), f)) {
+        if (strcasestr(line, arg)) deleted++;
+        else fputs(line, tf);
+    }
+    fclose(f); fclose(tf);
+    if (rename(tmppath, path) != 0) { remove(tmppath); snprintf(out, cap, "Fehler beim Speichern."); return 1; }
+    if (!deleted) snprintf(out, cap, "Kein Alarm mit \"%s\" gefunden.", arg);
+    else          snprintf(out, cap, "%d Alarm(e) mit \"%s\" geloescht.", deleted, arg);
+    return 1;
+}
+
 /* ---- reminder_set ---------------------------------------------------- */
 
 static int tool_reminder_set(const char *arg, char *out, size_t cap) {
@@ -734,6 +779,47 @@ static int tool_reminder_set(const char *arg, char *out, size_t cap) {
     fprintf(f, "[%s] %s\n", ts, arg);
     fclose(f);
     snprintf(out, cap, "Erinnerung gesetzt: \"%s\"", arg);
+    return 1;
+}
+
+/* ---- reminder_list / reminder_delete --------------------------------- */
+
+static int tool_reminder_list(const char *arg, char *out, size_t cap) {
+    (void)arg;
+    FILE *f = fopen("/tmp/flux_reminders.txt", "r");
+    if (!f) { snprintf(out, cap, "Keine Erinnerungen gesetzt."); return 1; }
+    size_t pos = snprintf(out, cap, "Gesetzte Erinnerungen:\n");
+    char line[256]; int n = 0;
+    while (fgets(line, sizeof(line), f) && pos + 2 < cap) {
+        size_t ll = strlen(line);
+        if (pos + ll + 1 < cap) { memcpy(out + pos, line, ll); pos += ll; out[pos] = '\0'; }
+        n++;
+    }
+    fclose(f);
+    if (!n) snprintf(out, cap, "Keine Erinnerungen gesetzt.");
+    return 1;
+}
+
+static int tool_reminder_delete(const char *arg, char *out, size_t cap) {
+    if (!arg || !*arg) {
+        snprintf(out, cap, "Fehler: kein Suchbegriff angegeben");
+        return 1;
+    }
+    const char *path = "/tmp/flux_reminders.txt";
+    FILE *f = fopen(path, "r");
+    if (!f) { snprintf(out, cap, "Keine Erinnerungen gesetzt."); return 1; }
+    char tmppath[128]; snprintf(tmppath, sizeof(tmppath), "%s.tmp", path);
+    FILE *tf = fopen(tmppath, "w");
+    if (!tf) { fclose(f); snprintf(out, cap, "Fehler: Datei nicht schreibbar."); return 1; }
+    char line[256]; int deleted = 0;
+    while (fgets(line, sizeof(line), f)) {
+        if (strcasestr(line, arg)) deleted++;
+        else fputs(line, tf);
+    }
+    fclose(f); fclose(tf);
+    if (rename(tmppath, path) != 0) { remove(tmppath); snprintf(out, cap, "Fehler beim Speichern."); return 1; }
+    if (!deleted) snprintf(out, cap, "Keine Erinnerung mit \"%s\" gefunden.", arg);
+    else          snprintf(out, cap, "%d Erinnerung(en) mit \"%s\" geloescht.", deleted, arg);
     return 1;
 }
 
@@ -1762,7 +1848,11 @@ int flux_tool_exec(const char *name, const char *arg,
     if (strcmp(name, "note_delete")      == 0) return tool_note_delete(arg, out, out_cap);
     if (strcmp(name, "sys_info")         == 0) return tool_sys_info(arg, out, out_cap);
     if (strcmp(name, "alarm_set")        == 0) return tool_alarm_set(arg, out, out_cap);
+    if (strcmp(name, "alarm_list")       == 0) return tool_alarm_list(arg, out, out_cap);
+    if (strcmp(name, "alarm_delete")     == 0) return tool_alarm_delete(arg, out, out_cap);
     if (strcmp(name, "reminder_set")     == 0) return tool_reminder_set(arg, out, out_cap);
+    if (strcmp(name, "reminder_list")    == 0) return tool_reminder_list(arg, out, out_cap);
+    if (strcmp(name, "reminder_delete")  == 0) return tool_reminder_delete(arg, out, out_cap);
     if (strcmp(name, "contacts_search")  == 0) return tool_contacts_search(arg, out, out_cap);
     if (strcmp(name, "brightness_get")   == 0) return tool_brightness_get(arg, out, out_cap);
     if (strcmp(name, "brightness_set")   == 0) return tool_brightness_set(arg, out, out_cap);
@@ -1811,7 +1901,11 @@ const char *flux_tools_description(void) {
         "  sys_info         -- Systeminfos. ARG: (leer)\n"
         "  alarm_set        -- Wecker/Alarm zu einer UHRZEIT. ARG: HH:MM Beschreibung "
         "(z.B. '07:00 Aufstehen'). Nutze dies bei 'Wecker', 'weck mich', 'Alarm um ...'.\n"
+        "  alarm_list       -- Alle gesetzten Alarme anzeigen. ARG: (leer)\n"
+        "  alarm_delete     -- Alarm loeschen (alle Zeilen die Suchbegriff enthalten). ARG: Suchbegriff\n"
         "  reminder_set     -- Erinnerung OHNE feste Uhrzeit. ARG: Erinnerungstext\n"
+        "  reminder_list    -- Alle gesetzten Erinnerungen anzeigen. ARG: (leer)\n"
+        "  reminder_delete  -- Erinnerung loeschen (alle Zeilen die Suchbegriff enthalten). ARG: Suchbegriff\n"
         "  contacts_search  -- Kontakt suchen. ARG: Name oder Nummer\n"
         "  brightness_get   -- Bildschirmhelligkeit lesen. ARG: (leer)\n"
         "  brightness_set   -- Bildschirmhelligkeit setzen. ARG: 0-100 (Prozent)\n"
