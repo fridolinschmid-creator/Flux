@@ -207,8 +207,8 @@ _(keine laufende unterbrochene Iteration)_
 
 ### Geplant (priorisiert, oberster zuerst)
 - [ ] whisper.cpp im Rootfs-Overlay bündeln: Buildroot-Paket oder Cross-compiled Binary + ggml-tiny.bin Modell, damit Transkription ohne externe Abhängigkeit klappt
-- [ ] Systeminfo-Erweiterung: `sys_info` Tool um CPU-Auslastung, Temperatur (/sys/class/thermal/) und Netzwerk-IO (/proc/net/dev) erweitern — tiefere KI-Kenntnis über Gerätezustand
 - [ ] `note_delete` und `note_search` Tools: Notizen durchsuchen und löschen, um die Notiz-Verwaltung vollständig zu machen
+- [ ] `calendar_delete` Tool: Termin löschen (Datum+Beschreibung als Schlüssel) — Kalender-Verwaltung vervollständigen
 
 ### Ideen aus Recherche (unsortiert, noch zu bewerten)
 _(noch keine Einträge — wird mit jeder Iteration befüllt)_
@@ -221,3 +221,4 @@ _(noch keine Einträge — wird mit jeder Iteration befüllt)_
 - [x] llama.cpp als 4. KI-Anbieter (FMT_LOCAL, OpenAI-kompatibel, kein API-Key nötig, URL via `llama_url` in flux.conf) — Compile-Test bestanden; Settings-UI zeigt "llama.cpp (lokal)", nicht auf echter Hardware getestet
 - [x] `pin_set` KI-Tool: PIN via natürliche Sprache ändern (SHA-256 Hash, 4-8 Ziffern Validierung, sofort aktiv) — Compile-Test bestanden; keine Bestätigungs-UI (wie brightness_set, konsistent mit Tool-Schicht)
 - [x] `llama_url`-Eintrag in Einstellungen-UI: 11. Einstellungsfeld "llama.cpp URL", direkt editierbar — Compile-Test bestanden; keine QEMU-Verifikation
+- [x] `sys_info`-Erweiterung: CPU-Auslastung (2×/proc/stat mit 200ms-Delta), CPU-Temperatur (/sys/class/thermal/), Netzwerk-IO (/proc/net/dev) — Compile-Test bestanden; Temperatur-Fallback wenn kein thermal_zone

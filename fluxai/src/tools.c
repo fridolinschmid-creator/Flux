@@ -527,6 +527,83 @@ static int tool_sys_info(const char *arg, char *out, size_t cap) {
         fclose(f);
     }
 
+    /* CPU-Auslastung: zwei /proc/stat-Schnappschuesse, 200 ms Abstand */
+    {
+        unsigned long long u1=0, n1=0, s1=0, i1=0, w1=0, ir1=0, si1=0;
+        unsigned long long u2=0, n2=0, s2=0, i2=0, w2=0, ir2=0, si2=0;
+        FILE *sf = fopen("/proc/stat", "r");
+        if (sf) {
+            fscanf(sf, "cpu %llu %llu %llu %llu %llu %llu %llu",
+                   &u1, &n1, &s1, &i1, &w1, &ir1, &si1);
+            fclose(sf);
+            struct timespec ts = {0, 200000000L}; /* 200 ms */
+            nanosleep(&ts, NULL);
+            sf = fopen("/proc/stat", "r");
+            if (sf) {
+                fscanf(sf, "cpu %llu %llu %llu %llu %llu %llu %llu",
+                       &u2, &n2, &s2, &i2, &w2, &ir2, &si2);
+                fclose(sf);
+                unsigned long long busy  = (u2+n2+s2+w2+ir2+si2) - (u1+n1+s1+w1+ir1+si1);
+                unsigned long long total = busy + (i2 - i1);
+                if (total > 0)
+                    pos += snprintf(tmp + pos, sizeof(tmp) - pos,
+                                    "CPU-Last: %llu%%\n", busy * 100 / total);
+            }
+        }
+    }
+
+    /* CPU-Temperatur aus /sys/class/thermal/thermal_zone*/
+    {
+        char best_path[64] = {0};
+        DIR *td = opendir("/sys/class/thermal");
+        if (td) {
+            struct dirent *te;
+            while ((te = readdir(td)) != NULL) {
+                if (strncmp(te->d_name, "thermal_zone", 12) != 0) continue;
+                char tpath[128];
+                snprintf(tpath, sizeof(tpath), "/sys/class/thermal/%s/temp", te->d_name);
+                if (!best_path[0]) snprintf(best_path, sizeof(best_path), "%s", tpath);
+            }
+            closedir(td);
+        }
+        if (best_path[0]) {
+            FILE *tf = fopen(best_path, "r");
+            if (tf) {
+                long milli = 0;
+                if (fscanf(tf, "%ld", &milli) == 1)
+                    pos += snprintf(tmp + pos, sizeof(tmp) - pos,
+                                    "CPU-Temperatur: %.1f degC\n", milli / 1000.0);
+                fclose(tf);
+            }
+        } else {
+            pos += snprintf(tmp + pos, sizeof(tmp) - pos,
+                            "CPU-Temperatur: nicht lesbar (kein thermal_zone)\n");
+        }
+    }
+
+    /* Netzwerk-IO: erstes Non-Loopback-Interface aus /proc/net/dev */
+    {
+        FILE *nf = fopen("/proc/net/dev", "r");
+        if (nf) {
+            char line[256];
+            int lineno = 0;
+            while (fgets(line, sizeof(line), nf)) {
+                if (++lineno <= 2) continue; /* Header */
+                char iface[64]; unsigned long long rx=0, tx=0;
+                /* Format: "  eth0: <rx_bytes> ... <tx_bytes> ..." */
+                if (sscanf(line, " %63[^:]: %llu %*u %*u %*u %*u %*u %*u %*u %llu",
+                           iface, &rx, &tx) == 3) {
+                    if (strcmp(iface, "lo") == 0) continue;
+                    pos += snprintf(tmp + pos, sizeof(tmp) - pos,
+                                    "Netz (%s): RX %llu KB / TX %llu KB\n",
+                                    iface, rx / 1024, tx / 1024);
+                    break;
+                }
+            }
+            fclose(nf);
+        }
+    }
+
     snprintf(out, cap, "%s", tmp);
     return 1;
 }
