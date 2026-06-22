@@ -28,6 +28,9 @@
  *   memory_delete    -- Erinnerungen loeschen, ARG: Suchbegriff
  *   alarm_list       -- Gesetzte Alarme anzeigen, ARG: (leer)
  *   alarm_delete     -- Alarm loeschen (alle mit Suchbegriff), ARG: Suchbegriff
+ *   timer_set        -- Countdown-Timer starten, ARG: Dauer (z.B. "5 Minuten")
+ *   timer_list       -- Aktive Timer mit Restzeit anzeigen, ARG: (leer)
+ *   timer_delete     -- Timer loeschen (alle mit Suchbegriff), ARG: Suchbegriff
  *   reminder_list    -- Gesetzte Erinnerungen anzeigen, ARG: (leer)
  *   reminder_delete  -- Erinnerung loeschen (alle mit Suchbegriff), ARG: Suchbegriff
  */
@@ -756,6 +759,139 @@ static int tool_alarm_delete(const char *arg, char *out, size_t cap) {
     if (rename(tmppath, path) != 0) { remove(tmppath); snprintf(out, cap, "Fehler beim Speichern."); return 1; }
     if (!deleted) snprintf(out, cap, "Kein Alarm mit \"%s\" gefunden.", arg);
     else          snprintf(out, cap, "%d Alarm(e) mit \"%s\" geloescht.", deleted, arg);
+    return 1;
+}
+
+/* ---- timer_set / timer_list / timer_delete --------------------------- */
+
+/* Parst eine Zeitdauer aus einem deutschen/englischen Ausdruck.
+ * Gibt die Dauer in Sekunden zurueck (0 bei Fehler).
+ * Beispiele: "5 Minuten", "30 Sekunden", "1 Stunde 30 Minuten",
+ *            "5m", "30s", "1h30m", "90" (= 90 Sekunden). */
+static int parse_duration_secs(const char *arg) {
+    if (!arg || !*arg) return 0;
+    int total = 0;
+    const char *p = arg;
+    while (*p) {
+        /* Weiter bis zur naechsten Ziffer */
+        while (*p && (*p < '0' || *p > '9')) p++;
+        if (!*p) break;
+        int val = 0;
+        while (*p >= '0' && *p <= '9') { val = val * 10 + (*p - '0'); p++; }
+        while (*p == ' ' || *p == '\t') p++;
+        /* Einheit bestimmen (laengste Variante zuerst) */
+        if      (strncasecmp(p, "stunden", 7) == 0 || strncasecmp(p, "stunde", 6) == 0 ||
+                 strncasecmp(p, "hours",   5) == 0 || strncasecmp(p, "hour",   4) == 0) {
+            total += val * 3600;
+        } else if (strncasecmp(p, "minuten",  7) == 0 || strncasecmp(p, "minute",  6) == 0 ||
+                   strncasecmp(p, "minutes",  7) == 0 || strncasecmp(p, "min",     3) == 0) {
+            total += val * 60;
+        } else if (strncasecmp(p, "sekunden", 8) == 0 || strncasecmp(p, "sekunde", 7) == 0 ||
+                   strncasecmp(p, "seconds",  7) == 0 || strncasecmp(p, "second",  6) == 0 ||
+                   strncasecmp(p, "sek",      3) == 0 || strncasecmp(p, "sec",     3) == 0) {
+            total += val;
+        } else if (*p == 'h' || *p == 'H') {
+            total += val * 3600;
+        } else if (*p == 'm' || *p == 'M') {
+            total += val * 60;
+        } else if (*p == 's' || *p == 'S') {
+            total += val;
+        } else {
+            total += val; /* keine Einheit -> Sekunden */
+        }
+        /* Rest des aktuellen Tokens ueberspringen */
+        while (*p && (*p < '0' || *p > '9')) p++;
+    }
+    return total;
+}
+
+static int tool_timer_set(const char *arg, char *out, size_t cap) {
+    if (!arg || !*arg) {
+        snprintf(out, cap,
+            "Fehler: keine Dauer angegeben. "
+            "Beispiele: '5 Minuten', '30 Sekunden', '1 Stunde 30 Minuten'");
+        return 1;
+    }
+    int secs = parse_duration_secs(arg);
+    if (secs <= 0) {
+        snprintf(out, cap,
+            "Fehler: Dauer nicht erkannt. "
+            "Beispiele: '5 Minuten', '30s', '1h30m'");
+        return 1;
+    }
+    if (secs > 86400 * 7) {
+        snprintf(out, cap, "Fehler: Dauer zu lang (max. 7 Tage).");
+        return 1;
+    }
+    time_t trigger_t = time(NULL) + (time_t)secs;
+    FILE *f = fopen("/tmp/flux_timers.txt", "a");
+    if (!f) { snprintf(out, cap, "Fehler: Timer konnte nicht gesetzt werden."); return 1; }
+    fprintf(f, "%lld %s\n", (long long)trigger_t, arg);
+    fclose(f);
+    struct tm tm; localtime_r(&trigger_t, &tm);
+    char ts[32]; strftime(ts, sizeof(ts), "%H:%M:%S", &tm);
+    if      (secs >= 3600)
+        snprintf(out, cap, "Timer gesetzt (%dh%02dm) -- loest aus um %s.",
+                 secs/3600, (secs%3600)/60, ts);
+    else if (secs >= 60)
+        snprintf(out, cap, "Timer gesetzt (%d Minuten %ds) -- loest aus um %s.",
+                 secs/60, secs%60, ts);
+    else
+        snprintf(out, cap, "Timer gesetzt (%d Sekunden) -- loest aus um %s.", secs, ts);
+    return 1;
+}
+
+static int tool_timer_list(const char *arg, char *out, size_t cap) {
+    (void)arg;
+    FILE *f = fopen("/tmp/flux_timers.txt", "r");
+    if (!f) { snprintf(out, cap, "Keine aktiven Timer."); return 1; }
+    size_t pos = snprintf(out, cap, "Aktive Timer:\n");
+    char line[256]; int n = 0; time_t now = time(NULL);
+    while (fgets(line, sizeof(line), f) && pos + 4 < cap) {
+        size_t l = strlen(line);
+        while (l > 0 && (line[l-1] == '\n' || line[l-1] == '\r')) line[--l] = '\0';
+        if (!line[0]) continue;
+        long long ts = 0; int sc = 0;
+        sscanf(line, "%lld%n", &ts, &sc);
+        long long rem = (long long)ts - (long long)now;
+        const char *desc = (sc > 0 && l > (size_t)sc + 1) ? line + sc + 1 : "Timer";
+        char entry[160];
+        if (rem <= 0)
+            snprintf(entry, sizeof(entry), "  %s (faellig)\n", desc);
+        else if (rem >= 3600)
+            snprintf(entry, sizeof(entry), "  %s (noch %lluh%02llum)\n",
+                     desc, rem/3600, (rem%3600)/60);
+        else if (rem >= 60)
+            snprintf(entry, sizeof(entry), "  %s (noch %llum%02llus)\n",
+                     desc, rem/60, rem%60);
+        else
+            snprintf(entry, sizeof(entry), "  %s (noch %llus)\n", desc, rem);
+        size_t el = strlen(entry);
+        if (pos + el + 1 < cap) { memcpy(out + pos, entry, el); pos += el; out[pos] = '\0'; }
+        n++;
+    }
+    fclose(f);
+    if (!n) snprintf(out, cap, "Keine aktiven Timer.");
+    return 1;
+}
+
+static int tool_timer_delete(const char *arg, char *out, size_t cap) {
+    if (!arg || !*arg) { snprintf(out, cap, "Fehler: kein Suchbegriff angegeben"); return 1; }
+    const char *path = "/tmp/flux_timers.txt";
+    FILE *f = fopen(path, "r");
+    if (!f) { snprintf(out, cap, "Keine aktiven Timer."); return 1; }
+    char tmppath[128]; snprintf(tmppath, sizeof(tmppath), "%s.tmp", path);
+    FILE *tf = fopen(tmppath, "w");
+    if (!tf) { fclose(f); snprintf(out, cap, "Fehler: Datei nicht schreibbar."); return 1; }
+    char line[256]; int deleted = 0;
+    while (fgets(line, sizeof(line), f)) {
+        if (strcasestr(line, arg)) deleted++;
+        else fputs(line, tf);
+    }
+    fclose(f); fclose(tf);
+    if (rename(tmppath, path) != 0) { remove(tmppath); snprintf(out, cap, "Fehler beim Speichern."); return 1; }
+    if (!deleted) snprintf(out, cap, "Kein Timer mit \"%s\" gefunden.", arg);
+    else          snprintf(out, cap, "%d Timer mit \"%s\" geloescht.", deleted, arg);
     return 1;
 }
 
@@ -1850,6 +1986,9 @@ int flux_tool_exec(const char *name, const char *arg,
     if (strcmp(name, "alarm_set")        == 0) return tool_alarm_set(arg, out, out_cap);
     if (strcmp(name, "alarm_list")       == 0) return tool_alarm_list(arg, out, out_cap);
     if (strcmp(name, "alarm_delete")     == 0) return tool_alarm_delete(arg, out, out_cap);
+    if (strcmp(name, "timer_set")        == 0) return tool_timer_set(arg, out, out_cap);
+    if (strcmp(name, "timer_list")       == 0) return tool_timer_list(arg, out, out_cap);
+    if (strcmp(name, "timer_delete")     == 0) return tool_timer_delete(arg, out, out_cap);
     if (strcmp(name, "reminder_set")     == 0) return tool_reminder_set(arg, out, out_cap);
     if (strcmp(name, "reminder_list")    == 0) return tool_reminder_list(arg, out, out_cap);
     if (strcmp(name, "reminder_delete")  == 0) return tool_reminder_delete(arg, out, out_cap);
@@ -1903,6 +2042,10 @@ const char *flux_tools_description(void) {
         "(z.B. '07:00 Aufstehen'). Nutze dies bei 'Wecker', 'weck mich', 'Alarm um ...'.\n"
         "  alarm_list       -- Alle gesetzten Alarme anzeigen. ARG: (leer)\n"
         "  alarm_delete     -- Alarm loeschen (alle Zeilen die Suchbegriff enthalten). ARG: Suchbegriff\n"
+        "  timer_set        -- Countdown-Timer starten. ARG: Dauer (z.B. '5 Minuten', '30s', '1h30m'). "
+        "Nutze dies bei 'Timer', 'stell einen Timer', 'in X Minuten'.\n"
+        "  timer_list       -- Aktive Timer mit Restzeit anzeigen. ARG: (leer)\n"
+        "  timer_delete     -- Timer loeschen (alle Zeilen die Suchbegriff enthalten). ARG: Suchbegriff\n"
         "  reminder_set     -- Erinnerung OHNE feste Uhrzeit. ARG: Erinnerungstext\n"
         "  reminder_list    -- Alle gesetzten Erinnerungen anzeigen. ARG: (leer)\n"
         "  reminder_delete  -- Erinnerung loeschen (alle Zeilen die Suchbegriff enthalten). ARG: Suchbegriff\n"

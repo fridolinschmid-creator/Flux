@@ -1203,6 +1203,24 @@ int main(void) {
             }
             /* Zombie-Kinder (TTS-Prozesse) aufraumen */
             while (waitpid(-1, NULL, WNOHANG) > 0) {}
+            /* Alarm/Timer-Trigger pruefen (jede Sekunde) */
+            if (screen != FLUX_SCREEN_ALARM) {
+                FILE *atf = fopen("/tmp/flux_alarm_trigger.txt", "r");
+                if (atf) {
+                    char alarm_msg[256] = {0};
+                    size_t an = fread(alarm_msg, 1, sizeof(alarm_msg)-1, atf);
+                    fclose(atf);
+                    alarm_msg[an] = '\0';
+                    /* Zeilenumbruch am Ende entfernen */
+                    while (an > 0 && (alarm_msg[an-1] == '\n' || alarm_msg[an-1] == '\r' ||
+                                      alarm_msg[an-1] == ' ')) alarm_msg[--an] = '\0';
+                    if (alarm_msg[0]) {
+                        pre_notify_screen = screen;
+                        screen = FLUX_SCREEN_ALARM;
+                        flux_ui_draw_alarm_alert(&fb, alarm_msg);
+                    }
+                }
+            }
             continue;
         }
         /* Jedes verarbeitete Event setzt den Inaktivitaets-Timer zurueck */
@@ -1692,6 +1710,23 @@ int main(void) {
                     flux_ui_draw_wifi(&fb, wifi_current, wifi_names_p, wifi_metas_p,
                                       wifi_n, 0, !flux_wifi_available());
                 }
+            }
+            continue;
+        }
+
+        if (screen == FLUX_SCREEN_ALARM) {
+            /* Jeder Tap bestaetigt den Alarm und loescht die Trigger-Datei */
+            if (ev.type == FLUX_EV_TAP || ev.type == FLUX_EV_SWIPE_UP ||
+                ev.type == FLUX_EV_SWIPE_DOWN) {
+                unlink("/tmp/flux_alarm_trigger.txt");
+                screen = pre_notify_screen;
+                /* Ziel-Screen neu zeichnen */
+                if (screen == FLUX_SCREEN_ASSISTANT)
+                    flux_ui_draw_assistant(&fb, last_q, input_buf, answer_buf, 0);
+                else if (screen == FLUX_SCREEN_LOCK)
+                    flux_ui_draw_lock(&fb);
+                else
+                    flux_ui_draw_assistant(&fb, last_q, input_buf, answer_buf, 0);
             }
             continue;
         }

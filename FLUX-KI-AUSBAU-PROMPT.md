@@ -206,7 +206,7 @@ erst nach „Geplant" hochziehen, wenn sie bewertet und priorisiert sind.
 _(keine laufende unterbrochene Iteration)_
 
 ### Geplant (priorisiert, oberster zuerst)
-_(leer — Roadmap abgearbeitet)_
+_(leer)_
 
 ### Ideen aus Recherche (unsortiert, noch zu bewerten)
 _(noch keine Einträge — wird mit jeder Iteration befüllt)_
@@ -224,3 +224,4 @@ _(noch keine Einträge — wird mit jeder Iteration befüllt)_
 - [x] `calendar_delete` Tool: Termine per Stichwort löschen (rename-atomare Löschung, Kommentarzeilen bleiben erhalten) — Compile-Test bestanden
 - [x] `alarm_list` + `alarm_delete` + `reminder_list` + `reminder_delete` Tools: Alarme/Erinnerungen auflisten und per Suchbegriff löschen (rename-atomare Löschung, /tmp/flux_alarms.txt + /tmp/flux_reminders.txt) — Compile-Test bestanden
 - [x] whisper.cpp Rootfs-Overlay-Bundling: `build/build-whisper.sh` (cross-kompiliert whisper-cli für aarch64, lädt ggml-tiny.bin ~75 MB); `voice.c` sucht jetzt ggml-tiny.bin vor ggml-small.bin; Overlay-Verzeichnis `build/overlay/usr/share/whisper/` angelegt — kein QEMU-Test (Build-Skript setzt Buildroot-Toolchain voraus)
+- [x] Wecker + Timer mit echter Auslösung: `alarm.c` (fluxaid-Daemon prüft alle 30s `/tmp/flux_alarms.txt` + `/tmp/flux_timers.txt`, schreibt Trigger nach `/tmp/flux_alarm_trigger.txt`); `timer_set/list/delete` KI-Tools mit Dauerparser (Deutsch+Englisch); shell zeigt prominenten Alarm-Alert-Screen (`FLUX_SCREEN_ALARM`, roter Akzent); Notify-Screen zeigt aktive Timer mit Restzeit — Compile-Test bestanden

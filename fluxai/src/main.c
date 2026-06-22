@@ -7,6 +7,7 @@
 #include "actions.h"
 #include "provider.h"
 #include "proactive.h"
+#include "alarm.h"
 #include "journal.h"
 #include "habits.h"
 #include "exec.h"
@@ -84,7 +85,8 @@ int main(void) {
 
     fprintf(stderr, "fluxaid: lauscht auf %s\n", FLUX_SOCK_PATH);
 
-    /* Proactive check on startup */
+    /* Alarm/Timer und proaktive Checks beim Start */
+    flux_alarm_check();
     {
         char k[512] = {0}, m[200] = {0};
         if (flux_provider_active(k, sizeof(k), m, sizeof(m)))
@@ -92,15 +94,16 @@ int main(void) {
     }
 
     for (;;) {
-        /* Use select() with 5-minute timeout for proactive checks */
+        /* 30-Sekunden-Timeout: Alarme/Timer zeitnah pruefen */
         fd_set rfds;
         FD_ZERO(&rfds);
         FD_SET(listen_fd, &rfds);
-        struct timeval tv = { .tv_sec = 300, .tv_usec = 0 };
+        struct timeval tv = { .tv_sec = 30, .tv_usec = 0 };
         int ret = select(listen_fd + 1, &rfds, NULL, NULL, &tv);
 
         if (ret == 0) {
-            /* Timeout: run periodic checks */
+            /* Timeout: Alarme/Timer pruefen (immer), dann KI-Hintergrundchecks */
+            flux_alarm_check();
             char k[512] = {0}, m[200] = {0};
             if (flux_provider_active(k, sizeof(k), m, sizeof(m))) {
                 flux_proactive_check(k, m);

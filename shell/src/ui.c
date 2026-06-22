@@ -1933,6 +1933,42 @@ void flux_ui_draw_notify(flux_fb_t *fb) {
         }
     }
 
+    /* --- Aktive Timer -------------------------------------------------- */
+    {
+        FILE *f = fopen("/tmp/flux_timers.txt", "r");
+        if (f) {
+            char line[128];
+            int shown = 0;
+            time_t now = time(NULL);
+            while (fgets(line, sizeof(line), f) && shown < 3) {
+                size_t l = strlen(line);
+                while (l > 0 && (line[l-1] == '\n' || line[l-1] == '\r')) line[--l] = '\0';
+                if (!line[0]) continue;
+                long long ts = 0; int sc = 0;
+                sscanf(line, "%lld%n", &ts, &sc);
+                long long rem = (long long)ts - (long long)now;
+                const char *desc = (sc > 0 && l > (size_t)sc + 1) ? line + sc + 1 : "Timer";
+                char display[80];
+                if      (rem <= 0)     snprintf(display, sizeof(display), "%s (faellig)", desc);
+                else if (rem >= 3600)  snprintf(display, sizeof(display), "%s – noch %lluh%02llum",
+                                                desc, rem/3600, (rem%3600)/60);
+                else if (rem >= 60)    snprintf(display, sizeof(display), "%s – noch %llum%02llus",
+                                                desc, rem/60, rem%60);
+                else                   snprintf(display, sizeof(display), "%s – noch %llus", desc, rem);
+                if (shown == 0) {
+                    fill_round_rect(fb, 12, y, fb->width - 24, 28 * 3 + 12, 8, COL_SURFACE2);
+                    flux_fb_fill_rect(fb, 12, y, 3, 28 * 3 + 12, 0x38BDF8);
+                    flux_fb_text(fb, 24, y + 4, "Timer", 0x38BDF8, 2);
+                    y += 28;
+                }
+                flux_fb_text(fb, 24, y, display, COL_TEXT, 2);
+                y += 26; shown++; any_shown = 1;
+            }
+            fclose(f);
+            if (shown) y += 8;
+        }
+    }
+
     /* --- Erinnerungen -------------------------------------------------- */
     {
         FILE *f = fopen("/tmp/flux_reminders.txt", "r");
@@ -1974,6 +2010,46 @@ void flux_ui_draw_notify(flux_fb_t *fb) {
         flux_fb_hline(fb, (fb->width - hw) / 2, fb->height - 20,
                       hw, COL_DIVIDER);
     }
+
+    flux_fb_present(fb);
+}
+
+/* ---- Alarm/Timer-Alert-Bildschirm ------------------------------------ */
+
+void flux_ui_draw_alarm_alert(flux_fb_t *fb, const char *msg) {
+    /* Tiefdunkler Hintergrund mit rotem Schimmer */
+    flux_fb_fill_gradient_v(fb, 0, 0, fb->width, fb->height, 0x1A0000, 0x080808);
+
+    int cy = fb->height / 2;
+
+    /* Grosse rote Uhrzeit */
+    time_t t = time(NULL);
+    struct tm tmv; localtime_r(&t, &tmv);
+    char clock_buf[16];
+    strftime(clock_buf, sizeof(clock_buf), "%H:%M", &tmv);
+    int cw = flux_fb_text_width(clock_buf, 7);
+    flux_fb_text_shadow(fb, (fb->width - cw) / 2, 28, clock_buf, 0xFF3333, 7);
+
+    /* Trennlinie */
+    flux_fb_hline(fb, 24, 28 + 7*11 + 12, fb->width - 48, 0xFF3333);
+
+    /* Alert-Titel */
+    const char *title = (msg && (strstr(msg, "Timer") || strstr(msg, "timer")))
+                        ? "TIMER" : "WECKER";
+    int tw = flux_fb_text_width(title, 5);
+    flux_fb_text_shadow(fb, (fb->width - tw) / 2, cy - 56, title, 0xFF6666, 5);
+
+    /* Beschreibung: Strip-Prefix fuer saubere Anzeige */
+    const char *detail = msg ? msg : "";
+    if (strncmp(detail, "Wecker: ", 8) == 0)           detail += 8;
+    else if (strncmp(detail, "Timer abgelaufen: ", 18) == 0) detail += 18;
+
+    draw_wrapped(fb, 20, cy, fb->width - 40, detail, COL_TEXT, 3, fb->height - cy - 80);
+
+    /* Hinweis */
+    const char *hint = "Tippen zum Bestaetigen";
+    int hw = flux_fb_text_width(hint, 2);
+    flux_fb_text(fb, (fb->width - hw) / 2, fb->height - 36, hint, COL_DIM, 2);
 
     flux_fb_present(fb);
 }

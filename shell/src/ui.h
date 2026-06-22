@@ -31,6 +31,7 @@ typedef enum {
     FLUX_SCREEN_MEETING,     /* Meeting-Mitschrift (Audio-Transkription) */
     FLUX_SCREEN_SEARCH,      /* Semantische KI-Suche ueber alles */
     FLUX_SCREEN_WIFI,        /* WLAN-Netze scannen und verbinden */
+    FLUX_SCREEN_ALARM,       /* Alarm/Timer-Alert (voller Bildschirm, Tippen schliesst) */
 } flux_screen_t;
 
 typedef enum {
@@ -159,6 +160,10 @@ int flux_ui_files_new_btn_hit(const flux_fb_t *fb, int x, int y);
 /* Zeigt Uhrzeit, Batterie, WLAN, Wetter, Alarme und Erinnerungen.
  * Wird durch Wisch nach unten auf dem Assistenten-Bildschirm geoeffnet. */
 void flux_ui_draw_notify(flux_fb_t *fb);
+
+/* Zeigt einen prominenten Alarm/Timer-Alert (voller Bildschirm, roter Akzent).
+ * msg ist der Ausloesetext (z.B. "Wecker: Aufstehen (07:00)"). */
+void flux_ui_draw_alarm_alert(flux_fb_t *fb, const char *msg);
 
 /* Gibt 1 wenn der Bildschirm per Tap geschlossen werden soll. */
 int flux_ui_notify_hit(const flux_fb_t *fb, int x, int y);
