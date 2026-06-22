@@ -210,9 +210,6 @@ erst nach „Geplant" hochziehen, wenn sie bewertet und priorisiert sind.
   ACTION-Typ statt direktem Tool) — Funk kappen ist Außenwirkung und sollte
   laut Architektur bestätigt werden; braucht feldlosen Confirm-Screen in
   `shell/src/ui.c`/`main.c` (aktuell auf TO/SUBJECT/BODY zugeschnitten).
-- [ ] KI-Tool `file_rename`/`file_move` (nur unter `/home/user/`, wie
-  `file_delete`) — rundet die KI-gesteuerte Dateiverwaltung ab
-  (Feature-Richtung 2: „Datei umbenennen, kontrolliert").
 - [ ] KI-Tool für `theme`/`auto_lock` in `flux.conf` setzen + Live-Reload in
   der Shell — „stell auf dunkles Design", „sperr nach 30 s" per Sprache
   (Feature-Richtung 1). Voraussetzung: Shell muss `flux.conf` zur Laufzeit
@@ -233,6 +230,11 @@ erst nach „Geplant" hochziehen, wenn sie bewertet und priorisiert sind.
   Quelle: https://ai.meta.com/blog/meta-llama-quantized-lightweight-models/
 
 ### Erledigt
+- [x] KI-Tool `file_rename`: Datei umbenennen/verschieben (nur `/home/user/`,
+  via `path_is_allowed` wie `file_delete`; existierendes Ziel wird nicht
+  überschrieben). — Status: Host-Compile-Test + End-to-End-Laufzeittest
+  über den echten `flux_tool_exec`-Dispatch (gültiger Fall, fehlende Quelle,
+  existierendes Ziel, Pfad-Traversal außerhalb `/home/user/`, Formatfehler).
 - [x] KI-Tool `flight_mode`: Flugmodus über `rfkill` schalten/abfragen
   (alle Funkmodule via `RFKILL_OP_CHANGE_ALL`), austauschbares Backend
   `fluxai/src/radio.c` analog `telephony.c`. — Status: Host-Compile-Test

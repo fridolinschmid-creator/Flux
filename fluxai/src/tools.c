@@ -341,6 +341,55 @@ static int tool_file_delete(const char *arg, char *out, size_t cap) {
     return 1;
 }
 
+/* ---- file_rename ----------------------------------------------------- */
+/* Datei umbenennen/verschieben. ARG: "altpfad|neupfad".
+ * Quelle und Ziel muessen beide unter /home/user/ liegen (wie file_delete).
+ * Ein bereits existierendes Ziel wird NICHT ueberschrieben (ehrlich, kein
+ * stiller Datenverlust). */
+static int tool_file_rename(const char *arg, char *out, size_t cap) {
+    if (!arg || !*arg) {
+        snprintf(out, cap, "Fehler: kein Pfad angegeben (Format: altpfad|neupfad)");
+        return 1;
+    }
+    const char *sep = strchr(arg, '|');
+    if (!sep || sep == arg || !sep[1]) {
+        snprintf(out, cap,
+                 "Fehler: Format ist 'altpfad|neupfad' (z.B. /home/user/a.txt|/home/user/b.txt)");
+        return 1;
+    }
+
+    char src[512], dst[512];
+    size_t slen = (size_t)(sep - arg);
+    if (slen >= sizeof(src)) slen = sizeof(src) - 1;
+    memcpy(src, arg, slen); src[slen] = '\0';
+    snprintf(dst, sizeof(dst), "%s", sep + 1);
+
+    /* Sicherheit: beide Pfade kanonisch unter /home/user/ */
+    if (!path_is_allowed(src, 0) || !path_is_allowed(dst, 0)) {
+        snprintf(out, cap,
+                 "Fehler: Umbenennen nur unter /home/user/ erlaubt (Quelle und Ziel)");
+        return 1;
+    }
+
+    struct stat st;
+    if (stat(src, &st) != 0) {
+        snprintf(out, cap, "Fehler: Quelle '%s' existiert nicht", src);
+        return 1;
+    }
+    if (stat(dst, &st) == 0) {
+        snprintf(out, cap,
+                 "Fehler: Ziel '%s' existiert bereits -- wird nicht ueberschrieben", dst);
+        return 1;
+    }
+
+    if (rename(src, dst) == 0) {
+        snprintf(out, cap, "'%s' umbenannt nach '%s'", src, dst);
+    } else {
+        snprintf(out, cap, "Fehler: '%s' konnte nicht nach '%s' umbenannt werden", src, dst);
+    }
+    return 1;
+}
+
 /* ---- calculate ------------------------------------------------------- */
 
 typedef struct { const char *s; } CalcParser;
@@ -1455,6 +1504,7 @@ int flux_tool_exec(const char *name, const char *arg,
     if (strcmp(name, "file_list")        == 0) return tool_file_list(arg, out, out_cap);
     if (strcmp(name, "file_create")      == 0) return tool_file_create(arg, out, out_cap);
     if (strcmp(name, "file_delete")      == 0) return tool_file_delete(arg, out, out_cap);
+    if (strcmp(name, "file_rename")      == 0) return tool_file_rename(arg, out, out_cap);
     if (strcmp(name, "calculate")        == 0) return tool_calculate(arg, out, out_cap);
     if (strcmp(name, "note_save")        == 0) return tool_note_save(arg, out, out_cap);
     if (strcmp(name, "note_list")        == 0) return tool_note_list(arg, out, out_cap);
@@ -1496,6 +1546,8 @@ const char *flux_tools_description(void) {
         "  file_list        -- Verzeichnis auflisten. ARG: Verzeichnispfad\n"
         "  file_create      -- Datei erstellen. ARG: /pfad/datei.txt|Inhalt (\\n fuer Zeilenumbruch)\n"
         "  file_delete      -- Datei loeschen (nur /home/user/). ARG: Dateipfad\n"
+        "  file_rename      -- Datei umbenennen/verschieben (nur /home/user/). "
+        "ARG: altpfad|neupfad (Ziel wird nicht ueberschrieben)\n"
         "  calculate        -- Rechenausdruck. ARG: z.B. '15 * 8 + 3.5'\n"
         "  note_save        -- Notiz speichern. ARG: Notiztext\n"
         "  note_list        -- Alle Notizen anzeigen. ARG: (leer)\n"
