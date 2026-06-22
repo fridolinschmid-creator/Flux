@@ -206,8 +206,7 @@ erst nach „Geplant" hochziehen, wenn sie bewertet und priorisiert sind.
 _(keine laufende unterbrochene Iteration)_
 
 ### Geplant (priorisiert, oberster zuerst)
-- [ ] Flugmodus-Tool (`flight_mode_on` / `flight_mode_off`) via `rfkill all` — KI als universeller Controller: alle Funkschnittstellen auf einmal abschalten
-- [ ] Lokale Intents für WLAN-Status erweitern: "Ist WLAN an?" direkt in `actions.c` ohne Cloud-Roundtrip beantworten
+- [ ] Lokale Intents für WLAN-/Flugmodus-Status erweitern: "Ist WLAN an?", "Ist Flugmodus aktiv?" direkt in `actions.c` ohne Cloud-Roundtrip beantworten (liest /sys/class/rfkill/)
 - [ ] `whisper.cpp`-Integration: virtuelles Audiogerät (`-audiodev`/`-device`) in `build/run-qemu.sh` eintragen, damit `flux_voice_can_record()` in QEMU `1` zurückgibt
 - [ ] On-Device-LLM-Anbieter (llama.cpp) als 4. austauschbarer Provider in `provider.c` — maximale Privacy, kein Netz-Roundtrip
 
@@ -216,3 +215,4 @@ _(noch keine Einträge — wird mit jeder Iteration befüllt)_
 
 ### Erledigt
 - [x] `wifi_on` + `wifi_off` KI-Tools (rfkill block/unblock wifi) — Compile-Test bestanden; QEMU hat kein rfkill, meldet das ehrlich
+- [x] `flight_mode_on` + `flight_mode_off` KI-Tools (rfkill block/unblock all) — Compile-Test bestanden; QEMU hat kein rfkill, meldet das ehrlich

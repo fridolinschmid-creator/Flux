@@ -16,6 +16,8 @@
  *   wifi_info        -- WLAN-Signalstaerke und Interface, ARG: (leer)
  *   wifi_on          -- WLAN einschalten (rfkill unblock wifi), ARG: (leer)
  *   wifi_off         -- WLAN ausschalten (rfkill block wifi), ARG: (leer)
+ *   flight_mode_on   -- Flugmodus aktivieren (rfkill block all), ARG: (leer)
+ *   flight_mode_off  -- Flugmodus deaktivieren (rfkill unblock all), ARG: (leer)
  *   vibrate          -- Geraet vibrieren lassen, ARG: Dauer in ms (z.B. 300)
  *   memory_save      -- Personliche Info dauerhaft merken, ARG: Text
  *   memory_list      -- Alle KI-Erinnerungen anzeigen, ARG: (leer)
@@ -831,6 +833,50 @@ static int tool_wifi_off(const char *arg, char *out, size_t cap) {
     return 1;
 }
 
+/* ---- flight_mode_on / flight_mode_off -------------------------------- */
+
+static int tool_flight_mode_on(const char *arg, char *out, size_t cap) {
+    (void)arg;
+    const char *rfkill = find_rfkill();
+    if (!rfkill) {
+        snprintf(out, cap,
+            "Flugmodus nicht verfuegbar: 'rfkill' nicht gefunden "
+            "(auf QEMU ohne Funk-Hardware kein rfkill vorhanden).");
+        return 1;
+    }
+    char cmd[256];
+    snprintf(cmd, sizeof(cmd), "%s block all 2>/dev/null", rfkill);
+    int rc = system(cmd);
+    if (rc == 0)
+        snprintf(out, cap,
+            "Flugmodus aktiviert (alle Funkschnittstellen gesperrt: WLAN, Bluetooth, Mobilfunk).");
+    else
+        snprintf(out, cap,
+            "Fehler beim Aktivieren des Flugmodus (rfkill Rueckgabewert %d).", rc);
+    return 1;
+}
+
+static int tool_flight_mode_off(const char *arg, char *out, size_t cap) {
+    (void)arg;
+    const char *rfkill = find_rfkill();
+    if (!rfkill) {
+        snprintf(out, cap,
+            "Flugmodus nicht verfuegbar: 'rfkill' nicht gefunden "
+            "(auf QEMU ohne Funk-Hardware kein rfkill vorhanden).");
+        return 1;
+    }
+    char cmd[256];
+    snprintf(cmd, sizeof(cmd), "%s unblock all 2>/dev/null", rfkill);
+    int rc = system(cmd);
+    if (rc == 0)
+        snprintf(out, cap,
+            "Flugmodus deaktiviert (alle Funkschnittstellen freigegeben).");
+    else
+        snprintf(out, cap,
+            "Fehler beim Deaktivieren des Flugmodus (rfkill Rueckgabewert %d).", rc);
+    return 1;
+}
+
 /* ---- vibrate --------------------------------------------------------- */
 
 static int tool_vibrate(const char *arg, char *out, size_t cap) {
@@ -1483,6 +1529,8 @@ int flux_tool_exec(const char *name, const char *arg,
     if (strcmp(name, "wifi_info")        == 0) return tool_wifi_info(arg, out, out_cap);
     if (strcmp(name, "wifi_on")          == 0) return tool_wifi_on(arg, out, out_cap);
     if (strcmp(name, "wifi_off")         == 0) return tool_wifi_off(arg, out, out_cap);
+    if (strcmp(name, "flight_mode_on")   == 0) return tool_flight_mode_on(arg, out, out_cap);
+    if (strcmp(name, "flight_mode_off")  == 0) return tool_flight_mode_off(arg, out, out_cap);
     if (strcmp(name, "vibrate")          == 0) return tool_vibrate(arg, out, out_cap);
     if (strcmp(name, "contact_save")   == 0) return tool_contact_save(arg, out, out_cap);
     if (strcmp(name, "contacts_list")  == 0) return tool_contacts_list(arg, out, out_cap);
@@ -1526,6 +1574,8 @@ const char *flux_tools_description(void) {
         "  wifi_info        -- WLAN-Signalstaerke und Interface. ARG: (leer)\n"
         "  wifi_on          -- WLAN einschalten. ARG: (leer)\n"
         "  wifi_off         -- WLAN ausschalten. ARG: (leer)\n"
+        "  flight_mode_on   -- Flugmodus aktivieren (alle Funkschnittstellen sperren). ARG: (leer)\n"
+        "  flight_mode_off  -- Flugmodus deaktivieren (alle Funkschnittstellen freigeben). ARG: (leer)\n"
         "  vibrate          -- Geraet vibrieren lassen. ARG: Dauer in ms (z.B. 300)\n"
         "  contact_save    -- Kontakt speichern. ARG: Name,Telefon,Email\n"
         "  contacts_list   -- Alle Kontakte anzeigen. ARG: (leer)\n"
