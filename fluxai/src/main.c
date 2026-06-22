@@ -10,8 +10,10 @@
 #include "journal.h"
 #include "habits.h"
 #include "exec.h"
+#include "logsync.h"
 #include "../../common/flux_protocol.h"
 #include "../../common/flux_config.h"
+#include "../../common/flux_log.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -22,20 +24,36 @@
 #include <sys/stat.h>
 #include <sys/select.h>
 #include <signal.h>
+#include <errno.h>
+
+/* Fehler-Hook: meldet ERROR+ ans Backend, wenn der Nutzer das aktiviert
+ * hat (log_report=1) UND eine Backend-URL gesetzt ist (opt-in). So bleibt
+ * das Backend ueber Hintergrund-Fehler auf dem Laufenden, ohne dass der
+ * Nutzer es manuell anstossen muss. */
+static void daemon_error_hook(flux_log_level_t level, const char *module,
+                              const char *message) {
+    char rep[8] = {0};
+    if (!flux_config_get("log_report", rep, sizeof(rep)) || rep[0] != '1')
+        return;
+    flux_logsync_report(flux_log_level_name(level), module, message);
+}
 
 static int make_listen_socket(const char *path) {
     unlink(path);
 
     int fd = socket(AF_UNIX, SOCK_STREAM, 0);
-    if (fd < 0) { perror("socket"); exit(1); }
+    if (fd < 0) { LOGF("socket(): %s", strerror(errno)); exit(1); }
 
     struct sockaddr_un addr = {0};
     addr.sun_family = AF_UNIX;
     strncpy(addr.sun_path, path, sizeof(addr.sun_path) - 1);
 
-    if (bind(fd, (struct sockaddr *)&addr, sizeof(addr)) < 0) { perror("bind"); exit(1); }
+    if (bind(fd, (struct sockaddr *)&addr, sizeof(addr)) < 0) {
+        LOGF("bind(%s): %s", path, strerror(errno)); exit(1);
+    }
     chmod(path, 0666); /* jede App darf den Assistenten fragen */
-    if (listen(fd, 8) < 0) { perror("listen"); exit(1); }
+    if (listen(fd, 8) < 0) { LOGF("listen(): %s", strerror(errno)); exit(1); }
+    LOGI("Socket bereit: %s", path);
     return fd;
 }
 
@@ -77,6 +95,8 @@ static void handle_client(int cfd) {
 
 int main(void) {
     signal(SIGPIPE, SIG_IGN); /* Client kann jederzeit weg sein (Lockscreen-Wechsel) */
+    flux_log_init("fluxaid");
+    flux_log_set_error_hook(daemon_error_hook); /* opt-in Backend-Report bei Fehlern */
     flux_provider_init();
 
     mkdir("/run/flux", 0755);
@@ -112,7 +132,10 @@ int main(void) {
         if (ret < 0) continue;
 
         int cfd = accept(listen_fd, NULL, NULL);
-        if (cfd < 0) continue;
+        if (cfd < 0) {
+            if (errno != EINTR) LOGW("accept(): %s", strerror(errno));
+            continue;
+        }
         handle_client(cfd); /* ein Request pro Verbindung reicht fuer den Prototyp */
     }
 }

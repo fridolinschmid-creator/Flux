@@ -226,6 +226,26 @@ erst nach „Geplant" hochziehen, wenn sie bewertet und priorisiert sind.
   Quelle: https://ai.meta.com/blog/meta-llama-quantized-lightweight-models/
 
 ### Erledigt
+- [x] Fehler sichtbar machen: zentrales Logging (`common/flux_log.c`) in
+  Shell+Daemon aktiviert und an echten Fehlerquellen verdrahtet (IPC,
+  SMTP, KI-HTTP, Socket). Entkoppelter `flux_log_set_error_hook`: in der
+  Shell Slide-up-Fehler-Toast + Eintrag im Benachrichtigungs-Overlay
+  (rote „Fehler"-Karte), im Daemon opt-in Auto-Report ans Backend. —
+  Status: Host-Compile (beide) + Laufzeittest des Hooks (nur ERROR+ feuert,
+  Reentranz-Schutz greift) und der Auto-Report-Kette LOGE->Hook->Backend
+  (Server empfing das Ereignis). Toast/Notify-Rendering nur Compile-getestet
+  (Framebuffer hier nicht darstellbar).
+- [x] Fehler-/Log-Backend (opt-in): `fluxai/src/logsync.c` laedt Logs an
+  eine konfigurierbare URL (`log_backend_url`) hoch (`X:logs`) und meldet
+  einzelne Fehler an `<url>/report`. Shell-Einstellungen „Fehler-Backend
+  (URL)", „Auto-Fehlerbericht", „Logs an Backend senden". Referenz-Server
+  `tools/flux-log-server.py`. — Status: End-to-End gegen den echten Server
+  getestet (Upload + Einzel-Report empfangen, „kein Backend"=ehrlich,
+  No-op ohne URL).
+- [x] Benutzer-Ordner `/home/user/Dokumente`: Datei-Browser startet dort,
+  `file_create` ohne fuehrenden `/` legt dort ab. — Status: Host-Compile +
+  Laufzeittest `file_create` (blanker/relativer/absoluter Pfad, Traversal
+  abgelehnt).
 - [x] Flugmodus durch den Bestätigungs-Dialog: neuer `ACTION:flight` /
   `STATE:an|aus`-Typ (`shell/src/action.c`), feldloser Confirm-Screen
   (`ui.c`, eigene Darstellung + Hit-Test, Mail/SMS/Anruf unberührt),

@@ -24,6 +24,10 @@ flux_log_level_t flux_log_min_level = FLUX_LOG_INFO;
 
 static FILE        *s_logfile   = NULL;
 static char         s_module[64] = "flux";
+static flux_log_error_hook_t s_error_hook = NULL;
+static int          s_in_hook   = 0;   /* Reentranz-Schutz */
+
+void flux_log_set_error_hook(flux_log_error_hook_t fn) { s_error_hook = fn; }
 
 static const char *level_name(flux_log_level_t l) {
     switch (l) {
@@ -36,6 +40,8 @@ static const char *level_name(flux_log_level_t l) {
         default:             return "?????";
     }
 }
+
+const char *flux_log_level_name(flux_log_level_t l) { return level_name(l); }
 
 static void rotate_logs(void) {
     char old_path[256], new_path[256];
@@ -113,5 +119,13 @@ void flux_log(flux_log_level_t level, const char *fmt, ...) {
     /* ERROR und FATAL auch auf stderr */
     if (level >= FLUX_LOG_ERROR) {
         fprintf(stderr, "[%s] [%s] %s\n", level_name(level), s_module, msg);
+    }
+
+    /* Optionaler Fehler-Hook (Toast in der Shell / Backend-Report im Daemon).
+     * Reentranz-geschuetzt, damit ein Log-Aufruf im Hook nicht rekursiv wird. */
+    if (level >= FLUX_LOG_ERROR && s_error_hook && !s_in_hook) {
+        s_in_hook = 1;
+        s_error_hook(level, s_module, msg);
+        s_in_hook = 0;
     }
 }

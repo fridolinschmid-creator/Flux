@@ -37,6 +37,21 @@ void flux_log(flux_log_level_t level, const char *fmt, ...)
 /* Mindest-Log-Level (Standard: INFO). Aenderbar zur Laufzeit. */
 extern flux_log_level_t flux_log_min_level;
 
+/* Optionaler Hook, der bei jedem Eintrag mit Level >= ERROR aufgerufen wird
+ * -- nachdem der Eintrag geschrieben wurde. Damit kann die Shell eine
+ * Fehler-Benachrichtigung anzeigen und fluxaid den Fehler ans Backend
+ * melden, ohne dass das Logging selbst diese Abhaengigkeiten kennt
+ * (common bleibt entkoppelt). Reentranz ist abgesichert: ein Log-Aufruf
+ * aus dem Hook heraus loest den Hook nicht erneut aus.
+ * Setze fn = NULL, um den Hook zu entfernen. */
+typedef void (*flux_log_error_hook_t)(flux_log_level_t level,
+                                       const char *module,
+                                       const char *message);
+void flux_log_set_error_hook(flux_log_error_hook_t fn);
+
+/* Klartext-Name eines Levels ("ERROR", "WARN " ...). */
+const char *flux_log_level_name(flux_log_level_t level);
+
 /* Bequem-Makros -- schreiben Datei:Zeile in TRACE/DEBUG. */
 #define LOGT(fmt, ...) flux_log(FLUX_LOG_TRACE, fmt, ##__VA_ARGS__)
 #define LOGD(fmt, ...) flux_log(FLUX_LOG_DEBUG, fmt, ##__VA_ARGS__)

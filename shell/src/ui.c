@@ -2006,6 +2006,44 @@ void flux_ui_draw_notify(flux_fb_t *fb) {
         }
     }
 
+    /* --- Fehler (neueste zuerst) --------------------------------------- */
+    {
+        FILE *f = fopen("/tmp/flux_errors.txt", "r");
+        if (f) {
+            /* Datei ist aelteste->neueste; wir puffern und zeigen die
+             * neuesten vier (neueste oben). */
+            char buf[10][256];
+            int n = 0;
+            char line[256];
+            while (fgets(line, sizeof(line), f)) {
+                size_t l = strlen(line);
+                while (l > 0 && (line[l-1] == '\n' || line[l-1] == '\r'))
+                    line[--l] = '\0';
+                if (!line[0]) continue;
+                if (n < 10) snprintf(buf[n++], sizeof(buf[0]), "%s", line);
+                else {
+                    memmove(buf[0], buf[1], 9 * sizeof(buf[0]));
+                    snprintf(buf[9], sizeof(buf[0]), "%s", line);
+                }
+            }
+            fclose(f);
+            int show = n < 4 ? n : 4;
+            if (show > 0) {
+                fill_round_rect(fb, 12, y, fb->width - 24, 26 * show + 34, 8, COL_SURFACE2);
+                flux_fb_fill_rect(fb, 12, y, 3, 26 * show + 34, 0xF87171);
+                flux_fb_text(fb, 24, y + 6, "Fehler", 0xF87171, 2);
+                y += 30;
+                for (int i = 0; i < show; i++) {  /* neueste zuerst */
+                    draw_wrapped(fb, 24, y, fb->width - 48, buf[n - 1 - i],
+                                 COL_TEXT_MUTED, 1, 13);
+                    y += 26;
+                }
+                y += 8;
+                any_shown = 1;
+            }
+        }
+    }
+
     /* Leer-Zustand wenn keine Benachrichtigungen */
     if (!any_shown) {
         fill_round_rect(fb, 12, y, fb->width - 24, 64, 10, COL_SURFACE);
@@ -2331,6 +2369,35 @@ void flux_ui_draw_contacts(flux_fb_t *fb, const char **names,
 int flux_ui_notify_hit(const flux_fb_t *fb, int x, int y) {
     (void)fb; (void)x; (void)y;
     return 1; /* beliebiger Tap schliesst den Overlay */
+}
+
+/* ---- Fehler-Toast (Slide-up von unten) ------------------------------- */
+
+#define ERR_TOAST_H      88
+#define ERR_TOAST_MARGIN 14
+
+int flux_ui_error_toast_height(const flux_fb_t *fb) {
+    (void)fb;
+    return ERR_TOAST_H + ERR_TOAST_MARGIN;
+}
+
+void flux_ui_draw_error_toast(flux_fb_t *fb, const char *msg, int top_y) {
+    int x = ERR_TOAST_MARGIN;
+    int w = fb->width - 2 * ERR_TOAST_MARGIN;
+    int h = ERR_TOAST_H;
+
+    /* Karte mit dunkelrotem Verlauf + roter Akzentkante links. */
+    flux_fb_fill_gradient_v_rounded(fb, x, top_y, w, h, 14, 0x3A1418, 0x2A1015);
+    flux_fb_fill_rect(fb, x, top_y + 12, 4, h - 24, 0xF87171);
+
+    /* Warn-Symbol: roter Kreis mit Ausrufezeichen. */
+    int icx = x + 30, icy = top_y + h / 2;
+    flux_fb_fill_circle(fb, icx, icy, 13, 0xF87171);
+    flux_fb_text(fb, icx - 2, icy - 7, "!", 0x2A1015, 2);
+
+    flux_fb_text(fb, x + 54, top_y + 14, "Es gab einen Fehler", 0xFCA5A5, 2);
+    draw_wrapped(fb, x + 54, top_y + 38, w - 70,
+                 (msg && msg[0]) ? msg : "Unbekannter Fehler", COL_TEXT, 2, 20);
 }
 
 /* ---- Fotogalerie ----------------------------------------------------- */

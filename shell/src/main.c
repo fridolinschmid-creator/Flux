@@ -26,6 +26,7 @@
 #include "../../common/flux_protocol.h"
 #include "../../common/flux_config.h"
 #include "../../common/flux_sha256.h"
+#include "../../common/flux_log.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -47,6 +48,60 @@ static uint32_t *capture_frame(const flux_fb_t *fb) {
     uint32_t *buf = malloc(npx * sizeof(uint32_t));
     if (buf) memcpy(buf, fb->back, npx * sizeof(uint32_t));
     return buf;
+}
+
+/* ---- Fehler-Benachrichtigung --------------------------------------------
+ * Ein Fehler (Log-Level ERROR+) soll nicht still im Hintergrund bleiben:
+ * er landet im Log (common/flux_log.c), erscheint als Eintrag im
+ * Benachrichtigungs-Overlay (/tmp/flux_errors.txt, "Push") und loest beim
+ * naechsten sicheren Punkt der Hauptschleife einen Slide-up-Toast aus.
+ * Der Hook selbst zeichnet NICHT (er kann mitten in beliebigem Code
+ * feuern) -- er setzt nur ein Flag; das Rendern macht die Schleife. */
+#define ERR_FILE "/tmp/flux_errors.txt"
+#define ERR_KEEP 10
+
+static volatile int g_error_pending = 0;
+static char         g_error_msg[200];
+
+/* Haengt eine Fehlerzeile (mit Uhrzeit) an ERR_FILE an und kuerzt die Datei
+ * auf die letzten ERR_KEEP Zeilen. */
+static void error_file_append(const char *line) {
+    char lines[ERR_KEEP][200];
+    int n = 0;
+    FILE *f = fopen(ERR_FILE, "r");
+    if (f) {
+        char buf[200];
+        while (fgets(buf, sizeof(buf), f)) {
+            size_t l = strlen(buf);
+            while (l > 0 && (buf[l-1] == '\n' || buf[l-1] == '\r')) buf[--l] = '\0';
+            if (!buf[0]) continue;
+            if (n < ERR_KEEP) { snprintf(lines[n++], sizeof(lines[0]), "%s", buf); }
+            else { memmove(lines[0], lines[1], (ERR_KEEP-1)*sizeof(lines[0]));
+                   snprintf(lines[ERR_KEEP-1], sizeof(lines[0]), "%s", buf); }
+        }
+        fclose(f);
+    }
+    char stamp[200];
+    time_t t = time(NULL); struct tm tmv; localtime_r(&t, &tmv);
+    char hm[8]; strftime(hm, sizeof(hm), "%H:%M", &tmv);
+    snprintf(stamp, sizeof(stamp), "[%s] %s", hm, line);
+    if (n < ERR_KEEP) { snprintf(lines[n++], sizeof(lines[0]), "%s", stamp); }
+    else { memmove(lines[0], lines[1], (ERR_KEEP-1)*sizeof(lines[0]));
+           snprintf(lines[ERR_KEEP-1], sizeof(lines[0]), "%s", stamp); }
+
+    f = fopen(ERR_FILE, "w");
+    if (f) { for (int i = 0; i < n; i++) fprintf(f, "%s\n", lines[i]); fclose(f); }
+}
+
+/* Wird von common/flux_log.c bei ERROR+ aufgerufen (siehe error-hook). */
+static void shell_error_hook(flux_log_level_t level, const char *module,
+                             const char *message) {
+    (void)level;
+    snprintf(g_error_msg, sizeof(g_error_msg), "%s", message ? message : "Fehler");
+    char line[200];
+    snprintf(line, sizeof(line), "[%s] %s", module ? module : "flux", g_error_msg);
+    error_file_append(line);
+    g_error_pending = 1;
 }
 
 /* Animiert den Uebergang vom gespeicherten Bild im old_buf zum aktuellen
@@ -109,6 +164,45 @@ static void animate_ripple(flux_fb_t *fb, int cx, int cy) {
         usleep(45000);
     }
     memcpy(fb->back, saved, npx * sizeof(uint32_t));
+    free(saved);
+}
+
+/* Zeigt den Fehler-Toast: faehrt von unten herein, bleibt kurz, faehrt
+ * wieder hinaus. Der darunterliegende Bildschirm (gesicherter Backbuffer)
+ * bleibt unveraendert -- wie animate_ripple. */
+static void animate_error_toast(flux_fb_t *fb, const char *msg) {
+    if (!fb->mmio) return; /* kein echter Framebuffer (Host-Test) */
+    size_t npx = (size_t)fb->width * fb->height;
+    uint32_t *saved = malloc(npx * sizeof(uint32_t));
+    if (!saved) return;
+    memcpy(saved, fb->back, npx * sizeof(uint32_t));
+
+    int th = flux_ui_error_toast_height(fb);
+    int final_y = fb->height - th;
+
+    /* Hereinfahren */
+    int slide[] = { fb->height, final_y + th*2/3, final_y + th/3, final_y };
+    for (int i = 0; i < (int)(sizeof(slide)/sizeof(slide[0])); i++) {
+        memcpy(fb->back, saved, npx * sizeof(uint32_t));
+        flux_ui_draw_error_toast(fb, msg, slide[i]);
+        memset(fb->prev, 0xFF, npx * sizeof(uint32_t));
+        flux_fb_present(fb);
+        usleep(22000);
+    }
+    /* Stehen lassen (~2.2 s) */
+    usleep(2200000);
+    /* Hinausfahren (gleiche Positionen rueckwaerts: final -> unten) */
+    for (int i = 2; i >= 0; i--) {
+        memcpy(fb->back, saved, npx * sizeof(uint32_t));
+        flux_ui_draw_error_toast(fb, msg, slide[i]);
+        memset(fb->prev, 0xFF, npx * sizeof(uint32_t));
+        flux_fb_present(fb);
+        usleep(18000);
+    }
+    /* Bildschirm wiederherstellen */
+    memcpy(fb->back, saved, npx * sizeof(uint32_t));
+    memset(fb->prev, 0xFF, npx * sizeof(uint32_t));
+    flux_fb_present(fb);
     free(saved);
 }
 
@@ -1142,6 +1236,11 @@ int main(void) {
         return 1;
     }
 
+    /* Logging + Fehler-Hook: Fehler erscheinen als Toast und im
+     * Benachrichtigungs-Overlay, statt still zu bleiben. */
+    flux_log_init("flux-shell");
+    flux_log_set_error_hook(shell_error_hook);
+
     /* Benutzer-Ordner sicherstellen: hier startet der Datei-Browser und
      * hier legt die KI (file_create) standardmaessig Dateien an. */
     mkdir("/home/user", 0755);
@@ -1188,6 +1287,18 @@ int main(void) {
     flux_ui_draw_lock(&fb);
 
     while (1) {
+        /* Anstehenden Fehler-Toast an einem sicheren Punkt zeigen. Auf
+         * Lock/PIN, im Sprach- oder KI-Overlay nicht (wuerde stoeren) --
+         * der Eintrag bleibt im Benachrichtigungs-Overlay sichtbar. */
+        if (g_error_pending) {
+            g_error_pending = 0;
+            if (screen != FLUX_SCREEN_LOCK && screen != FLUX_SCREEN_PIN &&
+                !voice_active && !ai_ovl_active) {
+                animate_error_toast(&fb, g_error_msg);
+                redraw_current_screen(&fb, screen, last_q, input_buf, answer_buf);
+            }
+        }
+
         fd_set rfds;
         FD_ZERO(&rfds);
         int maxfd = have_input ? flux_input_add_fds(&in, &rfds) : -1;

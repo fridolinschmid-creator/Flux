@@ -1,5 +1,6 @@
 #include "mail.h"
 #include "../../common/flux_config.h"
+#include "../../common/flux_log.h"
 
 #include <curl/curl.h>
 #include <stdio.h>
@@ -84,10 +85,14 @@ void flux_mail_send(const char *to, const char *subject, const char *body,
     curl_easy_setopt(curl, CURLOPT_TIMEOUT, 20L);
 
     CURLcode res = curl_easy_perform(curl);
-    if (res != CURLE_OK)
+    if (res != CURLE_OK) {
         snprintf(out, out_cap, "E-Mail-Versand fehlgeschlagen: %s", curl_easy_strerror(res));
-    else
+        LOGE("mail: Versand an %s ueber %s fehlgeschlagen: %s",
+             to, url, curl_easy_strerror(res));
+    } else {
         snprintf(out, out_cap, "E-Mail an %s gesendet.", to);
+        LOGI("mail: an %s gesendet (%s)", to, host);
+    }
 
     curl_slist_free_all(rcpt);
     curl_easy_cleanup(curl);

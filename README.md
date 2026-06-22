@@ -331,6 +331,23 @@ Danach kann jeder KI-Anbieter über `web_search` aktuelle Infos holen
 („Suche im Internet nach …"). Später lässt sich dieselbe Konfiguration auf
 einen produktiven SearXNG-/Such-Proxy umstellen, ohne Code-Änderung.
 
+### Fehler werden sichtbar (Logging + Benachrichtigung)
+
+Damit Fehler -- gerade solche, die im Hintergrund passieren -- nicht still
+bleiben, ist das zentrale Logging (`common/flux_log.c`) jetzt in beiden
+Prozessen aktiv (`flux-shell`, `fluxaid`) und an vielen echten Fehlerquellen
+verdrahtet (IPC-Verbindung, SMTP-Versand, KI-Netzwerk/HTTP, Socket-Aufbau
+usw.). Jeder Eintrag ab Level `ERROR` loest ueber einen entkoppelten Hook
+(`flux_log_set_error_hook`) zwei Dinge aus:
+
+- In der **Shell**: ein **Fehler-Toast faehrt von unten herein** ("Es gab
+  einen Fehler" + Kurztext) und der Fehler landet als Eintrag im
+  **Benachrichtigungs-Overlay** (Wisch nach unten, rote "Fehler"-Karte,
+  neueste zuerst) -- die in-system-Variante einer Push-Benachrichtigung.
+  Ehrlich: einen echten OS-Push-Dienst (APNs/FCM) gibt es in diesem
+  Prototyp nicht; das ist bewusst eine gerätelokale Anzeige.
+- Im **Daemon**: optionaler Auto-Report ans Backend (siehe unten).
+
 ### Fehler-/Log-Backend (optional, opt-in)
 
 Flux protokolliert intern nach `/var/log/flux/flux.log` (mit Rotation,
