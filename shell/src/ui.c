@@ -2014,6 +2014,135 @@ void flux_ui_draw_notify(flux_fb_t *fb) {
     flux_fb_present(fb);
 }
 
+/* ---- Wecker/Timer-App-Screen ----------------------------------------- */
+
+/* Layout-Konstanten (Pixel) */
+#define ALARM_HDR_H   54
+#define ALARM_SEC_H   30
+#define ALARM_ROW_H   54
+#define ALARM_QT_H    68
+
+/* Geometrie-Helfer -- beide von draw und hit-test genutzt */
+static int alm_y_sec_wecker(void)          { return ALARM_HDR_H; }
+static int alm_y_alarm_row(int i)          { return ALARM_HDR_H + ALARM_SEC_H + i * ALARM_ROW_H; }
+static int alm_y_sec_preset(int na)        { return alm_y_alarm_row(na) + 8; }
+static int alm_y_preset(int na)            { return alm_y_sec_preset(na) + ALARM_SEC_H; }
+static int alm_y_sec_timer(int na)         { return alm_y_preset(na) + ALARM_QT_H + 8; }
+static int alm_y_timer_row(int na, int i)  { return alm_y_sec_timer(na) + ALARM_SEC_H + i * ALARM_ROW_H; }
+
+static void draw_section_bar(flux_fb_t *fb, int y, const char *title, uint32_t col) {
+    flux_fb_fill_rect(fb, 0, y, fb->width, ALARM_SEC_H, COL_SURFACE);
+    flux_fb_hline(fb, 0, y, fb->width, COL_DIVIDER);
+    flux_fb_text(fb, 16, y + 8, title, col, 2);
+}
+
+static void draw_entry_row(flux_fb_t *fb, int y, const char *sub,
+                            const char *label, uint32_t sub_col, int alt) {
+    flux_fb_fill_rect(fb, 0, y, fb->width, ALARM_ROW_H,
+                      alt ? COL_SURFACE2 : COL_SURFACE);
+    flux_fb_hline(fb, 0, y + ALARM_ROW_H - 1, fb->width, COL_DIVIDER);
+    /* Zeit / Restzeit links */
+    flux_fb_text_shadow(fb, 16, y + (ALARM_ROW_H - 22) / 2, sub, sub_col, 3);
+    /* Beschreibung */
+    int sub_w = flux_fb_text_width(sub, 3);
+    flux_fb_text(fb, 16 + sub_w + 12, y + (ALARM_ROW_H - 14) / 2 + 2,
+                 label, COL_TEXT_MUTED, 2);
+    /* Loeschen-Knopf rechts */
+    flux_fb_text(fb, fb->width - 44, y + (ALARM_ROW_H - 22) / 2, "x", COL_DANGER, 3);
+}
+
+void flux_ui_draw_alarm_app(flux_fb_t *fb,
+                             const alarm_app_entry_t *entries,
+                             int n_alarms, int n_timers) {
+    flux_fb_fill_rect(fb, 0, 0, fb->width, fb->height, COL_BG);
+
+    /* --- Header --- */
+    flux_fb_fill_rect(fb, 0, 0, fb->width, ALARM_HDR_H, COL_SURFACE);
+    flux_fb_hline(fb, 0, ALARM_HDR_H - 1, fb->width, COL_DIVIDER);
+    /* Zurueck */
+    flux_fb_text(fb, 14, (ALARM_HDR_H - 14) / 2, "< Zurueck", COL_ACCENT, 2);
+    /* Titel zentriert */
+    const char *title = "Wecker & Timer";
+    int tw = flux_fb_text_width(title, 3);
+    flux_fb_text_shadow(fb, (fb->width - tw) / 2, (ALARM_HDR_H - 22) / 2, title, COL_TEXT, 3);
+
+    /* --- Wecker-Section --- */
+    draw_section_bar(fb, alm_y_sec_wecker(), "WECKER", COL_ACCENT);
+    /* Hinweis "+ ueber Assistenten" rechts */
+    flux_fb_text(fb, fb->width - 120, alm_y_sec_wecker() + 8,
+                 "via Assistent", COL_DIM, 1);
+
+    if (n_alarms == 0) {
+        int ry = alm_y_alarm_row(0);
+        flux_fb_fill_rect(fb, 0, ry, fb->width, ALARM_ROW_H, COL_SURFACE);
+        flux_fb_text(fb, 20, ry + (ALARM_ROW_H - 14) / 2,
+                     "Noch kein Wecker -- frag den Assistenten", COL_DIM, 2);
+    }
+    for (int i = 0; i < n_alarms && i < ALARM_APP_ENTRY_MAX; i++) {
+        draw_entry_row(fb, alm_y_alarm_row(i),
+                       entries[i].sub, entries[i].label, COL_ACCENT, i % 2);
+    }
+
+    /* --- Schnell-Timer-Section --- */
+    draw_section_bar(fb, alm_y_sec_preset(n_alarms), "SCHNELL-TIMER", 0x38BDF8);
+
+    int py   = alm_y_preset(n_alarms);
+    int bw   = (fb->width - 20) / 4;
+    static const char *plabels[] = { "5 min", "10 min", "30 min", "1 h" };
+    for (int i = 0; i < 4; i++) {
+        int bx = 8 + i * (bw + 4);
+        fill_round_rect(fb, bx, py + 6, bw - 4, ALARM_QT_H - 12, 12, COL_SURFACE2);
+        flux_fb_hline(fb, bx, py + 6, bw - 4, 0x38BDF8);  /* top accent line */
+        int lw = flux_fb_text_width(plabels[i], 2);
+        flux_fb_text(fb, bx + (bw - 4 - lw) / 2, py + 6 + (ALARM_QT_H - 12 - 14) / 2,
+                     plabels[i], 0x38BDF8, 2);
+    }
+
+    /* --- Aktive Timer-Section --- */
+    draw_section_bar(fb, alm_y_sec_timer(n_alarms), "AKTIVE TIMER", 0x38BDF8);
+
+    if (n_timers == 0) {
+        int ry = alm_y_timer_row(n_alarms, 0);
+        flux_fb_fill_rect(fb, 0, ry, fb->width, ALARM_ROW_H, COL_SURFACE);
+        flux_fb_text(fb, 20, ry + (ALARM_ROW_H - 14) / 2,
+                     "Kein aktiver Timer", COL_DIM, 2);
+    }
+    for (int i = 0; i < n_timers && i < ALARM_APP_ENTRY_MAX; i++) {
+        draw_entry_row(fb, alm_y_timer_row(n_alarms, i),
+                       entries[n_alarms + i].sub, entries[n_alarms + i].label,
+                       0x38BDF8, i % 2);
+    }
+
+    flux_fb_present(fb);
+}
+
+int flux_ui_alarm_app_delete_hit(const flux_fb_t *fb,
+                                  int n_alarms, int n_timers, int x, int y) {
+    /* Loeschen-Knopf ist immer am rechten Rand */
+    if (x < fb->width - 60) return -1;
+    for (int i = 0; i < n_alarms; i++) {
+        int ry = alm_y_alarm_row(i);
+        if (y >= ry && y < ry + ALARM_ROW_H) return i;
+    }
+    for (int i = 0; i < n_timers; i++) {
+        int ry = alm_y_timer_row(n_alarms, i);
+        if (y >= ry && y < ry + ALARM_ROW_H) return n_alarms + i;
+    }
+    return -1;
+}
+
+int flux_ui_alarm_app_preset_hit(const flux_fb_t *fb, int n_alarms, int x, int y) {
+    int py = alm_y_preset(n_alarms);
+    if (y < py || y >= py + ALARM_QT_H) return 0;
+    int bw = (fb->width - 20) / 4;
+    static const int presets[] = { 300, 600, 1800, 3600 };
+    for (int i = 0; i < 4; i++) {
+        int bx = 8 + i * (bw + 4);
+        if (x >= bx && x < bx + bw) return presets[i];
+    }
+    return 0;
+}
+
 /* ---- Alarm/Timer-Alert-Bildschirm ------------------------------------ */
 
 void flux_ui_draw_alarm_alert(flux_fb_t *fb, const char *msg) {

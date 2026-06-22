@@ -31,6 +31,7 @@ typedef enum {
     FLUX_SCREEN_MEETING,     /* Meeting-Mitschrift (Audio-Transkription) */
     FLUX_SCREEN_SEARCH,      /* Semantische KI-Suche ueber alles */
     FLUX_SCREEN_WIFI,        /* WLAN-Netze scannen und verbinden */
+    FLUX_SCREEN_ALARM_APP,   /* Wecker/Timer-Verwaltungs-Screen */
     FLUX_SCREEN_ALARM,       /* Alarm/Timer-Alert (voller Bildschirm, Tippen schliesst) */
 } flux_screen_t;
 
@@ -160,6 +161,31 @@ int flux_ui_files_new_btn_hit(const flux_fb_t *fb, int x, int y);
 /* Zeigt Uhrzeit, Batterie, WLAN, Wetter, Alarme und Erinnerungen.
  * Wird durch Wisch nach unten auf dem Assistenten-Bildschirm geoeffnet. */
 void flux_ui_draw_notify(flux_fb_t *fb);
+
+/* ---- Wecker/Timer-App ---------------------------------------------- */
+
+#define ALARM_APP_ENTRY_MAX 15
+
+typedef struct {
+    int       is_timer;   /* 0 = Wecker, 1 = Timer */
+    char      label[64];  /* Beschreibung */
+    char      sub[32];    /* "07:30" (Wecker) oder "4:32 min" (Timer) */
+    char      key[24];    /* Loeschschluessel: "YYYY-MM-DD HH:MM" oder UNIX_TS-String */
+    long long timer_ts;   /* 0 bei Weckern */
+} alarm_app_entry_t;
+
+/* Zeichnet den Wecker/Timer-Screen.
+ * entries[0..n_alarms-1] = Wecker, entries[n_alarms..n_alarms+n_timers-1] = Timer. */
+void flux_ui_draw_alarm_app(flux_fb_t *fb,
+                             const alarm_app_entry_t *entries,
+                             int n_alarms, int n_timers);
+
+/* Gibt globalen Index des getippten Loeschen-Buttons (0-based) oder -1. */
+int flux_ui_alarm_app_delete_hit(const flux_fb_t *fb,
+                                  int n_alarms, int n_timers, int x, int y);
+
+/* Gibt Preset-Sekunden (300/600/1800/3600) bei Treffer, sonst 0. */
+int flux_ui_alarm_app_preset_hit(const flux_fb_t *fb, int n_alarms, int x, int y);
 
 /* Zeigt einen prominenten Alarm/Timer-Alert (voller Bildschirm, roter Akzent).
  * msg ist der Ausloesetext (z.B. "Wecker: Aufstehen (07:00)"). */
