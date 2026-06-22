@@ -18,6 +18,7 @@
  *   wifi_off         -- WLAN ausschalten (rfkill block wifi), ARG: (leer)
  *   flight_mode_on   -- Flugmodus aktivieren (rfkill block all), ARG: (leer)
  *   flight_mode_off  -- Flugmodus deaktivieren (rfkill unblock all), ARG: (leer)
+ *   pin_set          -- Geraete-PIN aendern, ARG: neuer PIN (4-8 Ziffern)
  *   vibrate          -- Geraet vibrieren lassen, ARG: Dauer in ms (z.B. 300)
  *   memory_save      -- Personliche Info dauerhaft merken, ARG: Text
  *   memory_list      -- Alle KI-Erinnerungen anzeigen, ARG: (leer)
@@ -28,6 +29,7 @@
 #include "vision.h"
 #include "imap.h"
 #include "../../common/flux_config.h"
+#include "../../common/flux_sha256.h"
 
 #include <curl/curl.h>
 #include <stdio.h>
@@ -877,6 +879,37 @@ static int tool_flight_mode_off(const char *arg, char *out, size_t cap) {
     return 1;
 }
 
+/* ---- pin_set --------------------------------------------------------- */
+
+static int tool_pin_set(const char *arg, char *out, size_t cap) {
+    if (!arg || !*arg) {
+        snprintf(out, cap, "Fehler: Kein PIN angegeben. Bitte 4-8 Ziffern angeben.");
+        return 1;
+    }
+    /* Nur Ziffern, Laenge 4-8 */
+    size_t len = strlen(arg);
+    if (len < 4 || len > 8) {
+        snprintf(out, cap,
+            "Fehler: PIN muss 4 bis 8 Ziffern lang sein (angegeben: %zu Zeichen).", len);
+        return 1;
+    }
+    for (size_t i = 0; i < len; i++) {
+        if (arg[i] < '0' || arg[i] > '9') {
+            snprintf(out, cap, "Fehler: PIN darf nur Ziffern enthalten.");
+            return 1;
+        }
+    }
+    char hash[65];
+    flux_sha256_hex(arg, hash);
+    if (flux_config_set("pin_hash", hash) != 0) {
+        snprintf(out, cap,
+            "Fehler: PIN konnte nicht gespeichert werden (/etc/flux/flux.conf nicht schreibbar).");
+        return 1;
+    }
+    snprintf(out, cap, "PIN wurde geaendert. Der neue PIN ist sofort aktiv.");
+    return 1;
+}
+
 /* ---- vibrate --------------------------------------------------------- */
 
 static int tool_vibrate(const char *arg, char *out, size_t cap) {
@@ -1531,6 +1564,7 @@ int flux_tool_exec(const char *name, const char *arg,
     if (strcmp(name, "wifi_off")         == 0) return tool_wifi_off(arg, out, out_cap);
     if (strcmp(name, "flight_mode_on")   == 0) return tool_flight_mode_on(arg, out, out_cap);
     if (strcmp(name, "flight_mode_off")  == 0) return tool_flight_mode_off(arg, out, out_cap);
+    if (strcmp(name, "pin_set")          == 0) return tool_pin_set(arg, out, out_cap);
     if (strcmp(name, "vibrate")          == 0) return tool_vibrate(arg, out, out_cap);
     if (strcmp(name, "contact_save")   == 0) return tool_contact_save(arg, out, out_cap);
     if (strcmp(name, "contacts_list")  == 0) return tool_contacts_list(arg, out, out_cap);
@@ -1576,6 +1610,8 @@ const char *flux_tools_description(void) {
         "  wifi_off         -- WLAN ausschalten. ARG: (leer)\n"
         "  flight_mode_on   -- Flugmodus aktivieren (alle Funkschnittstellen sperren). ARG: (leer)\n"
         "  flight_mode_off  -- Flugmodus deaktivieren (alle Funkschnittstellen freigeben). ARG: (leer)\n"
+        "  pin_set          -- Geraete-PIN aendern. ARG: neuer PIN (nur 4-8 Ziffern, sofort aktiv). "
+        "Nur aufrufen wenn der Nutzer explizit die PIN aendern moechte.\n"
         "  vibrate          -- Geraet vibrieren lassen. ARG: Dauer in ms (z.B. 300)\n"
         "  contact_save    -- Kontakt speichern. ARG: Name,Telefon,Email\n"
         "  contacts_list   -- Alle Kontakte anzeigen. ARG: (leer)\n"
