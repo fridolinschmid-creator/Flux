@@ -418,7 +418,15 @@ static int parse_tool_call(const char *response,
     "SUBJECT:<Betreff, nur bei mail>\n" \
     "BODY:\n" \
     "<Text>\n" \
-    "Falls Empfaenger oder Inhalt wirklich unklar sind, frage nach. "
+    "Falls Empfaenger oder Inhalt wirklich unklar sind, frage nach. " \
+    "WENN der Nutzer den Flugmodus ein- oder ausschalten moechte " \
+    "('aktivier Flugmodus', 'Funk aus', 'Flugmodus aus'), antworte " \
+    "AUSSCHLIESSLICH in diesem Format (das Geraet zeigt vor dem Schalten " \
+    "einen Bestaetigungs-Dialog -- du schaltest nie direkt):\n" \
+    "ACTION:flight\n" \
+    "STATE:<an|aus>\n" \
+    "Nur den AKTUELLEN Flugmodus-Status abfragen ('ist Flugmodus an?') " \
+    "geht ohne Bestaetigung ueber das flight_mode-Tool. "
 
 static void build_system_prompt(char *system_prompt, size_t cap) {
     time_t _t = time(NULL); struct tm _tm; localtime_r(&_t, &_tm);

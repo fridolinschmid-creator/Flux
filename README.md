@@ -107,11 +107,18 @@ und ein gebuendeltes Modell im Rootfs-Overlay, siehe Roadmap.
 
 ## Flugmodus per KI ("aktivier Flugmodus")
 
-Der Assistent kann den Flugmodus ueber das KI-Tool `flight_mode` schalten
-und abfragen ("aktivier Flugmodus", "Funk wieder an", "ist Flugmodus an?").
-Backend ist die Linux-`rfkill`-Schnittstelle (`fluxai/src/radio.c`): ein
-einzelnes `RFKILL_OP_CHANGE_ALL`-Event blockt bzw. entsperrt alle
-Funkmodule (WLAN/Bluetooth/Mobilfunk) auf einmal.
+Der Assistent kann den Flugmodus ueber natuerliche Sprache steuern
+("aktivier Flugmodus", "Funk wieder an", "ist Flugmodus an?"). Backend
+ist die Linux-`rfkill`-Schnittstelle (`fluxai/src/radio.c`): ein einzelnes
+`RFKILL_OP_CHANGE_ALL`-Event blockt bzw. entsperrt alle Funkmodule
+(WLAN/Bluetooth/Mobilfunk) auf einmal.
+
+**Schalten geht immer ueber den Bestaetigungs-Dialog** -- Funk kappen hat
+Aussenwirkung, also fuehrt die KI das nie direkt aus: erkennt `fluxaid`
+den Wunsch, antwortet es mit `ACTION:flight` / `STATE:an|aus`, und
+`flux-shell` zeigt erst den Bestaetigen/Abbrechen-Dialog (gleiches Prinzip
+wie bei Mail/SMS/Anruf). Nur das reine **Abfragen** des Status laeuft
+ohne Bestaetigung ueber das read-only-Tool `flight_mode`.
 
 Ehrlich: QEMU `virt` hat **keine Funkhardware** und damit kein
 `/dev/rfkill` -- dort meldet das Tool wahrheitsgemaess "Keine Funkhardware
@@ -121,8 +128,10 @@ rfkill-faehigen Funkmodulen schaltet derselbe Code real -- `radio.c` ist
 als austauschbares Backend geschnitten, das spaeter z.B. gegen
 NetworkManager/ofono getauscht werden kann, ohne Tool oder UI zu aendern.
 Verifiziert ist bisher der ehrliche Fallback-Pfad (Host ohne `/dev/rfkill`)
-und der Host-Compile-Test; der echte rfkill-Schaltpfad ist erst auf
-Hardware/QEMU mit Funkmodulen ausfuehrbar.
+und der Host-Compile-Test; die Parse-/Bau-/Ausfuehr-Kette
+(`ACTION:flight` -> `X:flight` -> `radio.c`) ist per Laufzeit-Test
+abgedeckt. Der echte rfkill-Schaltpfad und der gezeichnete Bestaetigungs-
+Dialog sind erst auf Hardware/QEMU mit Framebuffer visuell verifizierbar.
 
 ---
 

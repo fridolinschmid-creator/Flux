@@ -1411,6 +1411,15 @@ int main(void) {
                 flux_ui_draw_edit_body(&fb, edit_buf);
                 animate_slide_in(&fb, old);
                 free(old);
+            } else if (hit == FLUX_CONFIRM_SEND &&
+                       pending_action.type == FLUX_ACTION_FLIGHT) {
+                /* Flugmodus: feldlose Aktion -- direkt ausfuehren, ehrliche
+                 * Rueckmeldung des Daemons anzeigen (kein Sende-Symbol). */
+                char req[FLUX_MAX_LINE];
+                flux_action_build_request(&pending_action, req, sizeof(req));
+                flux_ipc_send_raw(req, answer_buf, sizeof(answer_buf));
+                screen = FLUX_SCREEN_ASSISTANT;
+                flux_ui_draw_assistant(&fb, last_q, input_buf, answer_buf, 0);
             } else if (hit == FLUX_CONFIRM_SEND) {
                 /* Animiertes Symbol statt Textmeldung: Papierflieger (Mail),
                  * Sprechblase (SMS) bzw. pulsierende Ringe (Anruf). */

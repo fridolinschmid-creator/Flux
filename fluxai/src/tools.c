@@ -862,41 +862,13 @@ static int tool_vibrate(const char *arg, char *out, size_t cap) {
 }
 
 /* ---- flight_mode ----------------------------------------------------- */
-/* Flugmodus ueber rfkill schalten bzw. abfragen. Backend: radio.c
- * (austauschbar, ehrliche Meldung wenn keine Funkhardware vorhanden). */
+/* NUR Status abfragen (read-only). Das tatsaechliche Schalten laeuft ueber
+ * den Bestaetigungs-Dialog (ACTION:flight -> exec.c -> radio.c), weil das
+ * Kappen der Konnektivitaet Aussenwirkung hat und nie ohne Bestaetigung
+ * passieren darf. Backend: radio.c (austauschbar). */
 static int tool_flight_mode(const char *arg, char *out, size_t cap) {
-    /* Argument normalisieren (fuehrende Leerzeichen, Kleinbuchstaben). */
-    char a[32] = {0};
-    if (arg) {
-        while (*arg == ' ') arg++;
-        size_t i = 0;
-        for (; arg[i] && i < sizeof(a) - 1; i++)
-            a[i] = (char)tolower((unsigned char)arg[i]);
-        a[i] = '\0';
-    }
-
-    if (!a[0] || strcmp(a, "status") == 0 || strcmp(a, "?") == 0) {
-        flux_radio_status(out, cap);
-        return 1;
-    }
-
-    int on;
-    if (strcmp(a, "an") == 0 || strcmp(a, "ein") == 0 || strcmp(a, "on") == 0 ||
-        strcmp(a, "1") == 0 || strcmp(a, "true") == 0 || strcmp(a, "ja") == 0 ||
-        strcmp(a, "aktivieren") == 0 || strcmp(a, "aktiviere") == 0) {
-        on = 1;
-    } else if (strcmp(a, "aus") == 0 || strcmp(a, "off") == 0 || strcmp(a, "0") == 0 ||
-               strcmp(a, "false") == 0 || strcmp(a, "nein") == 0 ||
-               strcmp(a, "deaktivieren") == 0 || strcmp(a, "deaktiviere") == 0) {
-        on = 0;
-    } else {
-        snprintf(out, cap,
-            "Flugmodus: bitte 'an' oder 'aus' angeben (oder leer fuer Status). "
-            "Angegeben: '%s'.", a);
-        return 1;
-    }
-
-    flux_radio_set_airplane(on, out, cap);
+    (void)arg;
+    flux_radio_status(out, cap);
     return 1;
 }
 
@@ -1560,8 +1532,8 @@ const char *flux_tools_description(void) {
         "  brightness_set   -- Bildschirmhelligkeit setzen. ARG: 0-100 (Prozent)\n"
         "  wifi_info        -- WLAN-Signalstaerke und Interface. ARG: (leer)\n"
         "  vibrate          -- Geraet vibrieren lassen. ARG: Dauer in ms (z.B. 300)\n"
-        "  flight_mode      -- Flugmodus schalten/abfragen (alle Funkmodule via rfkill). "
-        "ARG: 'an' | 'aus' | leer fuer Status. Nutze dies bei 'Flugmodus', 'Funk aus', 'aktivier Flugmodus'.\n"
+        "  flight_mode      -- Flugmodus-STATUS abfragen (read-only, ob Funk an/aus). ARG: (leer). "
+        "Zum SCHALTEN nicht dieses Tool nutzen, sondern den ACTION:flight-Block (Bestaetigungs-Dialog).\n"
         "  contact_save    -- Kontakt speichern. ARG: Name,Telefon,Email\n"
         "  contacts_list   -- Alle Kontakte anzeigen. ARG: (leer)\n"
         "  calendar_add    -- Termin eintragen. ARG: YYYY-MM-DD HH:MM Beschreibung\n"

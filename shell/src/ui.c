@@ -1242,11 +1242,56 @@ static void confirm_layout(const flux_fb_t *fb, int has_subject,
     *body_y = *div_y + 12;
 }
 
+/* Gemerkt, ob der zuletzt gezeichnete Bestaetigungs-Dialog ein
+ * Flugmodus-Schalter ist (feldlos, keine Zeilen bearbeitbar). Wird von
+ * flux_ui_confirm_hit gelesen -- gleiche Idee wie s_edit_title. */
+static int s_confirm_is_flight = 0;
+
 void flux_ui_draw_confirm(flux_fb_t *fb, const char *type_label,
                            const char *to, const char *subject, const char *body) {
     /* Hintergrund mit Dimm-Overlay-Feeling */
     flux_fb_fill_gradient_v(fb, 0, 0, fb->width, fb->height, 0x040508, COL_BG);
     draw_statusbar(fb);
+
+    /* Flugmodus: feldloser Schalter -- eigene, einfache Darstellung. */
+    s_confirm_is_flight = (strcmp(type_label, "flight") == 0);
+    if (s_confirm_is_flight) {
+        int on = (body && body[0] == 'a' && body[1] == 'n'); /* "an" */
+        char header[64];
+        snprintf(header, sizeof(header), "Flugmodus %s?", on ? "einschalten" : "ausschalten");
+        int hw = flux_fb_text_width(header, 3);
+        flux_fb_text(fb, (fb->width - hw) / 2, STATUSBAR_H + 16, header, COL_TEXT, 3);
+
+        int card_x = 10, card_y = STATUSBAR_H + 70;
+        int card_w = fb->width - 2 * card_x;
+        btn_geom_t fb_btn[2];
+        build_confirm_buttons(fb, fb_btn);
+        int card_h = fb_btn[0].y - card_y - 8;
+        fill_round_rect(fb, card_x, card_y, card_w, card_h, 16, COL_SURFACE2);
+        flux_fb_fill_gradient_h(fb, card_x + 16, card_y, card_w - 32, 2, COL_ACCENT, COL_ACCENT2);
+
+        const char *desc = on
+            ? "Alle Funkmodule (WLAN, Bluetooth, Mobilfunk) werden blockiert."
+            : "Funkmodule werden wieder freigegeben.";
+        draw_wrapped(fb, card_x + 18, card_y + 24, card_w - 36, desc, COL_TEXT, 2, 26);
+
+        /* Knoepfe: [Abbruch] [Bestaetigen] -- gleiche Geometrie wie sonst */
+        int b1x = fb_btn[0].x + 6, b1y = fb_btn[0].y + 10;
+        int b1w = fb_btn[0].w - 12, b1h = fb_btn[0].h - 20;
+        fill_round_rect(fb, b1x, b1y, b1w, b1h, 12, COL_SURFACE3);
+        flux_fb_hline(fb, b1x + 12, b1y, b1w - 24, 0x3D4A60);
+        int lw = flux_fb_text_width("Abbruch", 2);
+        flux_fb_text(fb, b1x + (b1w - lw) / 2, b1y + (b1h - 14) / 2, "Abbruch", COL_TEXT_MUTED, 2);
+
+        int b2x = fb_btn[1].x + 6, b2y = fb_btn[1].y + 10;
+        int b2w = fb_btn[1].w - 12, b2h = fb_btn[1].h - 20;
+        flux_fb_fill_gradient_v_rounded(fb, b2x, b2y, b2w, b2h, 12, 0x059669, 0x10B981);
+        int lw2 = flux_fb_text_width("Bestaetigen", 2);
+        flux_fb_text(fb, b2x + (b2w - lw2) / 2, b2y + (b2h - 14) / 2, "Bestaetigen", 0xFFFFFF, 2);
+
+        flux_fb_present(fb);
+        return;
+    }
 
     int has_subject = (subject && subject[0]) ? 1 : 0;
 
@@ -1334,6 +1379,10 @@ flux_confirm_hit_t flux_ui_confirm_hit(const flux_fb_t *fb, int x, int y, int ha
     if (y >= btn[0].y) {
         return (x < fb->width / 2) ? FLUX_CONFIRM_CANCEL : FLUX_CONFIRM_SEND;
     }
+
+    /* Flugmodus-Dialog hat keine bearbeitbaren Zeilen -- Taps oberhalb der
+     * Knoepfe ignorieren. */
+    if (s_confirm_is_flight) return FLUX_CONFIRM_NONE;
 
     int card_x, card_y, card_w, card_h, to_y, subj_y, div_y, body_y;
     confirm_layout(fb, has_subject, &card_x, &card_y, &card_w, &card_h,

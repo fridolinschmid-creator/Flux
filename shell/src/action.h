@@ -18,6 +18,7 @@ typedef enum {
     FLUX_ACTION_MAIL,
     FLUX_ACTION_SMS,
     FLUX_ACTION_CALL,
+    FLUX_ACTION_FLIGHT,   /* Flugmodus an/aus -- Zustand ("an"/"aus") in body */
 } flux_action_type_t;
 
 typedef struct {

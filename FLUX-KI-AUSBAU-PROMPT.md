@@ -206,10 +206,6 @@ erst nach „Geplant" hochziehen, wenn sie bewertet und priorisiert sind.
 - (nichts -- letzte Iteration abgeschlossen)
 
 ### Geplant (priorisiert, oberster zuerst)
-- [ ] Flugmodus zusätzlich durch den Bestätigungs-Dialog führen (eigener
-  ACTION-Typ statt direktem Tool) — Funk kappen ist Außenwirkung und sollte
-  laut Architektur bestätigt werden; braucht feldlosen Confirm-Screen in
-  `shell/src/ui.c`/`main.c` (aktuell auf TO/SUBJECT/BODY zugeschnitten).
 - [ ] KI-Tool für `theme`/`auto_lock` in `flux.conf` setzen + Live-Reload in
   der Shell — „stell auf dunkles Design", „sperr nach 30 s" per Sprache
   (Feature-Richtung 1). Voraussetzung: Shell muss `flux.conf` zur Laufzeit
@@ -230,6 +226,14 @@ erst nach „Geplant" hochziehen, wenn sie bewertet und priorisiert sind.
   Quelle: https://ai.meta.com/blog/meta-llama-quantized-lightweight-models/
 
 ### Erledigt
+- [x] Flugmodus durch den Bestätigungs-Dialog: neuer `ACTION:flight` /
+  `STATE:an|aus`-Typ (`shell/src/action.c`), feldloser Confirm-Screen
+  (`ui.c`, eigene Darstellung + Hit-Test, Mail/SMS/Anruf unberührt),
+  Ausführung in `exec.c` -> `radio.c`. `flight_mode`-Tool auf read-only
+  Status reduziert; System-Prompt leitet Schalten auf `ACTION:flight`. —
+  Status: Host-Compile (shell+fluxai) + End-to-End-Laufzeittest der Kette
+  Parse->Bau->Exec (an/aus via STATE und BODY, ungültiger Zustand, Mail
+  ohne Regression). Gezeichneter Dialog erst auf QEMU/HW visuell prüfbar.
 - [x] KI-Tool `file_rename`: Datei umbenennen/verschieben (nur `/home/user/`,
   via `path_is_allowed` wie `file_delete`; existierendes Ziel wird nicht
   überschrieben). — Status: Host-Compile-Test + End-to-End-Laufzeittest
