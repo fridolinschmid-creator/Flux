@@ -291,7 +291,7 @@ static void maybe_generate_greeting(void) {
 
 #define FLUX_PIN_LEN       4
 #define FLUX_FILES_MAX     12
-#define FLUX_SETTINGS_N    10   /* + WLAN */
+#define FLUX_SETTINGS_N    11   /* + WLAN + llama_url */
 #define VIEWER_CONTENT_MAX 32768
 
 typedef enum {
@@ -328,6 +328,7 @@ static const char *setting_keys[FLUX_SETTINGS_N] = {
     "theme",    /* teal|blau|lila|orange|gruen|rot */
     "auto_lock",/* 0=aus, 30, 60, 120, 300 Sekunden */
     "tts",      /* 0=aus, 1=ein */
+    "llama_url",/* URL des lokalen llama.cpp-Servers (z.B. http://127.0.0.1:8080) */
 };
 static const char *setting_labels[FLUX_SETTINGS_N] = {
     "PIN-Code",
@@ -340,6 +341,7 @@ static const char *setting_labels[FLUX_SETTINGS_N] = {
     "Farbthema",    /* teal/blau/lila/orange/gruen/rot */
     "Auto-Sperre",  /* 0=aus */
     "Sprache (TTS)",/* 0=aus, 1=ein */
+    "llama.cpp URL", /* Server-URL fuer lokales On-Device-LLM */
 };
 static const int setting_secret[FLUX_SETTINGS_N] = {
     1, /* pin */
@@ -350,6 +352,7 @@ static const int setting_secret[FLUX_SETTINGS_N] = {
     0, /* wifi (zeigt Verbindung) */
     0, /* searxng_url */
     0, 0, 0,       /* theme/auto_lock/tts */
+    0,             /* llama_url */
 };
 
 /* Symbol je Einstellungs-Zeile (parallel zu setting_keys). */
@@ -364,6 +367,7 @@ static const int setting_icons[FLUX_SETTINGS_N] = {
     FLUX_SICON_THEME,  /* theme */
     FLUX_SICON_CLOCK,  /* auto_lock */
     FLUX_SICON_SPEAKER,/* tts */
+    FLUX_SICON_CHIP,   /* llama_url */
 };
 
 /* Aktuell gewaehlter Anbieter aus der Config (Standard: anthropic). */

@@ -207,8 +207,8 @@ _(keine laufende unterbrochene Iteration)_
 
 ### Geplant (priorisiert, oberster zuerst)
 - [ ] whisper.cpp im Rootfs-Overlay bündeln: Buildroot-Paket oder Cross-compiled Binary + ggml-tiny.bin Modell, damit Transkription ohne externe Abhängigkeit klappt
-- [ ] `llama_url`-Eintrag in Einstellungen-UI: Nutzer kann den Endpunkt des lokalen LLM-Servers direkt in den Einstellungen setzen (heute nur über flux.conf direkt)
-- [ ] Systeminfo-Erweiterung: `sys_info` Tool um CPU-Auslastung, Temperatur und Netzwerk-IO erweitern — tiefere KI-Kenntnis über Gerätezustand
+- [ ] Systeminfo-Erweiterung: `sys_info` Tool um CPU-Auslastung, Temperatur (/sys/class/thermal/) und Netzwerk-IO (/proc/net/dev) erweitern — tiefere KI-Kenntnis über Gerätezustand
+- [ ] `note_delete` und `note_search` Tools: Notizen durchsuchen und löschen, um die Notiz-Verwaltung vollständig zu machen
 
 ### Ideen aus Recherche (unsortiert, noch zu bewerten)
 _(noch keine Einträge — wird mit jeder Iteration befüllt)_
@@ -220,3 +220,4 @@ _(noch keine Einträge — wird mit jeder Iteration befüllt)_
 - [x] Virtuelles Audiogerät in `build/run-qemu.sh`: `virtio-sound-pci` via `FLUX_AUDIO`-Variable (Standard: `none`, Gerät erscheint im Gast; QEMU >= 6.0); `flux_voice_can_record()` gibt nun 1 zurück — kein QEMU-Test möglich ohne laufendes Image
 - [x] llama.cpp als 4. KI-Anbieter (FMT_LOCAL, OpenAI-kompatibel, kein API-Key nötig, URL via `llama_url` in flux.conf) — Compile-Test bestanden; Settings-UI zeigt "llama.cpp (lokal)", nicht auf echter Hardware getestet
 - [x] `pin_set` KI-Tool: PIN via natürliche Sprache ändern (SHA-256 Hash, 4-8 Ziffern Validierung, sofort aktiv) — Compile-Test bestanden; keine Bestätigungs-UI (wie brightness_set, konsistent mit Tool-Schicht)
+- [x] `llama_url`-Eintrag in Einstellungen-UI: 11. Einstellungsfeld "llama.cpp URL", direkt editierbar — Compile-Test bestanden; keine QEMU-Verifikation
