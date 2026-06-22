@@ -29,17 +29,20 @@
  * (Agenten-Schleife) -- verhindert Endlosschleifen. */
 #define FLUX_MAX_TOOL_STEPS 6
 
-typedef enum { FMT_ANTHROPIC, FMT_OPENAI } api_format_t;
+/* FMT_LOCAL: OpenAI-kompatibel aber kein API-Key noetig (lokaler Server).
+ * URL konfigurierbar ueber Config-Key llama_url. */
+typedef enum { FMT_ANTHROPIC, FMT_OPENAI, FMT_LOCAL } api_format_t;
 
 typedef struct {
     const char  *id;            /* interner Bezeichner (ai_provider-Wert) */
     const char  *label;         /* Anzeigename */
-    const char  *url;           /* API-Endpunkt */
+    const char  *url;           /* Standard-API-Endpunkt */
     api_format_t format;
     const char  *key_cfg;       /* Config-Key fuer den API-Key */
     const char  *model_cfg;     /* Config-Key fuer das Modell */
     const char  *default_model; /* Standardmodell, falls keins gesetzt */
     const char  *env_key;       /* Umgebungsvariable als Fallback fuer Key */
+    const char  *url_cfg;       /* Config-Key fuer URL-Override (NULL = fest) */
 } flux_provider_def_t;
 
 /* Vordefinierte Anbieter -- in den Einstellungen auswaehlbar. */
@@ -47,15 +50,22 @@ static const flux_provider_def_t PROVIDERS[] = {
     { "anthropic", "Anthropic Claude",
       "https://api.anthropic.com/v1/messages", FMT_ANTHROPIC,
       "api_key", "anthropic_model", "claude-haiku-4-5-20251001",
-      "FLUX_AI_API_KEY" },
+      "FLUX_AI_API_KEY", NULL },
     { "deepseek", "DeepSeek",
       "https://api.deepseek.com/chat/completions", FMT_OPENAI,
       "deepseek_key", "deepseek_model", "deepseek-chat",
-      "DEEPSEEK_API_KEY" },
+      "DEEPSEEK_API_KEY", NULL },
     { "nvidia", "NVIDIA NIM",
       "https://integrate.api.nvidia.com/v1/chat/completions", FMT_OPENAI,
       "nvidia_key", "nvidia_model", "meta/llama-3.1-8b-instruct",
-      "NVIDIA_API_KEY" },
+      "NVIDIA_API_KEY", NULL },
+    /* Lokales On-Device-LLM: llama.cpp-Server (kein Cloud-Roundtrip).
+     * Standard-URL: http://127.0.0.1:8080 -- aenderbar via llama_url in flux.conf.
+     * API-Key ist optional; llama.cpp akzeptiert keinen, falls keiner gesetzt. */
+    { "llama", "llama.cpp (lokal)",
+      "http://127.0.0.1:8080/v1/chat/completions", FMT_LOCAL,
+      "llama_key", "llama_model", "local",
+      NULL, "llama_url" },
 };
 static const int PROVIDERS_N = (int)(sizeof(PROVIDERS) / sizeof(PROVIDERS[0]));
 
@@ -67,7 +77,7 @@ static const flux_provider_def_t *provider_by_id(const char *id) {
 }
 
 /* Ermittelt den aktiven Anbieter, dessen API-Key und Modell.
- * Gibt 1 zurueck, wenn ein nutzbarer Key vorliegt, sonst 0. */
+ * Fuer lokale Anbieter (FMT_LOCAL) ist der Key optional (leerer String ok). */
 static const flux_provider_def_t *resolve_provider(char *key_out, size_t key_cap,
                                                    char *model_out, size_t model_cap) {
     char sel[64] = {0};
@@ -83,6 +93,10 @@ static const flux_provider_def_t *resolve_provider(char *key_out, size_t key_cap
             const char *env = p->env_key ? getenv(p->env_key) : NULL;
             if (env && *env) snprintf(key_out, key_cap, "%s", env);
         }
+        /* Lokale Anbieter brauchen keinen Key -- Sentinel damit !api_key[0] nicht
+         * faelschlicherweise "kein Zugang" bedeutet. */
+        if (!key_out[0] && p->format == FMT_LOCAL)
+            snprintf(key_out, key_cap, "local");
     }
     if (model_out && model_cap) {
         char buf[200] = {0};
@@ -92,6 +106,24 @@ static const flux_provider_def_t *resolve_provider(char *key_out, size_t key_cap
             snprintf(model_out, model_cap, "%s", p->default_model);
     }
     return p;
+}
+
+/* Loest die tatsaechliche URL auf (bei FMT_LOCAL via Config ueberschreibbar). */
+static void resolve_url(const flux_provider_def_t *p, char *url_out, size_t cap) {
+    if (p->url_cfg) {
+        char buf[512] = {0};
+        if (flux_config_get(p->url_cfg, buf, sizeof(buf)) && buf[0]) {
+            /* URL aus Config: wenn sie nicht auf /v1/chat/completions endet,
+             * haengen wir den Pfad an. */
+            const char *path = "/v1/chat/completions";
+            if (strstr(buf, "/v1/") != NULL)
+                snprintf(url_out, cap, "%s", buf);
+            else
+                snprintf(url_out, cap, "%s%s", buf, path);
+            return;
+        }
+    }
+    snprintf(url_out, cap, "%s", p->url);
 }
 
 int flux_provider_active(char *key_out, size_t key_cap,
@@ -241,6 +273,8 @@ static int api_call(const flux_provider_def_t *prov, const char *api_key,
                     const char *model, const char *system_prompt,
                     const char *final_q, char *out, size_t out_cap, int use_ctx) {
     char body[24576];
+    char url[512];
+    resolve_url(prov, url, sizeof(url));
 
     if (prov->format == FMT_ANTHROPIC) {
         /* system als Cache-faehiger Block (Prompt-Caching spart Kosten/Latenz) */
@@ -267,7 +301,7 @@ static int api_call(const flux_provider_def_t *prov, const char *api_key,
         json_escape_append(body, sizeof(body), final_q);
         strncat(body, "\"}]}", sizeof(body) - strlen(body) - 1);
     } else {
-        /* OpenAI-kompatibel: system als erste Nachricht */
+        /* OpenAI-kompatibel (FMT_OPENAI und FMT_LOCAL): system als erste Nachricht */
         snprintf(body, sizeof(body),
                  "{\"model\":\"%s\",\"max_tokens\":600,\"messages\":["
                  "{\"role\":\"system\",\"content\":\"", model);
@@ -299,9 +333,15 @@ static int api_call(const flux_provider_def_t *prov, const char *api_key,
         headers = curl_slist_append(headers, auth_header);
         headers = curl_slist_append(headers, "anthropic-version: 2023-06-01");
         headers = curl_slist_append(headers, "anthropic-beta: prompt-caching-2024-07-31");
-    } else {
+    } else if (prov->format == FMT_OPENAI) {
         snprintf(auth_header, sizeof(auth_header), "Authorization: Bearer %s", api_key);
         headers = curl_slist_append(headers, auth_header);
+    } else {
+        /* FMT_LOCAL: Auth-Header nur wenn ein echter Key gesetzt ist. */
+        if (api_key && *api_key && strcmp(api_key, "local") != 0) {
+            snprintf(auth_header, sizeof(auth_header), "Authorization: Bearer %s", api_key);
+            headers = curl_slist_append(headers, auth_header);
+        }
     }
     headers = curl_slist_append(headers, "content-type: application/json");
 
@@ -317,7 +357,7 @@ static int api_call(const flux_provider_def_t *prov, const char *api_key,
         respbuf[0] = '\0';
         struct membuf mb = { .data = respbuf, .len = 0, .cap = sizeof(respbuf) };
 
-        curl_easy_setopt(curl, CURLOPT_URL, prov->url);
+        curl_easy_setopt(curl, CURLOPT_URL, url);
         curl_easy_setopt(curl, CURLOPT_POST, 1L);
         curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
         curl_easy_setopt(curl, CURLOPT_POSTFIELDS, body);
@@ -463,6 +503,7 @@ void flux_provider_ask(const char *question, char *out, size_t out_cap) {
             "anderen Anbieter).", prov->label);
         return;
     }
+
 
     char system_prompt[8192];
     build_system_prompt(system_prompt, sizeof(system_prompt));

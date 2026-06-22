@@ -319,9 +319,9 @@ static char email_pending[256] = {0};
  * Key/Modell-Eintrag passt immer zum gewaehlten Anbieter. */
 static const char *setting_keys[FLUX_SETTINGS_N] = {
     "pin_hash",
-    "ai_provider",      /* anthropic|deepseek|nvidia -- per Tap durchschalten */
-    "__active_key",     /* -> api_key | deepseek_key | nvidia_key */
-    "__active_model",   /* -> anthropic_model | deepseek_model | nvidia_model */
+    "ai_provider",      /* anthropic|deepseek|nvidia|llama -- per Tap durchschalten */
+    "__active_key",     /* -> api_key | deepseek_key | nvidia_key | llama_key */
+    "__active_model",   /* -> anthropic_model | deepseek_model | nvidia_model | llama_model */
     "__email",          /* E-Mail-Adresse + App-Passwort (leitet SMTP/IMAP ab) */
     "__wifi",           /* oeffnet den WLAN-Screen (Scan + Verbinden) */
     "searxng_url",      /* Web-Suche ueber eigene SearXNG-Instanz (z.B. MacBook) */
@@ -331,7 +331,7 @@ static const char *setting_keys[FLUX_SETTINGS_N] = {
 };
 static const char *setting_labels[FLUX_SETTINGS_N] = {
     "PIN-Code",
-    "KI-Anbieter",          /* tippen schaltet anthropic/deepseek/nvidia */
+    "KI-Anbieter",          /* tippen schaltet anthropic/deepseek/nvidia/llama */
     "API-Key (Anbieter)",
     "Modell (Anbieter)",
     "E-Mail Einstellungen", /* Adresse + App-Passwort, Rest automatisch */
@@ -380,11 +380,13 @@ static const char *resolve_setting_key(const char *key) {
     if (!strcmp(key, "__active_key")) {
         if (!strcmp(prov, "deepseek")) return "deepseek_key";
         if (!strcmp(prov, "nvidia"))   return "nvidia_key";
+        if (!strcmp(prov, "llama"))    return "llama_key";
         return "api_key";
     }
     if (!strcmp(key, "__active_model")) {
         if (!strcmp(prov, "deepseek")) return "deepseek_model";
         if (!strcmp(prov, "nvidia"))   return "nvidia_model";
+        if (!strcmp(prov, "llama"))    return "llama_model";
         return "anthropic_model";
     }
     /* E-Mail-Eintrag zeigt die konfigurierte Absenderadresse an */
@@ -454,6 +456,7 @@ static const char *active_default_model(void) {
     char prov[64]; get_active_provider(prov, sizeof(prov));
     if (!strcmp(prov, "deepseek")) return "deepseek-chat";
     if (!strcmp(prov, "nvidia"))   return "meta/llama-3.1-8b-instruct";
+    if (!strcmp(prov, "llama"))    return "local";
     return "claude-haiku-4-5-20251001";
 }
 
@@ -472,6 +475,7 @@ static void load_settings_values(void) {
             const char *p = raw[0] ? raw : "anthropic";
             const char *nice = !strcmp(p, "deepseek") ? "DeepSeek"
                              : !strcmp(p, "nvidia")   ? "NVIDIA NIM"
+                             : !strcmp(p, "llama")    ? "llama.cpp (lokal)"
                                                       : "Anthropic Claude";
             snprintf(setting_values_buf[i], sizeof(setting_values_buf[0]), "%s", nice);
         } else if (strcmp(setting_keys[i], "__active_model") == 0) {
@@ -1599,8 +1603,9 @@ int main(void) {
                 char cur[64] = {0};
                 flux_config_get("ai_provider", cur, sizeof(cur));
                 const char *next = "deepseek";
-                if (!strcmp(cur, "deepseek")) next = "nvidia";
-                else if (!strcmp(cur, "nvidia")) next = "anthropic";
+                if (!strcmp(cur, "deepseek"))  next = "nvidia";
+                else if (!strcmp(cur, "nvidia"))   next = "llama";
+                else if (!strcmp(cur, "llama"))    next = "anthropic";
                 else next = "deepseek"; /* von anthropic/leer aus */
                 flux_config_set("ai_provider", next);
                 load_settings_values();
