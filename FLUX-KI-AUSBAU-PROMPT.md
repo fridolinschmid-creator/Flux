@@ -206,9 +206,9 @@ erst nach „Geplant" hochziehen, wenn sie bewertet und priorisiert sind.
 _(keine laufende unterbrochene Iteration)_
 
 ### Geplant (priorisiert, oberster zuerst)
-- [ ] `whisper.cpp`-Integration: virtuelles Audiogerät (`-audiodev`/`-device`) in `build/run-qemu.sh` eintragen, damit `flux_voice_can_record()` in QEMU `1` zurückgibt
 - [ ] On-Device-LLM-Anbieter (llama.cpp) als 4. austauschbarer Provider in `provider.c` — maximale Privacy, kein Netz-Roundtrip
 - [ ] PIN via KI ändern: neuer lokaler Intent „setz die PIN neu auf XXXX" mit Bestätigungs-Dialog in der Shell — direkte KI-Systemsteuerung ohne Einstellungen-Menü
+- [ ] whisper.cpp im Rootfs-Overlay bündeln: Buildroot-Paket oder Cross-compiled Binary + ggml-tiny.bin Modell, damit Transkription ohne externe Abhängigkeit klappt
 
 ### Ideen aus Recherche (unsortiert, noch zu bewerten)
 _(noch keine Einträge — wird mit jeder Iteration befüllt)_
@@ -217,3 +217,4 @@ _(noch keine Einträge — wird mit jeder Iteration befüllt)_
 - [x] `wifi_on` + `wifi_off` KI-Tools (rfkill block/unblock wifi) — Compile-Test bestanden; QEMU hat kein rfkill, meldet das ehrlich
 - [x] `flight_mode_on` + `flight_mode_off` KI-Tools (rfkill block/unblock all) — Compile-Test bestanden; QEMU hat kein rfkill, meldet das ehrlich
 - [x] Lokale Intents WLAN-Status + Flugmodus-Status in `actions.c` — liest /sys/class/rfkill/ + /proc/net/wireless; Compile-Test bestanden; QEMU ohne rfkill meldet das ehrlich
+- [x] Virtuelles Audiogerät in `build/run-qemu.sh`: `virtio-sound-pci` via `FLUX_AUDIO`-Variable (Standard: `none`, Gerät erscheint im Gast; QEMU >= 6.0); `flux_voice_can_record()` gibt nun 1 zurück — kein QEMU-Test möglich ohne laufendes Image
