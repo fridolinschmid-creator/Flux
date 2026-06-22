@@ -1375,6 +1375,51 @@ static int tool_calendar_list(const char *arg, char *out, size_t cap) {
     return 1;
 }
 
+/* ---- calendar_delete ------------------------------------------------- */
+static int tool_calendar_delete(const char *arg, char *out, size_t cap) {
+    if (!arg || !*arg) {
+        snprintf(out, cap,
+            "Fehler: kein Suchbegriff angegeben (loescht alle Termine, die den Begriff enthalten)");
+        return 1;
+    }
+    const char *path = "/etc/flux/calendar.txt";
+    FILE *f = fopen(path, "r");
+    if (!f) {
+        snprintf(out, cap, "Keine Termine gespeichert.");
+        return 1;
+    }
+    char tmppath[256];
+    snprintf(tmppath, sizeof(tmppath), "%s.tmp", path);
+    FILE *tmp_f = fopen(tmppath, "w");
+    if (!tmp_f) {
+        fclose(f);
+        snprintf(out, cap, "Fehler: temporaere Datei nicht schreibbar.");
+        return 1;
+    }
+    char line[512];
+    int deleted = 0;
+    while (fgets(line, sizeof(line), f)) {
+        if (line[0] == '#') { fputs(line, tmp_f); continue; } /* Kommentare behalten */
+        if (strcasestr(line, arg)) {
+            deleted++;
+        } else {
+            fputs(line, tmp_f);
+        }
+    }
+    fclose(f);
+    fclose(tmp_f);
+    if (rename(tmppath, path) != 0) {
+        remove(tmppath);
+        snprintf(out, cap, "Fehler: Kalender-Datei konnte nicht aktualisiert werden.");
+        return 1;
+    }
+    if (deleted == 0)
+        snprintf(out, cap, "Kein Termin mit \"%s\" gefunden.", arg);
+    else
+        snprintf(out, cap, "%d Termin(e) mit \"%s\" geloescht.", deleted, arg);
+    return 1;
+}
+
 /* ---- search_files ---------------------------------------------------- */
 static void search_files_walk(const char *base, const char *pattern,
                                char *out, size_t cap, int *count) {
@@ -1730,8 +1775,9 @@ int flux_tool_exec(const char *name, const char *arg,
     if (strcmp(name, "vibrate")          == 0) return tool_vibrate(arg, out, out_cap);
     if (strcmp(name, "contact_save")   == 0) return tool_contact_save(arg, out, out_cap);
     if (strcmp(name, "contacts_list")  == 0) return tool_contacts_list(arg, out, out_cap);
-    if (strcmp(name, "calendar_add")   == 0) return tool_calendar_add(arg, out, out_cap);
-    if (strcmp(name, "calendar_list")  == 0) return tool_calendar_list(arg, out, out_cap);
+    if (strcmp(name, "calendar_add")    == 0) return tool_calendar_add(arg, out, out_cap);
+    if (strcmp(name, "calendar_list")   == 0) return tool_calendar_list(arg, out, out_cap);
+    if (strcmp(name, "calendar_delete") == 0) return tool_calendar_delete(arg, out, out_cap);
     if (strcmp(name, "search_files")   == 0) return tool_search_files(arg, out, out_cap);
     if (strcmp(name, "prefs_set")      == 0) return tool_prefs_set(arg, out, out_cap);
     if (strcmp(name, "image_list")    == 0) return tool_image_list(arg, out, out_cap);
@@ -1781,6 +1827,7 @@ const char *flux_tools_description(void) {
         "  contacts_list   -- Alle Kontakte anzeigen. ARG: (leer)\n"
         "  calendar_add    -- Termin eintragen. ARG: YYYY-MM-DD HH:MM Beschreibung\n"
         "  calendar_list   -- Bevorstehende Termine. ARG: (leer)\n"
+        "  calendar_delete -- Termin loeschen (alle die Suchbegriff enthalten). ARG: Suchbegriff\n"
         "  search_files    -- Dateien suchen. ARG: Suchbegriff (in /home/user/)\n"
         "  prefs_set       -- Nutzerpraeferenz merken (fuer spaetere Kontextnutzung). ARG: Praeferenztext\n"
         "  image_list      -- Fotos in /home/user/Pictures/ auflisten. ARG: (leer)\n"
