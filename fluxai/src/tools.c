@@ -38,6 +38,7 @@
 #include <limits.h>
 #include <ctype.h>
 
+#define FLUX_USER_DOCS_DIR "/home/user/Dokumente"  /* Standard-Ablage fuer Nutzer-/KI-Dateien */
 #define NOTES_PATH      "/etc/flux/notes.txt"
 #define MEMORY_PATH     "/etc/flux/memory.txt"
 #define WEATHER_CACHE   "/tmp/flux_weather.txt"
@@ -269,14 +270,28 @@ static int tool_file_create(const char *arg, char *out, size_t cap) {
 
     /* Format: "pfad|inhalt" -- | als Trennzeichen */
     const char *sep = strchr(arg, '|');
-    char path[512];
+    char raw[512];
     if (!sep) {
-        snprintf(path, sizeof(path), "%s", arg);
+        snprintf(raw, sizeof(raw), "%s", arg);
     } else {
         size_t plen = (size_t)(sep - arg);
-        if (plen >= sizeof(path)) plen = sizeof(path) - 1;
-        memcpy(path, arg, plen);
-        path[plen] = '\0';
+        if (plen >= sizeof(raw)) plen = sizeof(raw) - 1;
+        memcpy(raw, arg, plen);
+        raw[plen] = '\0';
+    }
+    /* fuehrende Leerzeichen am Pfad entfernen */
+    char *rp = raw;
+    while (*rp == ' ') rp++;
+
+    /* Relative/blanke Namen landen im Benutzer-Ordner /home/user/Dokumente
+     * (dort startet auch der Datei-Browser). Ordner bei Bedarf anlegen. */
+    char path[600];
+    if (rp[0] == '/') {
+        snprintf(path, sizeof(path), "%s", rp);
+    } else {
+        mkdir("/home/user", 0755);
+        mkdir(FLUX_USER_DOCS_DIR, 0755);
+        snprintf(path, sizeof(path), "%s/%s", FLUX_USER_DOCS_DIR, rp);
     }
 
     /* Sicherheit: kanonischen Pfad pruefen (verhindert Path-Traversal) */
@@ -1516,7 +1531,8 @@ const char *flux_tools_description(void) {
         "  weather          -- aktuelles Wetter. ARG: Stadtname (leer = automatisch)\n"
         "  file_read        -- Dateiinhalt lesen. ARG: Dateipfad\n"
         "  file_list        -- Verzeichnis auflisten. ARG: Verzeichnispfad\n"
-        "  file_create      -- Datei erstellen. ARG: /pfad/datei.txt|Inhalt (\\n fuer Zeilenumbruch)\n"
+        "  file_create      -- Datei erstellen. ARG: name.txt|Inhalt (\\n fuer Zeilenumbruch). "
+        "Ohne fuehrenden / landet die Datei im Benutzer-Ordner /home/user/Dokumente.\n"
         "  file_delete      -- Datei loeschen (nur /home/user/). ARG: Dateipfad\n"
         "  file_rename      -- Datei umbenennen/verschieben (nur /home/user/). "
         "ARG: altpfad|neupfad (Ziel wird nicht ueberschrieben)\n"

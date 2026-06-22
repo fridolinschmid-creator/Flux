@@ -514,7 +514,9 @@ static void apply_setting_edit(int index, const char *value) {
  * Kein Loeschen/Umbenennen -- ein erster, sicherer Schritt (siehe
  * ui.c-Kommentar bei flux_ui_draw_files). */
 
-static char files_path[1024] = "/";
+/* Datei-Browser startet im Benutzer-Ordner (nicht im Root-Verzeichnis):
+ * hier liegen die Dateien, die der Nutzer bzw. die KI anlegt. */
+static char files_path[1024] = "/home/user/Dokumente";
 static char file_names_buf[FLUX_FILES_MAX][256];
 static char file_metas_buf[FLUX_FILES_MAX][32];
 static int  file_is_dir[FLUX_FILES_MAX];
@@ -1123,6 +1125,11 @@ int main(void) {
         fprintf(stderr, "flux-shell: /dev/fb0 nicht verfuegbar.\n");
         return 1;
     }
+
+    /* Benutzer-Ordner sicherstellen: hier startet der Datei-Browser und
+     * hier legt die KI (file_create) standardmaessig Dateien an. */
+    mkdir("/home/user", 0755);
+    mkdir("/home/user/Dokumente", 0755);
 
     /* Farbthema vor dem ersten Zeichnen laden */
     apply_theme();

@@ -90,10 +90,12 @@ Datei, Protokoll und UI bleiben unveraendert.
   API-Key) werden in der Liste nur als "gesetzt"/"********" angezeigt,
   nie im Klartext. Gespeichert in `/etc/flux/flux.conf` (`chmod 0600`,
   siehe Sicherheits-Hinweis).
-- **Dateien** (`FLUX_SCREEN_FILES`): einfacher Read-Only-Browser (rein/
-  raus navigieren, Ordner/Dateigroessen anzeigen). Bewusst kein Loeschen/
-  Umbenennen -- ein erster sicherer Schritt, kein vollwertiger
-  Datei-Manager.
+- **Dateien** (`FLUX_SCREEN_FILES`): einfacher Browser, der im Benutzer-
+  Ordner **`/home/user/Dokumente`** startet (nicht im Root) -- dort liegen
+  die Dateien, die der Nutzer bzw. die KI anlegt. Dateien, die die KI ueber
+  `file_create` ohne fuehrenden `/` erstellt, landen ebenfalls dort. Nach
+  oben/unten navigieren und Ordner/Dateigroessen anzeigen ist moeglich;
+  Umbenennen geht ueber die KI (`file_rename`, nur unter `/home/user/`).
 
 ## Mikrofon-Knopf (Whisper) -- aktuell ein ehrlicher Platzhalter
 
