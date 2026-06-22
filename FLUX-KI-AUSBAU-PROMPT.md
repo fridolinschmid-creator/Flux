@@ -197,3 +197,22 @@ erst nach „Geplant" hochziehen, wenn sie bewertet und priorisiert sind.
 - Bei `/goal`: stoppen, wenn „Geplant" und „Ideen aus Recherche" leer sind
   oder ein Build-Fehler nicht in einer Iteration lösbar ist (dann ehrlich
   als Blocker in „In Arbeit" notieren und anhalten).
+
+---
+
+## Roadmap / Offene Aufgaben  (von der KI automatisch gepflegt)
+
+### In Arbeit
+_(keine laufende unterbrochene Iteration)_
+
+### Geplant (priorisiert, oberster zuerst)
+- [ ] Flugmodus-Tool (`flight_mode_on` / `flight_mode_off`) via `rfkill all` — KI als universeller Controller: alle Funkschnittstellen auf einmal abschalten
+- [ ] Lokale Intents für WLAN-Status erweitern: "Ist WLAN an?" direkt in `actions.c` ohne Cloud-Roundtrip beantworten
+- [ ] `whisper.cpp`-Integration: virtuelles Audiogerät (`-audiodev`/`-device`) in `build/run-qemu.sh` eintragen, damit `flux_voice_can_record()` in QEMU `1` zurückgibt
+- [ ] On-Device-LLM-Anbieter (llama.cpp) als 4. austauschbarer Provider in `provider.c` — maximale Privacy, kein Netz-Roundtrip
+
+### Ideen aus Recherche (unsortiert, noch zu bewerten)
+_(noch keine Einträge — wird mit jeder Iteration befüllt)_
+
+### Erledigt
+- [x] `wifi_on` + `wifi_off` KI-Tools (rfkill block/unblock wifi) — Compile-Test bestanden; QEMU hat kein rfkill, meldet das ehrlich

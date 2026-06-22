@@ -14,6 +14,8 @@
  *   brightness_get   -- Bildschirmhelligkeit lesen, ARG: (leer)
  *   brightness_set   -- Bildschirmhelligkeit setzen, ARG: 0-100 (Prozent)
  *   wifi_info        -- WLAN-Signalstaerke und Interface, ARG: (leer)
+ *   wifi_on          -- WLAN einschalten (rfkill unblock wifi), ARG: (leer)
+ *   wifi_off         -- WLAN ausschalten (rfkill block wifi), ARG: (leer)
  *   vibrate          -- Geraet vibrieren lassen, ARG: Dauer in ms (z.B. 300)
  *   memory_save      -- Personliche Info dauerhaft merken, ARG: Text
  *   memory_list      -- Alle KI-Erinnerungen anzeigen, ARG: (leer)
@@ -774,6 +776,61 @@ static int tool_wifi_info(const char *arg, char *out, size_t cap) {
     return 1;
 }
 
+/* ---- wifi_on / wifi_off ---------------------------------------------- */
+
+static const char *find_rfkill(void) {
+    static const char *paths[] = {
+        "/usr/sbin/rfkill", "/sbin/rfkill",
+        "/usr/bin/rfkill",  "/usr/local/sbin/rfkill",
+        NULL
+    };
+    for (int i = 0; paths[i]; i++)
+        if (access(paths[i], X_OK) == 0) return paths[i];
+    return NULL;
+}
+
+static int tool_wifi_on(const char *arg, char *out, size_t cap) {
+    (void)arg;
+    const char *rfkill = find_rfkill();
+    if (!rfkill) {
+        snprintf(out, cap,
+            "WLAN-Steuerung nicht verfuegbar: 'rfkill' nicht gefunden "
+            "(auf QEMU ohne WLAN-Hardware kein rfkill vorhanden).");
+        return 1;
+    }
+    char cmd[256];
+    snprintf(cmd, sizeof(cmd), "%s unblock wifi 2>/dev/null", rfkill);
+    int rc = system(cmd);
+    if (rc == 0)
+        snprintf(out, cap, "WLAN eingeschaltet.");
+    else
+        snprintf(out, cap,
+            "Fehler beim Einschalten des WLANs (rfkill Rueckgabewert %d). "
+            "Kein WLAN-Hardware vorhanden?", rc);
+    return 1;
+}
+
+static int tool_wifi_off(const char *arg, char *out, size_t cap) {
+    (void)arg;
+    const char *rfkill = find_rfkill();
+    if (!rfkill) {
+        snprintf(out, cap,
+            "WLAN-Steuerung nicht verfuegbar: 'rfkill' nicht gefunden "
+            "(auf QEMU ohne WLAN-Hardware kein rfkill vorhanden).");
+        return 1;
+    }
+    char cmd[256];
+    snprintf(cmd, sizeof(cmd), "%s block wifi 2>/dev/null", rfkill);
+    int rc = system(cmd);
+    if (rc == 0)
+        snprintf(out, cap, "WLAN ausgeschaltet.");
+    else
+        snprintf(out, cap,
+            "Fehler beim Ausschalten des WLANs (rfkill Rueckgabewert %d). "
+            "Kein WLAN-Hardware vorhanden?", rc);
+    return 1;
+}
+
 /* ---- vibrate --------------------------------------------------------- */
 
 static int tool_vibrate(const char *arg, char *out, size_t cap) {
@@ -1424,6 +1481,8 @@ int flux_tool_exec(const char *name, const char *arg,
     if (strcmp(name, "brightness_get")   == 0) return tool_brightness_get(arg, out, out_cap);
     if (strcmp(name, "brightness_set")   == 0) return tool_brightness_set(arg, out, out_cap);
     if (strcmp(name, "wifi_info")        == 0) return tool_wifi_info(arg, out, out_cap);
+    if (strcmp(name, "wifi_on")          == 0) return tool_wifi_on(arg, out, out_cap);
+    if (strcmp(name, "wifi_off")         == 0) return tool_wifi_off(arg, out, out_cap);
     if (strcmp(name, "vibrate")          == 0) return tool_vibrate(arg, out, out_cap);
     if (strcmp(name, "contact_save")   == 0) return tool_contact_save(arg, out, out_cap);
     if (strcmp(name, "contacts_list")  == 0) return tool_contacts_list(arg, out, out_cap);
@@ -1465,6 +1524,8 @@ const char *flux_tools_description(void) {
         "  brightness_get   -- Bildschirmhelligkeit lesen. ARG: (leer)\n"
         "  brightness_set   -- Bildschirmhelligkeit setzen. ARG: 0-100 (Prozent)\n"
         "  wifi_info        -- WLAN-Signalstaerke und Interface. ARG: (leer)\n"
+        "  wifi_on          -- WLAN einschalten. ARG: (leer)\n"
+        "  wifi_off         -- WLAN ausschalten. ARG: (leer)\n"
         "  vibrate          -- Geraet vibrieren lassen. ARG: Dauer in ms (z.B. 300)\n"
         "  contact_save    -- Kontakt speichern. ARG: Name,Telefon,Email\n"
         "  contacts_list   -- Alle Kontakte anzeigen. ARG: (leer)\n"
