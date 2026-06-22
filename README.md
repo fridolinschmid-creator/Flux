@@ -105,6 +105,25 @@ Mikrofon erkannt") statt eine Aufnahme zu simulieren. Geplant: lokales
 Systems) -- braucht zuerst ein virtuelles Audiogeraet in der QEMU-Konfig
 und ein gebuendeltes Modell im Rootfs-Overlay, siehe Roadmap.
 
+## Flugmodus per KI ("aktivier Flugmodus")
+
+Der Assistent kann den Flugmodus ueber das KI-Tool `flight_mode` schalten
+und abfragen ("aktivier Flugmodus", "Funk wieder an", "ist Flugmodus an?").
+Backend ist die Linux-`rfkill`-Schnittstelle (`fluxai/src/radio.c`): ein
+einzelnes `RFKILL_OP_CHANGE_ALL`-Event blockt bzw. entsperrt alle
+Funkmodule (WLAN/Bluetooth/Mobilfunk) auf einmal.
+
+Ehrlich: QEMU `virt` hat **keine Funkhardware** und damit kein
+`/dev/rfkill` -- dort meldet das Tool wahrheitsgemaess "Keine Funkhardware
+erkannt" statt einen Erfolg zu erfinden (gleiches Prinzip wie beim
+Modem-Stub und beim fehlenden Akku-Sensor). Auf echter Hardware mit
+rfkill-faehigen Funkmodulen schaltet derselbe Code real -- `radio.c` ist
+als austauschbares Backend geschnitten, das spaeter z.B. gegen
+NetworkManager/ofono getauscht werden kann, ohne Tool oder UI zu aendern.
+Verifiziert ist bisher der ehrliche Fallback-Pfad (Host ohne `/dev/rfkill`)
+und der Host-Compile-Test; der echte rfkill-Schaltpfad ist erst auf
+Hardware/QEMU mit Funkmodulen ausfuehrbar.
+
 ---
 
 ## Architektur

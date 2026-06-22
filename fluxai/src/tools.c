@@ -23,6 +23,7 @@
 #include "tools.h"
 #include "vision.h"
 #include "imap.h"
+#include "radio.h"
 #include "../../common/flux_config.h"
 
 #include <curl/curl.h>
@@ -35,6 +36,7 @@
 #include <dirent.h>
 #include <sys/stat.h>
 #include <limits.h>
+#include <ctype.h>
 
 #define NOTES_PATH      "/etc/flux/notes.txt"
 #define MEMORY_PATH     "/etc/flux/memory.txt"
@@ -810,6 +812,45 @@ static int tool_vibrate(const char *arg, char *out, size_t cap) {
     return 1;
 }
 
+/* ---- flight_mode ----------------------------------------------------- */
+/* Flugmodus ueber rfkill schalten bzw. abfragen. Backend: radio.c
+ * (austauschbar, ehrliche Meldung wenn keine Funkhardware vorhanden). */
+static int tool_flight_mode(const char *arg, char *out, size_t cap) {
+    /* Argument normalisieren (fuehrende Leerzeichen, Kleinbuchstaben). */
+    char a[32] = {0};
+    if (arg) {
+        while (*arg == ' ') arg++;
+        size_t i = 0;
+        for (; arg[i] && i < sizeof(a) - 1; i++)
+            a[i] = (char)tolower((unsigned char)arg[i]);
+        a[i] = '\0';
+    }
+
+    if (!a[0] || strcmp(a, "status") == 0 || strcmp(a, "?") == 0) {
+        flux_radio_status(out, cap);
+        return 1;
+    }
+
+    int on;
+    if (strcmp(a, "an") == 0 || strcmp(a, "ein") == 0 || strcmp(a, "on") == 0 ||
+        strcmp(a, "1") == 0 || strcmp(a, "true") == 0 || strcmp(a, "ja") == 0 ||
+        strcmp(a, "aktivieren") == 0 || strcmp(a, "aktiviere") == 0) {
+        on = 1;
+    } else if (strcmp(a, "aus") == 0 || strcmp(a, "off") == 0 || strcmp(a, "0") == 0 ||
+               strcmp(a, "false") == 0 || strcmp(a, "nein") == 0 ||
+               strcmp(a, "deaktivieren") == 0 || strcmp(a, "deaktiviere") == 0) {
+        on = 0;
+    } else {
+        snprintf(out, cap,
+            "Flugmodus: bitte 'an' oder 'aus' angeben (oder leer fuer Status). "
+            "Angegeben: '%s'.", a);
+        return 1;
+    }
+
+    flux_radio_set_airplane(on, out, cap);
+    return 1;
+}
+
 /* ---- memory_save ----------------------------------------------------- */
 static int tool_memory_save(const char *arg, char *out, size_t cap) {
     if (!arg || !*arg) {
@@ -1425,6 +1466,7 @@ int flux_tool_exec(const char *name, const char *arg,
     if (strcmp(name, "brightness_set")   == 0) return tool_brightness_set(arg, out, out_cap);
     if (strcmp(name, "wifi_info")        == 0) return tool_wifi_info(arg, out, out_cap);
     if (strcmp(name, "vibrate")          == 0) return tool_vibrate(arg, out, out_cap);
+    if (strcmp(name, "flight_mode")      == 0) return tool_flight_mode(arg, out, out_cap);
     if (strcmp(name, "contact_save")   == 0) return tool_contact_save(arg, out, out_cap);
     if (strcmp(name, "contacts_list")  == 0) return tool_contacts_list(arg, out, out_cap);
     if (strcmp(name, "calendar_add")   == 0) return tool_calendar_add(arg, out, out_cap);
@@ -1466,6 +1508,8 @@ const char *flux_tools_description(void) {
         "  brightness_set   -- Bildschirmhelligkeit setzen. ARG: 0-100 (Prozent)\n"
         "  wifi_info        -- WLAN-Signalstaerke und Interface. ARG: (leer)\n"
         "  vibrate          -- Geraet vibrieren lassen. ARG: Dauer in ms (z.B. 300)\n"
+        "  flight_mode      -- Flugmodus schalten/abfragen (alle Funkmodule via rfkill). "
+        "ARG: 'an' | 'aus' | leer fuer Status. Nutze dies bei 'Flugmodus', 'Funk aus', 'aktivier Flugmodus'.\n"
         "  contact_save    -- Kontakt speichern. ARG: Name,Telefon,Email\n"
         "  contacts_list   -- Alle Kontakte anzeigen. ARG: (leer)\n"
         "  calendar_add    -- Termin eintragen. ARG: YYYY-MM-DD HH:MM Beschreibung\n"

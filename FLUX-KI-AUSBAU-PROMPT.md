@@ -197,3 +197,45 @@ erst nach „Geplant" hochziehen, wenn sie bewertet und priorisiert sind.
 - Bei `/goal`: stoppen, wenn „Geplant" und „Ideen aus Recherche" leer sind
   oder ein Build-Fehler nicht in einer Iteration lösbar ist (dann ehrlich
   als Blocker in „In Arbeit" notieren und anhalten).
+
+---
+
+## Roadmap / Offene Aufgaben  (von der KI automatisch gepflegt)
+
+### In Arbeit
+- (nichts -- letzte Iteration abgeschlossen)
+
+### Geplant (priorisiert, oberster zuerst)
+- [ ] Flugmodus zusätzlich durch den Bestätigungs-Dialog führen (eigener
+  ACTION-Typ statt direktem Tool) — Funk kappen ist Außenwirkung und sollte
+  laut Architektur bestätigt werden; braucht feldlosen Confirm-Screen in
+  `shell/src/ui.c`/`main.c` (aktuell auf TO/SUBJECT/BODY zugeschnitten).
+- [ ] KI-Tool `file_rename`/`file_move` (nur unter `/home/user/`, wie
+  `file_delete`) — rundet die KI-gesteuerte Dateiverwaltung ab
+  (Feature-Richtung 2: „Datei umbenennen, kontrolliert").
+- [ ] KI-Tool für `theme`/`auto_lock` in `flux.conf` setzen + Live-Reload in
+  der Shell — „stell auf dunkles Design", „sperr nach 30 s" per Sprache
+  (Feature-Richtung 1). Voraussetzung: Shell muss `flux.conf` zur Laufzeit
+  neu lesen, sonst greift die Änderung erst nach Neustart (sonst unehrlich).
+
+### Ideen aus Recherche (unsortiert, noch zu bewerten)
+- [ ] (2026-06-22, qemu.org virtio-snd Doku) Virtio-Sound (`-device
+  virtio-sound` + Gast-Kernel `CONFIG_SND_VIRTIO`) als virtuelles
+  Audiogerät in `build/run-qemu.sh` — Voraussetzung für den echten
+  Mikrofon-Knopf und lokales `whisper.cpp` (Roadmap-Punkt 6), passt zu
+  Flux, weil es den ersten ehrlichen Schritt zu Sprach-Eingabe macht.
+  Quelle: https://www.qemu.org/docs/master/system/devices/virtio/virtio-snd.html
+- [ ] (2026-06-22, ai.meta.com) Quantisierte Llama-3.2-1B/3B (Q4_K_M,
+  ARM-NEON/KleidiAI, ~2-4× schneller, ~56 % kleiner) als On-Device-LLM-
+  Anbieter neben der Cloud (Feature-Richtung 5) — passt zu Flux, weil es
+  maximale Privacy ohne Netz-Roundtrip ermöglicht; offene Frage:
+  Function-/Tool-Calling-Qualität bei 1-3B noch zu prüfen.
+  Quelle: https://ai.meta.com/blog/meta-llama-quantized-lightweight-models/
+
+### Erledigt
+- [x] KI-Tool `flight_mode`: Flugmodus über `rfkill` schalten/abfragen
+  (alle Funkmodule via `RFKILL_OP_CHANGE_ALL`), austauschbares Backend
+  `fluxai/src/radio.c` analog `telephony.c`. — Status: Host-Compile-Test
+  bestanden; ehrlicher Fallback-Pfad (kein `/dev/rfkill`) zur Laufzeit
+  verifiziert. Echter Schaltpfad nur auf Hardware/QEMU mit Funkmodulen
+  ausführbar (nicht in dieser Umgebung verifizierbar).
