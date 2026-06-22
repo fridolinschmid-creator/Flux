@@ -10,6 +10,8 @@
  *   calculate        -- Mathematischen Ausdruck auswerten, ARG: Ausdruck
  *   note_save        -- Notiz speichern, ARG: Text
  *   note_list        -- Gespeicherte Notizen anzeigen, ARG: (leer)
+ *   note_search      -- Notizen durchsuchen, ARG: Suchbegriff
+ *   note_delete      -- Notizen loeschen (alle mit Suchbegriff), ARG: Suchbegriff
  *   sys_info         -- Systeminfo (Speicher, OS), ARG: (leer)
  *   brightness_get   -- Bildschirmhelligkeit lesen, ARG: (leer)
  *   brightness_set   -- Bildschirmhelligkeit setzen, ARG: 0-100 (Prozent)
@@ -473,6 +475,87 @@ static int tool_note_list(const char *arg, char *out, size_t cap) {
         return 1;
     }
     snprintf(out, cap, "Keine Notizen vorhanden.");
+    return 1;
+}
+
+/* ---- note_search ----------------------------------------------------- */
+
+static int tool_note_search(const char *arg, char *out, size_t cap) {
+    if (!arg || !*arg) {
+        snprintf(out, cap, "Fehler: kein Suchbegriff angegeben");
+        return 1;
+    }
+    const char *paths[] = { NOTES_PATH, "/tmp/flux_notes.txt" };
+    for (int i = 0; i < 2; i++) {
+        FILE *f = fopen(paths[i], "r");
+        if (!f) continue;
+        char line[512];
+        size_t pos = 0;
+        int found = 0;
+        while (fgets(line, sizeof(line), f)) {
+            if (strcasestr(line, arg) == NULL) continue;
+            if (!found) {
+                pos += snprintf(out + pos, cap - pos, "Notizen mit \"%s\":\n", arg);
+                found++;
+            }
+            size_t ll = strlen(line);
+            if (pos + ll + 1 < cap) {
+                memcpy(out + pos, line, ll);
+                pos += ll;
+                out[pos] = '\0';
+            }
+        }
+        fclose(f);
+        if (!found)
+            snprintf(out, cap, "Keine Notiz enthaelt \"%s\".", arg);
+        return 1;
+    }
+    snprintf(out, cap, "Keine Notizen vorhanden.");
+    return 1;
+}
+
+/* ---- note_delete ----------------------------------------------------- */
+
+static int tool_note_delete(const char *arg, char *out, size_t cap) {
+    if (!arg || !*arg) {
+        snprintf(out, cap, "Fehler: kein Suchbegriff angegeben (loescht alle Notizen, die den Begriff enthalten)");
+        return 1;
+    }
+    const char *path = NOTES_PATH;
+    FILE *f = fopen(path, "r");
+    if (!f) f = fopen("/tmp/flux_notes.txt", "r");
+    if (!f) {
+        snprintf(out, cap, "Keine Notizen vorhanden.");
+        return 1;
+    }
+    char tmppath[256];
+    snprintf(tmppath, sizeof(tmppath), "%s.tmp", path);
+    FILE *tmp_f = fopen(tmppath, "w");
+    if (!tmp_f) {
+        fclose(f);
+        snprintf(out, cap, "Fehler: temporaere Datei nicht schreibbar.");
+        return 1;
+    }
+    char line[512];
+    int deleted = 0;
+    while (fgets(line, sizeof(line), f)) {
+        if (strcasestr(line, arg)) {
+            deleted++;
+        } else {
+            fputs(line, tmp_f);
+        }
+    }
+    fclose(f);
+    fclose(tmp_f);
+    if (rename(tmppath, path) != 0) {
+        remove(tmppath);
+        snprintf(out, cap, "Fehler: Datei konnte nicht aktualisiert werden.");
+        return 1;
+    }
+    if (deleted == 0)
+        snprintf(out, cap, "Keine Notiz mit \"%s\" gefunden.", arg);
+    else
+        snprintf(out, cap, "%d Notiz(en) mit \"%s\" geloescht.", deleted, arg);
     return 1;
 }
 
@@ -1630,6 +1713,8 @@ int flux_tool_exec(const char *name, const char *arg,
     if (strcmp(name, "calculate")        == 0) return tool_calculate(arg, out, out_cap);
     if (strcmp(name, "note_save")        == 0) return tool_note_save(arg, out, out_cap);
     if (strcmp(name, "note_list")        == 0) return tool_note_list(arg, out, out_cap);
+    if (strcmp(name, "note_search")      == 0) return tool_note_search(arg, out, out_cap);
+    if (strcmp(name, "note_delete")      == 0) return tool_note_delete(arg, out, out_cap);
     if (strcmp(name, "sys_info")         == 0) return tool_sys_info(arg, out, out_cap);
     if (strcmp(name, "alarm_set")        == 0) return tool_alarm_set(arg, out, out_cap);
     if (strcmp(name, "reminder_set")     == 0) return tool_reminder_set(arg, out, out_cap);
@@ -1675,6 +1760,8 @@ const char *flux_tools_description(void) {
         "  calculate        -- Rechenausdruck. ARG: z.B. '15 * 8 + 3.5'\n"
         "  note_save        -- Notiz speichern. ARG: Notiztext\n"
         "  note_list        -- Alle Notizen anzeigen. ARG: (leer)\n"
+        "  note_search      -- Notizen nach Stichwort durchsuchen. ARG: Suchbegriff\n"
+        "  note_delete      -- Notizen loeschen (alle die Suchbegriff enthalten). ARG: Suchbegriff\n"
         "  sys_info         -- Systeminfos. ARG: (leer)\n"
         "  alarm_set        -- Wecker/Alarm zu einer UHRZEIT. ARG: HH:MM Beschreibung "
         "(z.B. '07:00 Aufstehen'). Nutze dies bei 'Wecker', 'weck mich', 'Alarm um ...'.\n"
