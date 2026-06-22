@@ -331,6 +331,37 @@ Danach kann jeder KI-Anbieter über `web_search` aktuelle Infos holen
 („Suche im Internet nach …"). Später lässt sich dieselbe Konfiguration auf
 einen produktiven SearXNG-/Such-Proxy umstellen, ohne Code-Änderung.
 
+### Fehler-/Log-Backend (optional, opt-in)
+
+Flux protokolliert intern nach `/var/log/flux/flux.log` (mit Rotation,
+`common/flux_log.c`). Damit man Fehler -- auch solche, die im Hintergrund
+passieren und die der Nutzer nicht direkt sieht -- zentral anschauen kann,
+lassen sich die Logs an ein **selbst gehostetes Backend** senden. Wie bei
+SearXNG ist das eine **konfigurierbare URL**, kein an einen Dienst
+gebundenes Feature.
+
+**Privacy: strikt opt-in.** Solange unter **Einstellungen → „Fehler-Backend
+(URL)"** nichts eingetragen ist, verlaesst kein Log das Geraet. Den Upload
+macht `fluxaid` (es besitzt den Netz-Zugang), nicht die Shell.
+
+- **„Logs an Backend senden"** (Einstellungen): schickt den aktuellen
+  Logfile-Inhalt sofort an `<url>/ingest`. Ehrliche Rueckmeldung bei Erfolg
+  (Byte-Zahl) oder Fehler (Backend nicht erreichbar, falsche URL ...).
+- **„Auto-Fehlerbericht"** (Einstellungen, an/aus): meldet einzelne Fehler
+  beim Auftreten an `<url>/report`, damit das Backend immer aktuell ist.
+
+Ein minimaler **Referenz-Server** liegt im Repo (`tools/flux-log-server.py`,
+nur Python-Standardbibliothek, kein Setup):
+```bash
+python3 tools/flux-log-server.py 8899
+# Ansicht im Browser:  http://localhost:8899/
+```
+Dann in Flux unter „Fehler-Backend (URL)" z.B. `http://macbook.local:8899`
+eintragen (oder direkt `log_backend_url=...` in `/etc/flux/flux.conf`).
+Der Server zeigt alle empfangenen Logs/Fehler im Browser an (neueste
+zuerst). Ehrlich: bewusst ohne Auth/TLS -- ein Diagnose-Helfer fuers eigene
+Netz, kein Produktions-Dienst.
+
 ---
 
 ## Roadmap

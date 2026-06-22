@@ -291,7 +291,7 @@ static void maybe_generate_greeting(void) {
 
 #define FLUX_PIN_LEN       4
 #define FLUX_FILES_MAX     12
-#define FLUX_SETTINGS_N    10   /* + WLAN */
+#define FLUX_SETTINGS_N    13   /* + WLAN */
 #define VIEWER_CONTENT_MAX 32768
 
 typedef enum {
@@ -328,6 +328,9 @@ static const char *setting_keys[FLUX_SETTINGS_N] = {
     "theme",    /* teal|blau|lila|orange|gruen|rot */
     "auto_lock",/* 0=aus, 30, 60, 120, 300 Sekunden */
     "tts",      /* 0=aus, 1=ein */
+    "log_backend_url",  /* URL des Fehler-/Log-Backends (leer = aus, opt-in) */
+    "log_report",       /* 0=aus, 1=ein -- Fehler automatisch ans Backend melden */
+    "__send_logs",      /* Aktion: gesammelte Logs jetzt ans Backend senden */
 };
 static const char *setting_labels[FLUX_SETTINGS_N] = {
     "PIN-Code",
@@ -340,6 +343,9 @@ static const char *setting_labels[FLUX_SETTINGS_N] = {
     "Farbthema",    /* teal/blau/lila/orange/gruen/rot */
     "Auto-Sperre",  /* 0=aus */
     "Sprache (TTS)",/* 0=aus, 1=ein */
+    "Fehler-Backend (URL)",   /* leer = kein Upload (opt-in) */
+    "Auto-Fehlerbericht",     /* Fehler automatisch ans Backend melden */
+    "Logs an Backend senden", /* Aktion: jetzt senden */
 };
 static const int setting_secret[FLUX_SETTINGS_N] = {
     1, /* pin */
@@ -350,6 +356,7 @@ static const int setting_secret[FLUX_SETTINGS_N] = {
     0, /* wifi (zeigt Verbindung) */
     0, /* searxng_url */
     0, 0, 0,       /* theme/auto_lock/tts */
+    0, 0, 0,       /* log_backend_url / log_report / __send_logs */
 };
 
 /* Symbol je Einstellungs-Zeile (parallel zu setting_keys). */
@@ -364,6 +371,9 @@ static const int setting_icons[FLUX_SETTINGS_N] = {
     FLUX_SICON_THEME,  /* theme */
     FLUX_SICON_CLOCK,  /* auto_lock */
     FLUX_SICON_SPEAKER,/* tts */
+    FLUX_SICON_SEARCH, /* log_backend_url */
+    FLUX_SICON_AI,     /* log_report */
+    FLUX_SICON_MAIL,   /* __send_logs */
 };
 
 /* Aktuell gewaehlter Anbieter aus der Config (Standard: anthropic). */
@@ -482,6 +492,12 @@ static void load_settings_values(void) {
             flux_wifi_current(cur, sizeof(cur));
             snprintf(setting_values_buf[i], sizeof(setting_values_buf[0]), "%s",
                       cur[0] ? cur : "nicht verbunden");
+        } else if (strcmp(setting_keys[i], "log_report") == 0) {
+            snprintf(setting_values_buf[i], sizeof(setting_values_buf[0]), "%s",
+                      (raw[0] == '1') ? "ein" : "aus");
+        } else if (strcmp(setting_keys[i], "__send_logs") == 0) {
+            snprintf(setting_values_buf[i], sizeof(setting_values_buf[0]), "%s",
+                      "tippen zum Senden");
         } else if (setting_secret[i]) {
             snprintf(setting_values_buf[i], sizeof(setting_values_buf[0]), "%s",
                       raw[0] ? "********" : "(nicht gesetzt)");
@@ -1636,6 +1652,31 @@ int main(void) {
                 uint32_t *old = capture_frame(&fb);
                 screen = FLUX_SCREEN_EDIT_BODY;
                 flux_ui_draw_edit_body(&fb, edit_buf);
+                animate_slide_in(&fb, old);
+                free(old);
+            } else if (strcmp(setting_keys[idx], "log_report") == 0) {
+                /* Auto-Fehlerbericht per Tap umschalten (0/1). */
+                char cur[8] = {0};
+                flux_config_get("log_report", cur, sizeof(cur));
+                flux_config_set("log_report", (cur[0] == '1') ? "0" : "1");
+                load_settings_values();
+                flux_ui_draw_settings(&fb, setting_labels, setting_values, FLUX_SETTINGS_N);
+            } else if (strcmp(setting_keys[idx], "__send_logs") == 0) {
+                /* Gesammelte Logs jetzt ans Backend senden (fluxaid hat das
+                 * Netz). Ergebnis ehrlich im Assistenten anzeigen. */
+                char url[8] = {0};
+                int has_url = flux_config_get("log_backend_url", url, sizeof(url)) && url[0];
+                if (!has_url) {
+                    snprintf(answer_buf, sizeof(answer_buf),
+                        "Kein Fehler-Backend gesetzt. Trage zuerst unter "
+                        "\"Fehler-Backend (URL)\" eine Adresse ein.");
+                } else {
+                    flux_ipc_send_raw("X:logs\nTO:\nSUBJECT:\nBODY:\n", answer_buf, sizeof(answer_buf));
+                }
+                snprintf(last_q, sizeof(last_q), "%s", "Logs an Backend senden");
+                uint32_t *old = capture_frame(&fb);
+                screen = FLUX_SCREEN_ASSISTANT;
+                flux_ui_draw_assistant(&fb, last_q, input_buf, answer_buf, 0);
                 animate_slide_in(&fb, old);
                 free(old);
             } else {
