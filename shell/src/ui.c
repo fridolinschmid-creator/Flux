@@ -397,7 +397,27 @@ void flux_ui_draw_lock(flux_fb_t *fb) {
     int date_y = clock_y + scale_clock * 12 + 10;
     flux_fb_text(fb, (fb->width - dw) / 2, date_y, date_buf, COL_TEXT_MUTED, 2);
 
+    /* Benachrichtigungs-Dot (oben rechts): ungelesene Eintraege */
+    {
+        int cnt = 0;
+        FILE *nf = fopen("/tmp/flux_notifications.txt", "r");
+        if (nf) {
+            char nl[32]; nl[0] = '\0';
+            if (fgets(nl, sizeof(nl), nf) && strncmp(nl, "COUNT:", 6) == 0)
+                cnt = atoi(nl + 6);
+            fclose(nf);
+        }
+        if (cnt > 0) {
+            char badge[8]; snprintf(badge, sizeof(badge), "%d", cnt);
+            int bx = fb->width - 32, by = 8;
+            fill_circle(fb, bx, by + 10, 10, 0xEF4444);
+            int tw = flux_fb_text_width(badge, 2);
+            flux_fb_text(fb, bx - tw / 2, by + 3, badge, 0xFFFFFF, 2);
+        }
+    }
+
     /* Wetter-Info mit Icon */
+    int lock_info_y = date_y + 26; /* Start-Y fuer Info-Chips unter Datum */
     {
         char wline[160] = {0};
         FILE *wf = fopen("/tmp/flux_weather.txt", "r");
@@ -409,6 +429,75 @@ void flux_ui_draw_lock(flux_fb_t *fb) {
             weather_cond_t cond = classify_weather(wline);
             draw_weather_icon(fb, (fb->width - flux_fb_text_width(wline, 2)) / 2 - 36, wy, cond);
             flux_fb_text(fb, (fb->width - flux_fb_text_width(wline, 2)) / 2, wy + 5, wline, COL_DIM, 2);
+            lock_info_y = wy + 46;
+        }
+    }
+
+    /* Info-Chip: naechster Alarm (in < 2h) oder naechster Kalendertermin (in < 24h) */
+    {
+        char chip_text[160] = {0};
+        time_t _now = time(NULL);
+
+        /* Naechster Alarm */
+        FILE *af = fopen("/tmp/flux_alarms.txt", "r");
+        if (af) {
+            char aln[256]; time_t best_t = 0;
+            while (fgets(aln, sizeof(aln), af)) {
+                int y2=0,mo2=0,d2=0,h2=0,mi2=0; char dsc[200]={0};
+                if (sscanf(aln, "%4d-%2d-%2d %2d:%2d %199[^\n]",&y2,&mo2,&d2,&h2,&mi2,dsc) >= 5) {
+                    struct tm at={0};
+                    at.tm_year=y2-1900; at.tm_mon=mo2-1; at.tm_mday=d2;
+                    at.tm_hour=h2; at.tm_min=mi2; at.tm_isdst=-1;
+                    time_t at_t = mktime(&at);
+                    long diff = (long)(at_t - _now);
+                    if (diff > 0 && diff <= 7200 && (best_t == 0 || at_t < best_t)) {
+                        best_t = at_t;
+                        snprintf(chip_text, sizeof(chip_text),
+                                 "Wecker %02d:%02d: %s", h2, mi2, dsc);
+                    }
+                }
+            }
+            fclose(af);
+        }
+
+        /* Fallback: naechster Kalendertermin (bis 24h) */
+        if (!chip_text[0]) {
+            FILE *cf = fopen("/etc/flux/calendar.txt", "r");
+            if (cf) {
+                char cln[256]; time_t best_t = 0;
+                while (fgets(cln, sizeof(cln), cf)) {
+                    if (cln[0]=='#'||cln[0]=='\n') continue;
+                    struct tm ev={0}; char dsc[200]={0};
+                    if (sscanf(cln, "%4d-%2d-%2d %2d:%2d %199[^\n]",
+                               &ev.tm_year,&ev.tm_mon,&ev.tm_mday,
+                               &ev.tm_hour,&ev.tm_min,dsc) >= 5) {
+                        ev.tm_year-=1900; ev.tm_mon-=1; ev.tm_isdst=-1;
+                        time_t ev_t = mktime(&ev);
+                        long diff = (long)(ev_t - _now);
+                        if (diff > 0 && diff <= 86400 && (best_t == 0 || ev_t < best_t)) {
+                            best_t = ev_t;
+                            struct tm bt; localtime_r(&best_t, &bt);
+                            snprintf(chip_text, sizeof(chip_text),
+                                     "Termin %02d:%02d: %s", bt.tm_hour, bt.tm_min, dsc);
+                        }
+                    }
+                }
+                fclose(cf);
+            }
+        }
+
+        if (chip_text[0]) {
+            int cx2 = 16, cw2 = fb->width - 32, ch2 = 38;
+            int cy2 = lock_info_y;
+            if (cy2 + ch2 < fb->height * 58 / 100) {
+                fill_round_rect(fb, cx2, cy2, cw2, ch2, 8, COL_SURFACE2);
+                flux_fb_fill_rect(fb, cx2, cy2, 4, ch2, COL_ACCENT);
+                fill_circle(fb, cx2 + 18, cy2 + ch2/2, 5, COL_ACCENT);
+                /* text -- trim to fit */
+                char display[80];
+                snprintf(display, sizeof(display), "%.70s", chip_text);
+                flux_fb_text(fb, cx2 + 30, cy2 + (ch2 - 14) / 2, display, COL_TEXT_MUTED, 2);
+            }
         }
     }
 
@@ -3135,6 +3224,96 @@ int flux_ui_voice_hit(const flux_fb_t *fb, int x, int y) {
     if (x >= 16 && x < 16 + bw && y >= b1y && y < b1y + bh) return 1; /* Aufnehmen */
     if (x >= 16 && x < 16 + bw && y >= b2y && y < b2y + bh) return 2; /* PIN/Skip */
     return 0;
+}
+
+/* ---- Alarm-Screen --------------------------------------------------- */
+
+void flux_ui_draw_alarm(flux_fb_t *fb, const char *label) {
+    flux_fb_fill_gradient_v(fb, 0, 0, fb->width, fb->height, 0x2A0000, 0x180000);
+
+    int cx = fb->width / 2;
+    int icon_y = fb->height * 25 / 100;
+
+    /* Glocken-Umriss (vereinfacht aus Rechtecken + Kreis) */
+    fill_round_rect(fb, cx - 44, icon_y, 88, 66, 18, 0xFF3333);
+    fill_circle(fb, cx, icon_y - 12, 12, 0xFF3333);   /* Kopf der Glocke */
+    flux_fb_fill_rect(fb, cx - 30, icon_y + 66, 60, 14, 0xFF3333); /* Sockel */
+    flux_fb_fill_rect(fb, cx - 12, icon_y + 80, 24, 10, 0xFF3333); /* Kloepper */
+
+    /* "WECKER" in gross */
+    const char *head = "WECKER";
+    int hw = flux_fb_text_width(head, 4);
+    flux_fb_text(fb, (fb->width - hw) / 2, fb->height * 52 / 100, head, 0xFF6666, 4);
+
+    /* Alarm-Beschriftung */
+    if (label && *label) {
+        char disp[80]; snprintf(disp, sizeof(disp), "%.72s", label);
+        int lw = flux_fb_text_width(disp, 2);
+        if (lw > fb->width - 40) {
+            /* zu lang -- zweizeilig umbrechen */
+            char l1[40], l2[40];
+            int split = 35;
+            while (split > 0 && disp[split] != ' ') split--;
+            if (split == 0) split = 35;
+            snprintf(l1, sizeof(l1), "%.*s", split, disp);
+            snprintf(l2, sizeof(l2), "%s", disp + split + 1);
+            int y1 = fb->height * 63 / 100;
+            flux_fb_text(fb, (fb->width - flux_fb_text_width(l1, 2)) / 2, y1, l1, 0xFFCCCC, 2);
+            flux_fb_text(fb, (fb->width - flux_fb_text_width(l2, 2)) / 2, y1+20, l2, 0xFFCCCC, 2);
+        } else {
+            flux_fb_text(fb, (fb->width - lw) / 2, fb->height * 63 / 100, disp, 0xFFCCCC, 2);
+        }
+    }
+
+    /* Abbrechen-Button */
+    int bw2 = fb->width - 48, bh2 = 56, bx2 = 24;
+    int by2 = fb->height * 79 / 100;
+    fill_round_rect(fb, bx2, by2, bw2, bh2, 14, 0xCC2222);
+    int tw2 = flux_fb_text_width("Abbrechen", 2);
+    flux_fb_text(fb, bx2 + (bw2 - tw2) / 2, by2 + (bh2 - 14) / 2, "Abbrechen", 0xFFFFFF, 2);
+
+    flux_fb_present(fb);
+}
+
+/* ---- Nutzungsgewohnheiten ------------------------------------------- */
+
+#define HABITS_ROW_H 52
+
+void flux_ui_draw_habits(flux_fb_t *fb, const char **lines, int n, int scroll) {
+    flux_fb_fill_rect(fb, 0, 0, fb->width, fb->height, COL_BG);
+    draw_statusbar(fb);
+
+    flux_fb_text(fb, 16, STATUSBAR_H + 12, "Nutzungsgewohnheiten", COL_TEXT, 3);
+    flux_fb_fill_gradient_h(fb, 16, STATUSBAR_H + 42, 230, 2, COL_ACCENT, COL_ACCENT2);
+
+    int list_y = STATUSBAR_H + TITLE_AREA_H;
+    int list_h  = fb->height - list_y - LIST_BACK_H;
+    int visible = list_h / HABITS_ROW_H;
+
+    for (int i = 0; i < visible && (scroll + i) < n; i++) {
+        int ry = list_y + i * HABITS_ROW_H;
+        flux_fb_fill_rect(fb, 0, ry, fb->width, HABITS_ROW_H,
+                          (i % 2 == 0) ? COL_ROW : COL_ROW_ALT);
+        flux_fb_fill_rect(fb, 0, ry + 4, 3, HABITS_ROW_H - 8, COL_ACCENT);
+        /* Text kuerzen wenn zu lang */
+        char buf[80]; snprintf(buf, sizeof(buf), "%.72s", lines[scroll + i]);
+        flux_fb_text(fb, 14, ry + (HABITS_ROW_H - 14) / 2, buf, COL_TEXT_MUTED, 2);
+    }
+
+    if (n == 0) {
+        const char *empty = "Noch keine Gewohnheiten erfasst.";
+        int tw = flux_fb_text_width(empty, 2);
+        flux_fb_text(fb, (fb->width - tw) / 2, list_y + 60, empty, COL_DIM, 2);
+    }
+
+    draw_back_bar(fb, "Zurueck");
+    flux_fb_present(fb);
+}
+
+int flux_ui_habits_hit(const flux_fb_t *fb, int x, int y, int *back) {
+    (void)x;
+    *back = (y >= fb->height - LIST_BACK_H);
+    return *back;
 }
 
 /* Animierter Aufnahme-Indikator: Mikrofon + pulsierende Ringe +

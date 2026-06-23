@@ -8,6 +8,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#include <sys/stat.h>
 
 /* ============================================================================
  * Multi-Provider-Unterstuetzung
@@ -110,9 +111,43 @@ int flux_provider_available(void) {
 
 /* --- Conversation context (last CTX_MAX turns) --- */
 #define CTX_MAX 12
+#define CTX_LOG "/etc/flux/conv_log.txt"
 typedef struct { char q[256]; char a[512]; } ctx_turn_t;
 static ctx_turn_t ctx_history[CTX_MAX];
 static int        ctx_n = 0;
+
+/* Schreibt ctx_history persistent nach CTX_LOG. */
+static void ctx_persist(void) {
+    mkdir("/etc/flux", 0755);
+    FILE *f = fopen(CTX_LOG, "w");
+    if (!f) return;
+    for (int i = 0; i < ctx_n; i++)
+        fprintf(f, "Q:%s\nA:%s\n---\n", ctx_history[i].q, ctx_history[i].a);
+    fclose(f);
+}
+
+/* Laedt ctx_history beim Start aus CTX_LOG. */
+static void ctx_load(void) {
+    FILE *f = fopen(CTX_LOG, "r");
+    if (!f) return;
+    ctx_n = 0;
+    ctx_turn_t *cur = NULL;
+    char line[768];
+    while (fgets(line, sizeof(line), f)) {
+        size_t l = strlen(line);
+        while (l > 0 && (line[l-1] == '\n' || line[l-1] == '\r')) line[--l] = '\0';
+        if (strncmp(line, "Q:", 2) == 0 && ctx_n < CTX_MAX) {
+            cur = &ctx_history[ctx_n++];
+            snprintf(cur->q, sizeof(cur->q), "%s", line + 2);
+            cur->a[0] = '\0';
+        } else if (strncmp(line, "A:", 2) == 0 && cur) {
+            snprintf(cur->a, sizeof(cur->a), "%s", line + 2);
+        } else if (strcmp(line, "---") == 0) {
+            cur = NULL;
+        }
+    }
+    fclose(f);
+}
 
 static void ctx_add(const char *q, const char *a) {
     if (ctx_n < CTX_MAX) {
@@ -124,6 +159,7 @@ static void ctx_add(const char *q, const char *a) {
         snprintf(ctx_history[CTX_MAX-1].q, sizeof(ctx_history[0].q), "%s", q);
         snprintf(ctx_history[CTX_MAX-1].a, sizeof(ctx_history[0].a), "%s", a);
     }
+    ctx_persist();
 }
 
 struct membuf {
@@ -145,6 +181,7 @@ static size_t curl_write_cb(void *ptr, size_t size, size_t nmemb, void *userdata
 
 void flux_provider_init(void) {
     curl_global_init(CURL_GLOBAL_DEFAULT);
+    ctx_load();
 }
 
 static void json_escape_append(char *out, size_t cap, const char *s) {

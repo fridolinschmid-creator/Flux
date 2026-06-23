@@ -32,6 +32,8 @@
 #define CALENDAR_PATH    "/etc/flux/calendar.txt"
 #define BATTERY_SYS      "/sys/class/power_supply/BAT0/capacity"
 #define PROACTIVE_FILE   "/tmp/flux_proactive.txt"
+#define ALARM_FILE       "/tmp/flux_alarms.txt"
+#define ALARM_RING       "/tmp/flux_alarm_ring.txt"
 
 static pthread_mutex_t s_mutex = PTHREAD_MUTEX_INITIALIZER;
 
@@ -161,18 +163,85 @@ static void check_birthdays(void) {
     fclose(f);
 }
 
+/* ---- Alarm-Ausloesedienst --------------------------------------------- */
+
+/* Prueft /tmp/flux_alarms.txt, loest faellige Alarme aus und schreibt
+ * sie nach ALARM_RING damit die Shell eine Vollbild-Meldung zeigen kann. */
+static void check_alarms(void) {
+    FILE *f = fopen(ALARM_FILE, "r");
+    if (!f) return;
+
+    time_t now = time(NULL);
+    char kept[64][256]; int nkept = 0;
+    char ring[8][256];  int nring = 0;
+
+    char line[256];
+    while (fgets(line, sizeof(line), f)) {
+        size_t l = strlen(line);
+        while (l > 0 && (line[l-1] == '\n' || line[l-1] == '\r')) line[--l] = '\0';
+        if (!line[0]) continue;
+
+        struct tm at = {0};
+        char desc[200] = {0};
+        int y = 0, mo = 0, d = 0, h = 0, mi = 0;
+        if (sscanf(line, "%4d-%2d-%2d %2d:%2d %199[^\n]",
+                   &y, &mo, &d, &h, &mi, desc) >= 5) {
+            at.tm_year = y - 1900; at.tm_mon = mo - 1; at.tm_mday = d;
+            at.tm_hour = h; at.tm_min = mi; at.tm_isdst = -1;
+            time_t at_t = mktime(&at);
+            long diff = (long)(now - at_t);
+            /* Ausloesen wenn Alarm faellig (bis 10 Minuten Toleranz) */
+            if (diff >= 0 && diff < 600) {
+                if (nring < 8)
+                    snprintf(ring[nring++], 255, "%02d:%02d %s", h, mi, desc);
+                continue;
+            }
+        }
+        if (nkept < 64) {
+            strncpy(kept[nkept], line, 255); kept[nkept][255] = '\0'; nkept++;
+        }
+    }
+    fclose(f);
+
+    if (nring > 0) {
+        /* Klingeldatei schreiben -- Shell liest diese und zeigt Vollbild */
+        FILE *rf = fopen(ALARM_RING, "w");
+        if (rf) {
+            for (int i = 0; i < nring; i++) fprintf(rf, "%s\n", ring[i]);
+            fclose(rf);
+        }
+        /* Auch als normale Benachrichtigung pushen */
+        for (int i = 0; i < nring; i++) {
+            char msg[280];
+            snprintf(msg, sizeof(msg), "Wecker: %s", ring[i]);
+            write_notification(msg);
+        }
+        /* Ausgeloeste Alarme aus der Datei entfernen */
+        FILE *wf = fopen(ALARM_FILE, "w");
+        if (wf) {
+            for (int i = 0; i < nkept; i++) fprintf(wf, "%s\n", kept[i]);
+            fclose(wf);
+        }
+    }
+}
+
 /* ---- Thread ---------------------------------------------------------- */
 
 static void *notification_thread(void *arg) {
     (void)arg;
     /* Erste Pruefung nach 60 Sekunden (Boot-Delay) */
     sleep(60);
+    int round = 0;
     for (;;) {
-        check_calendar();
-        check_birthdays();
-        check_battery();
-        check_proactive();
-        sleep(CHECK_INTERVAL);
+        check_alarms(); /* jede Minute */
+        if (round % 15 == 0) {
+            check_calendar();
+            check_birthdays();
+            check_battery();
+            check_proactive();
+        }
+        round++;
+        sleep(60);
     }
     return NULL;
 }

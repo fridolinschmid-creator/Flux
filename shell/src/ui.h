@@ -34,6 +34,8 @@ typedef enum {
     FLUX_SCREEN_JOURNAL,       /* Tages-Journal Eintraege (Liste + Betrachter) */
     FLUX_SCREEN_VOICE_ENROLL,  /* Stimme einlernen fuer zweiten Faktor */
     FLUX_SCREEN_VOICE_VERIFY,  /* Stimm-Verifizierung nach PIN (zweiter Faktor) */
+    FLUX_SCREEN_ALARM,         /* Vollbild-Alarm (Wecker klingelt) */
+    FLUX_SCREEN_HABITS,        /* Nutzungsgewohnheiten (habits.txt) */
 } flux_screen_t;
 
 typedef enum {
@@ -339,5 +341,19 @@ int flux_ui_voice_hit(const flux_fb_t *fb, int x, int y);
  * Vordefinierte Werte: 0x4FD1C5 (Teal), 0x3B82F6 (Blau),
  * 0xA855F7 (Lila), 0xF97316 (Orange), 0x22C55E (Gruen). */
 void flux_ui_set_accent(uint32_t rgb);
+
+/* ---- Alarm-Screen -------------------------------------------------- */
+
+/* Vollbild-Alarm. label: z.B. "07:00 Aufstehen". */
+void flux_ui_draw_alarm(flux_fb_t *fb, const char *label);
+
+/* ---- Gewohnheiten/Habits ------------------------------------------- */
+
+/* Zeigt eine scrollbare Liste der habits.txt-Zeilen.
+ * lines/n: bereits geladene Zeilen. scroll: erste sichtbare Zeile. */
+void flux_ui_draw_habits(flux_fb_t *fb, const char **lines, int n, int scroll);
+
+/* Hit-Test: setzt *back=1 bei Zurueck-Leiste, gibt 1 bei Treffer. */
+int flux_ui_habits_hit(const flux_fb_t *fb, int x, int y, int *back);
 
 #endif

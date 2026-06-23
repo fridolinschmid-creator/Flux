@@ -685,6 +685,41 @@ static char voice_enroll_msg[256] = {0};
 static int  voice_verify_phase  = 0;  /* 0=Warten 1=Aufnahme 2=OK 3=Fehler */
 static char voice_verify_msg[256] = {0};
 
+/* Alarm */
+static char alarm_label[256] = {0};
+
+/* Nutzungsgewohnheiten */
+#define HABITS_MAX 200
+static char        habits_buf[HABITS_MAX][128];
+static const char *habits_p[HABITS_MAX];
+static int         habits_n    = 0;
+static int         habits_scroll = 0;
+
+static void load_habits(void) {
+    habits_n = 0;
+    FILE *f = fopen("/etc/flux/habits.txt", "r");
+    if (!f) return;
+    char line[128];
+    while (fgets(line, sizeof(line), f) && habits_n < HABITS_MAX) {
+        size_t l = strlen(line);
+        while (l > 0 && (line[l-1] == '\n' || line[l-1] == '\r')) line[--l] = '\0';
+        if (!line[0]) continue;
+        snprintf(habits_buf[habits_n], sizeof(habits_buf[0]), "%s", line);
+        habits_p[habits_n] = habits_buf[habits_n];
+        habits_n++;
+    }
+    fclose(f);
+    /* Neueste zuerst: Array umkehren */
+    for (int i = 0, j = habits_n - 1; i < j; i++, j--) {
+        char tmp[128];
+        memcpy(tmp, habits_buf[i], 128);
+        memcpy(habits_buf[i], habits_buf[j], 128);
+        memcpy(habits_buf[j], tmp, 128);
+        habits_p[i] = habits_buf[i];
+        habits_p[j] = habits_buf[j];
+    }
+}
+
 /* Spracheingabe */
 static int    voice_active  = 0;   /* 1 = Aufnahme laeuft, Overlay sichtbar */
 static time_t voice_start_t = 0;
@@ -965,6 +1000,10 @@ static void redraw_current_screen(flux_fb_t *fb, flux_screen_t screen,
             flux_ui_draw_voice_enroll(fb, voice_enroll_phase, voice_enroll_msg); break;
         case FLUX_SCREEN_VOICE_VERIFY:
             flux_ui_draw_voice_verify(fb, voice_verify_phase, voice_verify_msg); break;
+        case FLUX_SCREEN_ALARM:
+            flux_ui_draw_alarm(fb, alarm_label); break;
+        case FLUX_SCREEN_HABITS:
+            flux_ui_draw_habits(fb, habits_p, habits_n, habits_scroll); break;
         default: break;
     }
 }
@@ -1237,6 +1276,29 @@ int main(void) {
         int ready = (maxfd >= 0) ? select(maxfd + 1, &rfds, NULL, NULL, &tv) : (sleep(1), 0);
 
         if (ready <= 0) {
+            /* Alarm-Klingeldatei pruefen (alle ~30s via 1s-Timeout-Zaehler) */
+            {
+                static time_t last_alarm_check = 0;
+                time_t _now = time(NULL);
+                if (screen != FLUX_SCREEN_ALARM && _now - last_alarm_check >= 30) {
+                    last_alarm_check = _now;
+                    FILE *arf = fopen("/tmp/flux_alarm_ring.txt", "r");
+                    if (arf) {
+                        alarm_label[0] = '\0';
+                        if (fgets(alarm_label, sizeof(alarm_label), arf)) {
+                            size_t l = strlen(alarm_label);
+                            while (l > 0 && (alarm_label[l-1]=='\n'||alarm_label[l-1]=='\r')) alarm_label[--l]='\0';
+                        }
+                        fclose(arf);
+                        remove("/tmp/flux_alarm_ring.txt");
+                        if (alarm_label[0]) {
+                            screen = FLUX_SCREEN_ALARM;
+                            flux_ui_draw_alarm(&fb, alarm_label);
+                            continue;
+                        }
+                    }
+                }
+            }
             /* Kein Input -- Uhr auf dem Lockscreen, Auto-Sperre pruefen. */
             if (screen == FLUX_SCREEN_LOCK) {
                 flux_ui_draw_lock(&fb);
@@ -2330,6 +2392,52 @@ int main(void) {
             continue;
         }
 
+        /* ---- FLUX_SCREEN_ALARM ----------------------------------------- */
+        if (screen == FLUX_SCREEN_ALARM) {
+            /* Jeder Tap oder Tastendruck stoppt den Alarm */
+            if (ev.type == FLUX_EV_TAP || ev.type == FLUX_EV_ENTER ||
+                ev.type == FLUX_EV_SWIPE_UP || ev.type == FLUX_EV_SWIPE_DOWN) {
+                alarm_label[0] = '\0';
+                screen = FLUX_SCREEN_LOCK;
+                flux_ui_draw_lock(&fb);
+            }
+            continue;
+        }
+
+        /* ---- FLUX_SCREEN_HABITS ---------------------------------------- */
+        if (screen == FLUX_SCREEN_HABITS) {
+            if (ev.type == FLUX_EV_SWIPE_LEFT || ev.type == FLUX_EV_SWIPE_RIGHT) {
+                uint32_t *old = capture_frame(&fb);
+                screen = FLUX_SCREEN_ASSISTANT;
+                flux_ui_draw_assistant(&fb, last_q, input_buf, answer_buf, 0);
+                animate_slide_from_left(&fb, old);
+                free(old);
+                continue;
+            }
+            if (ev.type == FLUX_EV_SWIPE_UP) {
+                habits_scroll++;
+                if (habits_scroll >= habits_n) habits_scroll = habits_n > 0 ? habits_n - 1 : 0;
+                flux_ui_draw_habits(&fb, habits_p, habits_n, habits_scroll);
+                continue;
+            }
+            if (ev.type == FLUX_EV_SWIPE_DOWN) {
+                if (habits_scroll > 0) habits_scroll--;
+                flux_ui_draw_habits(&fb, habits_p, habits_n, habits_scroll);
+                continue;
+            }
+            if (ev.type == FLUX_EV_TAP) {
+                int back;
+                if (flux_ui_habits_hit(&fb, ev.x, ev.y, &back) && back) {
+                    uint32_t *old = capture_frame(&fb);
+                    screen = FLUX_SCREEN_ASSISTANT;
+                    flux_ui_draw_assistant(&fb, last_q, input_buf, answer_buf, 0);
+                    animate_slide_from_left(&fb, old);
+                    free(old);
+                }
+            }
+            continue;
+        }
+
         if (screen == FLUX_SCREEN_SEARCH) {
             if (ev.type == FLUX_EV_SWIPE_LEFT) {
                 uint32_t *old = capture_frame(&fb);
@@ -2722,6 +2830,20 @@ int main(void) {
                 screen = FLUX_SCREEN_SEARCH;
                 flux_ui_draw_search(&fb, search_query, search_results_p,
                                     search_n, search_searching);
+                animate_slide_in(&fb, old);
+                free(old);
+                continue;
+            }
+            if (strcasecmp(input_buf, "gewohnheiten") == 0 ||
+                strcasecmp(input_buf, "habits") == 0 ||
+                strcasecmp(input_buf, "aktivitaet") == 0 ||
+                strcasecmp(input_buf, "statistik") == 0) {
+                input_buf[0] = '\0';
+                load_habits();
+                habits_scroll = 0;
+                uint32_t *old = capture_frame(&fb);
+                screen = FLUX_SCREEN_HABITS;
+                flux_ui_draw_habits(&fb, habits_p, habits_n, habits_scroll);
                 animate_slide_in(&fb, old);
                 free(old);
                 continue;
