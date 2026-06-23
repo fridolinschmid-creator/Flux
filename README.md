@@ -318,11 +318,15 @@ einen produktiven SearXNG-/Such-Proxy umstellen, ohne Code-Änderung.
    vorhanden) und ein gebuendeltes Modell im Rootfs-Overlay
 7. Echtes Modem-Backend (ofono/ModemManager) fuer SMS/Anruf auf echter
    Hardware -- ersetzt nur `fluxai/src/telephony.c`, siehe oben
-8. Stimm-Erkennung als zweiter Entsperr-Faktor (statt/zusaetzlich zum
-   PIN) -- bewusst nicht implementiert, siehe Hinweis direkt darunter
+8. ~~Stimm-Erkennung als zweiter Entsperr-Faktor~~ -- `voice_unlock.c/.h`
+   (RMS-Fingerabdruck-Stub), `FLUX_SCREEN_VOICE_ENROLL` + `FLUX_SCREEN_VOICE_VERIFY`,
+   Einstellungs-Eintrag. QEMU: kein Mikrofon vorhanden, ehrliche Meldung.
+   Backend (nur `voice_unlock.c`) durch ECAPA-TDNN ersetzbar ohne UI-Aenderung.
 9. Echter Compositor (DRM/KMS, GPU-Beschleunigung, Animationen, mehrere
    "Karten" statt nur Lockscreen+Assistent)
-10. Benachrichtigungen als eigener Systemdienst (nicht App-spezifisch)
+10. ~~Benachrichtigungen als eigener Systemdienst~~ -- `notification.c/.h`
+    in fluxaid als pthread: prueft Kalender/Memory/Batterie/Proaktiv alle
+    15 Min, schreibt nach `/tmp/flux_notifications.txt`. Compile-Test bestanden.
 11. Portierung auf ein konkretes echtes Geraet (Geraetebaum, Touchscreen-
     Treiber, Akku/Power-Management) — das ist der Schritt, der "Telefon"
     ernst nimmt, siehe postmarketOS-Doku zum Geraete-Porting

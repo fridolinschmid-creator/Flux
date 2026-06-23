@@ -10,6 +10,7 @@
 #include "journal.h"
 #include "habits.h"
 #include "exec.h"
+#include "notification.h"
 #include "../../common/flux_protocol.h"
 #include "../../common/flux_config.h"
 
@@ -83,6 +84,9 @@ int main(void) {
     int listen_fd = make_listen_socket(FLUX_SOCK_PATH);
 
     fprintf(stderr, "fluxaid: lauscht auf %s\n", FLUX_SOCK_PATH);
+
+    /* Benachrichtigungs-Hintergrund-Thread starten */
+    flux_notification_start();
 
     /* Proactive check on startup */
     {

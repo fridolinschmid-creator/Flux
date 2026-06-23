@@ -197,3 +197,32 @@ erst nach „Geplant" hochziehen, wenn sie bewertet und priorisiert sind.
 - Bei `/goal`: stoppen, wenn „Geplant" und „Ideen aus Recherche" leer sind
   oder ein Build-Fehler nicht in einer Iteration lösbar ist (dann ehrlich
   als Blocker in „In Arbeit" notieren und anhalten).
+
+---
+
+## Roadmap / Offene Aufgaben  (von der KI automatisch gepflegt)
+
+### In Arbeit
+- (keine unterbrochene Iteration)
+
+### Geplant (priorisiert, oberster zuerst)
+- [ ] whisper.cpp lokal – virtuelles Audiogerät in build/run-qemu.sh + gebündeltes Modell im Rootfs-Overlay  — schaltet Mikrofon-Button von Stub auf echte Transkription
+- [ ] Echter Compositor (DRM/KMS) – GPU-Beschleunigung, echte Animationen, mehrere „Karten"  — Voraussetzung für flüssige 60fps auf echter Hardware
+- [ ] Benachrichtigungen als Systemdienst – Erweiterung von notification.c um Push-Socket, damit fluxaid die Shell direkt wecken kann  — ersetzt Polling durch echtes Push
+- [ ] Portierung auf echtes Gerät (postmarketOS) – Gerätebaum, Touchscreen-Treiber, Modem/RIL  — der „echtes Telefon"-Schritt
+- [ ] Sicherheitsmodell – App-Sandbox/Permissions, root-freier Betrieb  — Pflicht vor echtem Einsatz
+
+### Ideen aus Recherche (unsortiert, noch zu bewerten)
+- [ ] (2026-06-23, llama.cpp-Doku) On-Device-LLM als Anbieter-Option – llama.cpp auf ARM64, austauschbares Backend — passt zu Flux, weil Local-first + Privacy
+- [ ] (2026-06-23, whisper.cpp-Repo) Stream-Modus in whisper.cpp – Echtzeit-Transkription statt Batch — passt zu Flux, weil Mikrofon-Button reaktiver wird
+- [ ] (2026-06-23, postmarketOS-Wiki) ECAPA-TDNN ONNX-Modell ~20 MB – echtes Speaker-Embedding für voice_unlock.c — passt zu Flux, weil Stub damit ersetzbar ohne UI-Änderung
+- [ ] (2026-06-23, ofono-Doku) ofono/ModemManager statt Telephony-Stub – echtes SMS/Anruf-Backend — passt zu Flux, weil telephony.c als austauschbares Backend gebaut ist
+
+### Erledigt
+- [x] FLUX_SCREEN_JOURNAL – dedizierter Journal-Screen (Liste, Tap öffnet Eintrag, kein Löschen)  — Compile-Test bestanden, QEMU nicht verifiziert
+- [x] journal_list / journal_read KI-Tools  — Compile-Test bestanden
+- [x] meeting_list / meeting_read KI-Tools  — Compile-Test bestanden
+- [x] doc_analyze KI-Tool  — Compile-Test bestanden, path-traversal-gesichert
+- [x] Item 8 – Stimm-Entsperrung als zweiter Faktor: voice_unlock.c/.h (RMS-Fingerabdruck-Stub), FLUX_SCREEN_VOICE_ENROLL, FLUX_SCREEN_VOICE_VERIFY, PIN→Voice-Verify-Flow, Einstellungs-Eintrag  — ehrlicher Stub (kein Mikrofon in QEMU), auf echter Hardware austauschbar durch ECAPA-TDNN-Backend
+- [x] Item 10 – Benachrichtigungs-Dienst als pthread in fluxaid: notification.c/.h, prüft Kalender/Memory/Batterie/Proaktiv alle 15 Min, schreibt nach /tmp/flux_notifications.txt  — Compile-Test bestanden, QEMU nicht verifiziert
+- [x] Notification-Thread in fluxaid/src/main.c integriert  — Compile-Test bestanden

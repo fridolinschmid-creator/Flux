@@ -1401,6 +1401,160 @@ static int tool_web_search(const char *arg, char *out, size_t cap) {
     return 1;
 }
 
+/* ---- journal_list ---------------------------------------------------- */
+static int tool_journal_list(const char *arg, char *out, size_t cap) {
+    (void)arg;
+    DIR *d = opendir("/home/user/Journal");
+    if (!d) { snprintf(out, cap, "Noch kein Journal vorhanden."); return 1; }
+    char entries[64][32]; int n = 0;
+    struct dirent *de;
+    while ((de = readdir(d)) != NULL && n < 64) {
+        if (de->d_name[0] == '.') continue;
+        size_t l = strlen(de->d_name);
+        if (l > 4 && strcmp(de->d_name + l - 4, ".txt") == 0) {
+            strncpy(entries[n], de->d_name, 31); entries[n][31] = '\0';
+            n++;
+        }
+    }
+    closedir(d);
+    if (n == 0) { snprintf(out, cap, "Noch keine Journal-Eintraege vorhanden."); return 1; }
+    /* sort descending (newest first) */
+    for (int i = 0; i < n - 1; i++)
+        for (int j = i+1; j < n; j++)
+            if (strcmp(entries[i], entries[j]) < 0) {
+                char tmp[32]; memcpy(tmp, entries[i], 32);
+                memcpy(entries[i], entries[j], 32);
+                memcpy(entries[j], tmp, 32);
+            }
+    char buf[2048]; size_t pos = snprintf(buf, sizeof(buf), "Journal-Eintraege (%d):\n", n);
+    for (int i = 0; i < n && pos + 40 < sizeof(buf); i++) {
+        /* strip .txt for display */
+        char name[28]; strncpy(name, entries[i], 27); name[27] = '\0';
+        char *dot = strrchr(name, '.'); if (dot) *dot = '\0';
+        pos += snprintf(buf + pos, sizeof(buf) - pos, "  %s\n", name);
+    }
+    snprintf(out, cap, "%s", buf);
+    return 1;
+}
+
+/* ---- journal_read ---------------------------------------------------- */
+static int tool_journal_read(const char *arg, char *out, size_t cap) {
+    char path[256];
+    if (!arg || !*arg || strcmp(arg, "heute") == 0) {
+        time_t t = time(NULL); struct tm tm; localtime_r(&t, &tm);
+        char date[16]; strftime(date, sizeof(date), "%Y-%m-%d", &tm);
+        snprintf(path, sizeof(path), "/home/user/Journal/%s.txt", date);
+    } else if (strcmp(arg, "gestern") == 0) {
+        time_t t = time(NULL) - 86400; struct tm tm; localtime_r(&t, &tm);
+        char date[16]; strftime(date, sizeof(date), "%Y-%m-%d", &tm);
+        snprintf(path, sizeof(path), "/home/user/Journal/%s.txt", date);
+    } else {
+        /* arg is a date like 2026-06-18 */
+        snprintf(path, sizeof(path), "/home/user/Journal/%s.txt", arg);
+    }
+    /* path traversal guard */
+    char real[256];
+    if (!realpath(path, real) || strncmp(real, "/home/user/Journal/", 19) != 0) {
+        snprintf(out, cap, "Fehler: ungueltiger Pfad."); return 1;
+    }
+    FILE *f = fopen(real, "r");
+    if (!f) { snprintf(out, cap, "Kein Journal-Eintrag fuer dieses Datum vorhanden."); return 1; }
+    char buf[4096]; size_t n = fread(buf, 1, sizeof(buf)-1, f); fclose(f);
+    buf[n] = '\0';
+    snprintf(out, cap, "%s", buf);
+    return 1;
+}
+
+/* ---- meeting_list ---------------------------------------------------- */
+static int tool_meeting_list(const char *arg, char *out, size_t cap) {
+    (void)arg;
+    DIR *d = opendir("/home/user/Meetings");
+    if (!d) { snprintf(out, cap, "Noch keine Meeting-Protokolle vorhanden."); return 1; }
+    char entries[64][40]; int n = 0;
+    struct dirent *de;
+    while ((de = readdir(d)) != NULL && n < 64) {
+        if (de->d_name[0] == '.') continue;
+        size_t l = strlen(de->d_name);
+        if (l > 4 && strcmp(de->d_name + l - 4, ".txt") == 0) {
+            strncpy(entries[n], de->d_name, 39); entries[n][39] = '\0';
+            n++;
+        }
+    }
+    closedir(d);
+    if (n == 0) { snprintf(out, cap, "Noch keine Meeting-Protokolle vorhanden."); return 1; }
+    for (int i = 0; i < n - 1; i++)
+        for (int j = i+1; j < n; j++)
+            if (strcmp(entries[i], entries[j]) < 0) {
+                char tmp[40]; memcpy(tmp, entries[i], 40);
+                memcpy(entries[i], entries[j], 40);
+                memcpy(entries[j], tmp, 40);
+            }
+    char buf[2048]; size_t pos = snprintf(buf, sizeof(buf), "Meeting-Protokolle (%d):\n", n);
+    for (int i = 0; i < n && pos + 50 < sizeof(buf); i++) {
+        char name[36]; strncpy(name, entries[i], 35); name[35] = '\0';
+        char *dot = strrchr(name, '.'); if (dot) *dot = '\0';
+        pos += snprintf(buf + pos, sizeof(buf) - pos, "  %s\n", name);
+    }
+    snprintf(out, cap, "%s", buf);
+    return 1;
+}
+
+/* ---- meeting_read ---------------------------------------------------- */
+static int tool_meeting_read(const char *arg, char *out, size_t cap) {
+    if (!arg || !*arg) { snprintf(out, cap, "Fehler: Datum oder 'letztes' angeben."); return 1; }
+    char path[256];
+    if (strcmp(arg, "letztes") == 0) {
+        DIR *d = opendir("/home/user/Meetings");
+        if (!d) { snprintf(out, cap, "Keine Meetings vorhanden."); return 1; }
+        char newest[40] = {0};
+        struct dirent *de;
+        while ((de = readdir(d)) != NULL) {
+            if (de->d_name[0] == '.') continue;
+            size_t l = strlen(de->d_name);
+            if (l > 4 && strcmp(de->d_name + l - 4, ".txt") == 0)
+                if (strcmp(de->d_name, newest) > 0)
+                    strncpy(newest, de->d_name, 39);
+        }
+        closedir(d);
+        if (!newest[0]) { snprintf(out, cap, "Keine Meetings vorhanden."); return 1; }
+        snprintf(path, sizeof(path), "/home/user/Meetings/%s", newest);
+    } else {
+        snprintf(path, sizeof(path), "/home/user/Meetings/%s.txt", arg);
+    }
+    char real[256];
+    if (!realpath(path, real) || strncmp(real, "/home/user/Meetings/", 20) != 0) {
+        snprintf(out, cap, "Fehler: ungueltiger Pfad."); return 1;
+    }
+    FILE *f = fopen(real, "r");
+    if (!f) { snprintf(out, cap, "Meeting-Protokoll nicht gefunden."); return 1; }
+    char buf[4096]; size_t n = fread(buf, 1, sizeof(buf)-1, f); fclose(f);
+    buf[n] = '\0';
+    snprintf(out, cap, "%s", buf);
+    return 1;
+}
+
+/* ---- doc_analyze ----------------------------------------------------- */
+static int tool_doc_analyze(const char *arg, char *out, size_t cap) {
+    if (!arg || !*arg) { snprintf(out, cap, "Fehler: Dateipfad angeben."); return 1; }
+    char real[256];
+    if (!realpath(arg, real)) { snprintf(out, cap, "Datei nicht gefunden: %s", arg); return 1; }
+    /* Allow access only within /home/user/ and /etc/flux/ */
+    if (strncmp(real, "/home/user/", 11) != 0 && strncmp(real, "/etc/flux/", 10) != 0) {
+        snprintf(out, cap, "Zugriff verweigert: nur /home/user/ und /etc/flux/ erlaubt.");
+        return 1;
+    }
+    FILE *f = fopen(real, "r");
+    if (!f) { snprintf(out, cap, "Datei nicht lesbar: %s", real); return 1; }
+    char content[8192]; size_t n = fread(content, 1, sizeof(content)-1, f); fclose(f);
+    content[n] = '\0';
+    int truncated = (n == sizeof(content)-1);
+    snprintf(out, cap, "Dateiinhalt von %s%s:\n\n%s",
+             real,
+             truncated ? " (abgeschnitten nach 8000 Zeichen)" : "",
+             content);
+    return 1;
+}
+
 /* ---- Dispatch -------------------------------------------------------- */
 
 int flux_tool_exec(const char *name, const char *arg,
@@ -1438,6 +1592,11 @@ int flux_tool_exec(const char *name, const char *arg,
     if (strcmp(name, "memory_list")   == 0) return tool_memory_list(arg, out, out_cap);
     if (strcmp(name, "memory_search") == 0) return tool_memory_search(arg, out, out_cap);
     if (strcmp(name, "memory_delete") == 0) return tool_memory_delete(arg, out, out_cap);
+    if (strcmp(name, "journal_list")  == 0) return tool_journal_list(arg, out, out_cap);
+    if (strcmp(name, "journal_read")  == 0) return tool_journal_read(arg, out, out_cap);
+    if (strcmp(name, "meeting_list")  == 0) return tool_meeting_list(arg, out, out_cap);
+    if (strcmp(name, "meeting_read")  == 0) return tool_meeting_read(arg, out, out_cap);
+    if (strcmp(name, "doc_analyze")   == 0) return tool_doc_analyze(arg, out, out_cap);
     return 0; /* unbekanntes Tool */
 }
 
@@ -1479,6 +1638,11 @@ const char *flux_tools_description(void) {
         "  memory_list     -- Alle gespeicherten Infos anzeigen. ARG: (leer)\n"
         "  memory_search   -- Gespeicherte Infos durchsuchen. ARG: Suchbegriff\n"
         "  memory_delete   -- Gespeicherte Info loeschen. ARG: Suchbegriff\n"
+        "  journal_list    -- Alle Tagesjournal-Eintraege auflisten. ARG: (leer)\n"
+        "  journal_read    -- Einen Journal-Eintrag lesen. ARG: YYYY-MM-DD oder 'heute' oder 'gestern'\n"
+        "  meeting_list    -- Alle Meeting-Protokolle auflisten. ARG: (leer)\n"
+        "  meeting_read    -- Ein Meeting-Protokoll lesen. ARG: YYYY-MM-DD_HHmm oder 'letztes'\n"
+        "  doc_analyze     -- Dateiinhalt lesen und der KI als Kontext uebergeben. ARG: Dateipfad\n"
         "  mail_unread     -- Ungelesene E-Mails abrufen (Von/Betreff/Datum, fuer Zusammenfassungen). ARG: (leer)\n"
         "  mail_read       -- Text einer E-Mail lesen. ARG: UID (aus mail_unread)\n"
         "  web_search      -- Im Internet suchen (aktuelle Infos/News/Fakten). ARG: Suchbegriff\n"

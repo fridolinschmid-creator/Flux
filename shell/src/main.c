@@ -22,6 +22,7 @@
 #include "action.h"
 #include "camera.h"
 #include "voice.h"
+#include "voice_unlock.h"
 #include "wifi.h"
 #include "../../common/flux_protocol.h"
 #include "../../common/flux_config.h"
@@ -291,7 +292,7 @@ static void maybe_generate_greeting(void) {
 
 #define FLUX_PIN_LEN       4
 #define FLUX_FILES_MAX     12
-#define FLUX_SETTINGS_N    10   /* + WLAN */
+#define FLUX_SETTINGS_N    11   /* + WLAN + Stimme */
 #define VIEWER_CONTENT_MAX 32768
 
 typedef enum {
@@ -326,8 +327,9 @@ static const char *setting_keys[FLUX_SETTINGS_N] = {
     "__wifi",           /* oeffnet den WLAN-Screen (Scan + Verbinden) */
     "searxng_url",      /* Web-Suche ueber eigene SearXNG-Instanz (z.B. MacBook) */
     "theme",    /* teal|blau|lila|orange|gruen|rot */
-    "auto_lock",/* 0=aus, 30, 60, 120, 300 Sekunden */
-    "tts",      /* 0=aus, 1=ein */
+    "auto_lock",      /* 0=aus, 30, 60, 120, 300 Sekunden */
+    "tts",            /* 0=aus, 1=ein */
+    "__voice_enroll", /* oeffnet Stimm-Einlern-Screen */
 };
 static const char *setting_labels[FLUX_SETTINGS_N] = {
     "PIN-Code",
@@ -340,6 +342,7 @@ static const char *setting_labels[FLUX_SETTINGS_N] = {
     "Farbthema",    /* teal/blau/lila/orange/gruen/rot */
     "Auto-Sperre",  /* 0=aus */
     "Sprache (TTS)",/* 0=aus, 1=ein */
+    "Stimme (2. Faktor)", /* Stimm-Entsperrung einlernen */
 };
 static const int setting_secret[FLUX_SETTINGS_N] = {
     1, /* pin */
@@ -349,7 +352,8 @@ static const int setting_secret[FLUX_SETTINGS_N] = {
     0, /* email (zeigt Adresse) */
     0, /* wifi (zeigt Verbindung) */
     0, /* searxng_url */
-    0, 0, 0,       /* theme/auto_lock/tts */
+    0, 0, 0,  /* theme/auto_lock/tts */
+    0,        /* voice_enroll */
 };
 
 /* Symbol je Einstellungs-Zeile (parallel zu setting_keys). */
@@ -364,6 +368,7 @@ static const int setting_icons[FLUX_SETTINGS_N] = {
     FLUX_SICON_THEME,  /* theme */
     FLUX_SICON_CLOCK,  /* auto_lock */
     FLUX_SICON_SPEAKER,/* tts */
+    FLUX_SICON_LOCK,   /* voice_enroll */
 };
 
 /* Aktuell gewaehlter Anbieter aus der Config (Standard: anthropic). */
@@ -482,6 +487,11 @@ static void load_settings_values(void) {
             flux_wifi_current(cur, sizeof(cur));
             snprintf(setting_values_buf[i], sizeof(setting_values_buf[0]), "%s",
                       cur[0] ? cur : "nicht verbunden");
+        } else if (strcmp(setting_keys[i], "__voice_enroll") == 0) {
+            snprintf(setting_values_buf[i], sizeof(setting_values_buf[0]), "%s",
+                      voice_unlock_enrolled() ? "eingelernt" :
+                      voice_unlock_available() ? "nicht eingelernt" :
+                      "kein Mikrofon (QEMU)");
         } else if (setting_secret[i]) {
             snprintf(setting_values_buf[i], sizeof(setting_values_buf[0]), "%s",
                       raw[0] ? "********" : "(nicht gesetzt)");
@@ -628,6 +638,52 @@ static char memory_entries_buf[MEMORY_MAX][256];
 static const char *memory_entries[MEMORY_MAX];
 static int  memory_n     = 0;
 static int  memory_scroll = 0;
+
+/* Journal-Screen */
+#define JOURNAL_MAX 128
+static char        journal_names_buf[JOURNAL_MAX][32];
+static const char *journal_names_p[JOURNAL_MAX];
+static int         journal_n      = 0;
+static int         journal_scroll = 0;
+
+static void load_journal_list(void) {
+    mkdir("/home/user/Journal", 0755);
+    DIR *d = opendir("/home/user/Journal");
+    journal_n = 0;
+    if (!d) return;
+    struct dirent *de;
+    while ((de = readdir(d)) != NULL && journal_n < JOURNAL_MAX) {
+        if (de->d_name[0] == '.') continue;
+        size_t l = strlen(de->d_name);
+        if (l > 4 && strcmp(de->d_name + l - 4, ".txt") == 0) {
+            strncpy(journal_names_buf[journal_n], de->d_name, 31);
+            journal_names_buf[journal_n][31] = '\0';
+            /* Strip .txt */
+            char *dot = strrchr(journal_names_buf[journal_n], '.');
+            if (dot) *dot = '\0';
+            journal_names_p[journal_n] = journal_names_buf[journal_n];
+            journal_n++;
+        }
+    }
+    closedir(d);
+    /* sort descending (newest first) */
+    for (int i = 0; i < journal_n - 1; i++)
+        for (int j = i+1; j < journal_n; j++)
+            if (strcmp(journal_names_buf[i], journal_names_buf[j]) < 0) {
+                char tmp[32];
+                memcpy(tmp, journal_names_buf[i], 32);
+                memcpy(journal_names_buf[i], journal_names_buf[j], 32);
+                memcpy(journal_names_buf[j], tmp, 32);
+                journal_names_p[i] = journal_names_buf[i];
+                journal_names_p[j] = journal_names_buf[j];
+            }
+}
+
+/* Stimm-Entsperrung */
+static int  voice_enroll_phase  = 0;  /* 0=Anleitung 1=Aufnahme 2=OK 3=Fehler */
+static char voice_enroll_msg[256] = {0};
+static int  voice_verify_phase  = 0;  /* 0=Warten 1=Aufnahme 2=OK 3=Fehler */
+static char voice_verify_msg[256] = {0};
 
 /* Spracheingabe */
 static int    voice_active  = 0;   /* 1 = Aufnahme laeuft, Overlay sichtbar */
@@ -903,6 +959,12 @@ static void redraw_current_screen(flux_fb_t *fb, flux_screen_t screen,
         case FLUX_SCREEN_SEARCH:
             flux_ui_draw_search(fb, search_query, search_results_p,
                                 search_n, search_searching); break;
+        case FLUX_SCREEN_JOURNAL:
+            flux_ui_draw_journal(fb, journal_names_p, journal_n, journal_scroll, -1); break;
+        case FLUX_SCREEN_VOICE_ENROLL:
+            flux_ui_draw_voice_enroll(fb, voice_enroll_phase, voice_enroll_msg); break;
+        case FLUX_SCREEN_VOICE_VERIFY:
+            flux_ui_draw_voice_verify(fb, voice_verify_phase, voice_verify_msg); break;
         default: break;
     }
 }
@@ -1359,15 +1421,26 @@ int main(void) {
                 pin_len = 0;
                 pin_buf[0] = '\0';
                 if (strcmp(hash, stored) == 0) {
-                    screen = FLUX_SCREEN_ASSISTANT;
-                    input_buf[0] = '\0';
-                    answer_buf[0] = '\0';
-                    flux_ui_set_quick_reveal(0, 0);
-                    uint32_t *old = capture_frame(&fb);
-                    flux_ui_draw_assistant(&fb, last_q, input_buf, answer_buf, 0);
-                    animate_slide_in(&fb, old);
-                    free(old);
-                    animate_home_intro(&fb, &in, last_q, input_buf, answer_buf);
+                    /* PIN korrekt -- zweiten Faktor pruefen (falls eingerichtet) */
+                    if (voice_unlock_enrolled()) {
+                        voice_verify_phase = 0;
+                        voice_verify_msg[0] = '\0';
+                        uint32_t *old = capture_frame(&fb);
+                        screen = FLUX_SCREEN_VOICE_VERIFY;
+                        flux_ui_draw_voice_verify(&fb, voice_verify_phase, voice_verify_msg);
+                        animate_slide_in(&fb, old);
+                        free(old);
+                    } else {
+                        screen = FLUX_SCREEN_ASSISTANT;
+                        input_buf[0] = '\0';
+                        answer_buf[0] = '\0';
+                        flux_ui_set_quick_reveal(0, 0);
+                        uint32_t *old = capture_frame(&fb);
+                        flux_ui_draw_assistant(&fb, last_q, input_buf, answer_buf, 0);
+                        animate_slide_in(&fb, old);
+                        free(old);
+                        animate_home_intro(&fb, &in, last_q, input_buf, answer_buf);
+                    }
                 } else {
                     pin_error = 1;
                     flux_ui_draw_pin(&fb, pin_len, pin_error);
@@ -1611,6 +1684,15 @@ int main(void) {
                 wifi_rescan(&fb);
                 flux_ui_draw_wifi(&fb, wifi_current, wifi_names_p, wifi_metas_p,
                                   wifi_n, 0, !flux_wifi_available());
+            } else if (strcmp(setting_keys[idx], "__voice_enroll") == 0) {
+                /* Stimm-Einlern-Screen oeffnen */
+                voice_enroll_phase = 0;
+                voice_enroll_msg[0] = '\0';
+                uint32_t *old = capture_frame(&fb);
+                screen = FLUX_SCREEN_VOICE_ENROLL;
+                flux_ui_draw_voice_enroll(&fb, voice_enroll_phase, voice_enroll_msg);
+                animate_slide_in(&fb, old);
+                free(old);
             } else if (strcmp(setting_keys[idx], "__email") == 0) {
                 /* Schritt 1: E-Mail-Adresse (mit aktueller Adresse vorbelegt) */
                 edit_target = EDIT_EMAIL_ADDR;
@@ -2129,6 +2211,125 @@ int main(void) {
             continue;
         }
 
+        /* ---- FLUX_SCREEN_JOURNAL --------------------------------------- */
+        if (screen == FLUX_SCREEN_JOURNAL) {
+            if (ev.type == FLUX_EV_SWIPE_LEFT || ev.type == FLUX_EV_SWIPE_RIGHT) {
+                uint32_t *old = capture_frame(&fb);
+                screen = FLUX_SCREEN_ASSISTANT;
+                flux_ui_draw_assistant(&fb, last_q, input_buf, answer_buf, 0);
+                animate_slide_from_left(&fb, old);
+                free(old);
+                continue;
+            }
+            if (ev.type == FLUX_EV_SWIPE_UP) {
+                journal_scroll++;
+                flux_ui_draw_journal(&fb, journal_names_p, journal_n, journal_scroll, -1);
+                continue;
+            }
+            if (ev.type == FLUX_EV_SWIPE_DOWN) {
+                if (journal_scroll > 0) journal_scroll--;
+                flux_ui_draw_journal(&fb, journal_names_p, journal_n, journal_scroll, -1);
+                continue;
+            }
+            if (ev.type == FLUX_EV_TAP) {
+                int back;
+                int idx = flux_ui_journal_hit(&fb, ev.x, ev.y, journal_n, &back);
+                if (back) {
+                    uint32_t *old = capture_frame(&fb);
+                    screen = FLUX_SCREEN_ASSISTANT;
+                    flux_ui_draw_assistant(&fb, last_q, input_buf, answer_buf, 0);
+                    animate_slide_from_left(&fb, old);
+                    free(old);
+                } else if (idx >= 0 && idx < journal_n) {
+                    char path[280];
+                    snprintf(path, sizeof(path), "/home/user/Journal/%s.txt",
+                             journal_names_buf[idx + journal_scroll]);
+                    load_file_content(path);
+                    uint32_t *old = capture_frame(&fb);
+                    screen = FLUX_SCREEN_FILE_VIEWER;
+                    flux_ui_draw_file_viewer(&fb, viewer_path, viewer_content, viewer_scroll);
+                    animate_slide_in(&fb, old);
+                    free(old);
+                }
+            }
+            continue;
+        }
+
+        /* ---- FLUX_SCREEN_VOICE_ENROLL ---------------------------------- */
+        if (screen == FLUX_SCREEN_VOICE_ENROLL) {
+            if (ev.type == FLUX_EV_SWIPE_LEFT || ev.type == FLUX_EV_SWIPE_RIGHT) {
+                uint32_t *old = capture_frame(&fb);
+                screen = FLUX_SCREEN_SETTINGS;
+                flux_ui_draw_settings(&fb, setting_labels, setting_values, FLUX_SETTINGS_N);
+                animate_slide_from_left(&fb, old);
+                free(old);
+                continue;
+            }
+            if (ev.type == FLUX_EV_TAP) {
+                int hit = flux_ui_voice_hit(&fb, ev.x, ev.y);
+                if (hit == 1) {
+                    /* Aufnehmen */
+                    voice_enroll_phase = 1;
+                    flux_ui_draw_voice_enroll(&fb, voice_enroll_phase, "Aufnahme laeuft...");
+                    voice_unlock_result_t r = voice_unlock_enroll(voice_enroll_msg, sizeof(voice_enroll_msg));
+                    voice_enroll_phase = (r == VOICE_UNLOCK_OK) ? 2 : 3;
+                    flux_ui_draw_voice_enroll(&fb, voice_enroll_phase, voice_enroll_msg);
+                } else if (hit == 2) {
+                    /* Ueberspringen / Fertig */
+                    uint32_t *old = capture_frame(&fb);
+                    screen = FLUX_SCREEN_SETTINGS;
+                    flux_ui_draw_settings(&fb, setting_labels, setting_values, FLUX_SETTINGS_N);
+                    animate_slide_from_left(&fb, old);
+                    free(old);
+                }
+            }
+            continue;
+        }
+
+        /* ---- FLUX_SCREEN_VOICE_VERIFY ---------------------------------- */
+        if (screen == FLUX_SCREEN_VOICE_VERIFY) {
+            if (ev.type == FLUX_EV_TAP) {
+                int hit = flux_ui_voice_hit(&fb, ev.x, ev.y);
+                if (hit == 1 && voice_verify_phase != 2) {
+                    /* Sprechen */
+                    voice_verify_phase = 1;
+                    flux_ui_draw_voice_verify(&fb, voice_verify_phase, "Hoere zu...");
+                    voice_unlock_result_t r = voice_unlock_verify(voice_verify_msg,
+                                                                   sizeof(voice_verify_msg));
+                    if (r == VOICE_UNLOCK_OK) {
+                        voice_verify_phase = 2;
+                        flux_ui_draw_voice_verify(&fb, voice_verify_phase, voice_verify_msg);
+                    } else if (r == VOICE_UNLOCK_NO_MIC) {
+                        /* Kein Mikrofon -- ehrlich weiterlassen (nur zweiter Faktor) */
+                        voice_verify_phase = 3;
+                        flux_ui_draw_voice_verify(&fb, voice_verify_phase, voice_verify_msg);
+                    } else {
+                        voice_verify_phase = 3;
+                        flux_ui_draw_voice_verify(&fb, voice_verify_phase, voice_verify_msg);
+                    }
+                } else if (hit == 1 && voice_verify_phase == 2) {
+                    /* Weiter nach OK */
+                    screen = FLUX_SCREEN_ASSISTANT;
+                    input_buf[0] = '\0'; answer_buf[0] = '\0';
+                    flux_ui_set_quick_reveal(0, 0);
+                    uint32_t *old = capture_frame(&fb);
+                    flux_ui_draw_assistant(&fb, last_q, input_buf, answer_buf, 0);
+                    animate_slide_in(&fb, old); free(old);
+                    animate_home_intro(&fb, &in, last_q, input_buf, answer_buf);
+                } else if (hit == 2) {
+                    /* PIN verwenden -- Stimm-Schutz ueberspringen (immer erlaubt) */
+                    screen = FLUX_SCREEN_ASSISTANT;
+                    input_buf[0] = '\0'; answer_buf[0] = '\0';
+                    flux_ui_set_quick_reveal(0, 0);
+                    uint32_t *old = capture_frame(&fb);
+                    flux_ui_draw_assistant(&fb, last_q, input_buf, answer_buf, 0);
+                    animate_slide_in(&fb, old); free(old);
+                    animate_home_intro(&fb, &in, last_q, input_buf, answer_buf);
+                }
+            }
+            continue;
+        }
+
         if (screen == FLUX_SCREEN_SEARCH) {
             if (ev.type == FLUX_EV_SWIPE_LEFT) {
                 uint32_t *old = capture_frame(&fb);
@@ -2472,15 +2673,11 @@ int main(void) {
             }
             if (strcasecmp(input_buf, "journal") == 0 || strcasecmp(input_buf, "tagebuch") == 0) {
                 input_buf[0] = '\0';
-                /* Navigate to Journal directory in file browser */
-                mkdir("/home/user/Journal", 0755);
-                snprintf(files_path, sizeof(files_path), "/home/user/Journal");
-                load_files(files_path);
-                file_selected = -1;
+                load_journal_list();
+                journal_scroll = 0;
                 uint32_t *old = capture_frame(&fb);
-                screen = FLUX_SCREEN_FILES;
-                flux_ui_draw_files(&fb, files_path, file_names, file_metas,
-                                   file_n, file_truncated, file_selected);
+                screen = FLUX_SCREEN_JOURNAL;
+                flux_ui_draw_journal(&fb, journal_names_p, journal_n, journal_scroll, -1);
                 animate_slide_in(&fb, old);
                 free(old);
                 continue;

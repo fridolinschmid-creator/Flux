@@ -2933,6 +2933,210 @@ static int tri_wave(int x, int period, int amp) {
     return v * amp / half;
 }
 
+/* ---- Journal-Screen ------------------------------------------------ */
+
+#define JOURNAL_ENTRY_H  72
+
+void flux_ui_draw_journal(flux_fb_t *fb, const char **names, int n,
+                           int scroll, int selected) {
+    flux_fb_clear(fb, COL_BG);
+    draw_statusbar(fb);
+
+    flux_fb_text(fb, 16, STATUSBAR_H + 12, "Tages-Journal", COL_TEXT, 3);
+    flux_fb_fill_gradient_h(fb, 16, STATUSBAR_H + 42, 140, 2, COL_ACCENT, COL_ACCENT2);
+
+    int list_y = STATUSBAR_H + TITLE_AREA_H;
+    int list_h = fb->height - list_y - LIST_BACK_H;
+
+    if (n == 0) {
+        fill_round_rect(fb, 12, list_y + 20, fb->width - 24, 72, 10, COL_SURFACE);
+        const char *empty = "Noch keine Journal-Eintraege vorhanden.";
+        int tw = flux_fb_text_width(empty, 2);
+        flux_fb_text(fb, (fb->width - tw) / 2, list_y + 44, empty, COL_DIM, 2);
+        draw_back_bar(fb, "Zurueck");
+        flux_fb_present(fb);
+        return;
+    }
+
+    int y0 = list_y + 4;
+    int max_visible = list_h / JOURNAL_ENTRY_H;
+    if (scroll < 0) scroll = 0;
+    if (scroll > n - max_visible && n > max_visible) scroll = n - max_visible;
+
+    for (int i = scroll; i < n && y0 + JOURNAL_ENTRY_H <= list_y + list_h; i++) {
+        int ey = y0;
+        int sel = (i == selected);
+        fill_round_rect(fb, 8, ey, fb->width - 16, JOURNAL_ENTRY_H - 6, 8,
+                        sel ? COL_SURFACE3 : COL_SURFACE);
+        flux_fb_fill_rect(fb, 8, ey, 3, JOURNAL_ENTRY_H - 6, COL_ACCENT);
+
+        /* Datum gross, Wochentag klein */
+        const char *date = names[i];
+        flux_fb_text(fb, 20, ey + 14, date, COL_TEXT, 2);
+
+        /* Pfeil rechts */
+        int ax = fb->width - 28;
+        flux_fb_text(fb, ax, ey + 14, ">", COL_DIM, 2);
+
+        y0 += JOURNAL_ENTRY_H;
+    }
+
+    /* Scroll-Indikator */
+    if (n > max_visible) {
+        int bar_h = list_h * max_visible / n;
+        int bar_y = list_y + list_h * scroll / n;
+        fill_round_rect(fb, fb->width - 5, bar_y, 4, bar_h, 2, COL_ACCENT);
+    }
+
+    draw_back_bar(fb, "Zurueck");
+    flux_fb_present(fb);
+}
+
+int flux_ui_journal_hit(const flux_fb_t *fb, int x, int y,
+                         int n, int *back) {
+    *back = 0;
+    if (y >= fb->height - LIST_BACK_H) { *back = 1; return -1; }
+    int list_y = STATUSBAR_H + TITLE_AREA_H;
+    int list_h = fb->height - list_y - LIST_BACK_H;
+    int max_visible = list_h / JOURNAL_ENTRY_H;
+    if (y < list_y || x < 8 || x > fb->width - 8) return -1;
+    int rel = y - list_y - 4;
+    int idx = rel / JOURNAL_ENTRY_H;
+    if (idx < 0 || idx >= max_visible || idx >= n) return -1;
+    return idx;
+}
+
+/* ---- Stimm-Entsperrung (zweiter Faktor) ----------------------------- */
+
+/* Zeichnet Mikrofon-Icon einfach mit Text fuer diesen Screen. */
+static void draw_mic_icon_lg(flux_fb_t *fb, int cx, int cy, uint32_t col) {
+    /* Koerper: abgerundetes Rechteck */
+    fill_round_rect(fb, cx - 18, cy - 36, 36, 52, 14, col);
+    /* Buegel unten */
+    for (int dx = -24; dx <= 24; dx += 2)
+        flux_fb_fill_rect(fb, cx + dx, cy + 20, 2, 3, col);
+    /* Stiel */
+    flux_fb_fill_rect(fb, cx - 2, cy + 22, 4, 12, col);
+    /* Basis */
+    flux_fb_fill_rect(fb, cx - 14, cy + 34, 28, 3, col);
+}
+
+void flux_ui_draw_voice_enroll(flux_fb_t *fb, int phase, const char *msg) {
+    flux_fb_clear(fb, COL_BG);
+    draw_statusbar(fb);
+
+    flux_fb_text(fb, 16, STATUSBAR_H + 12, "Stimme einlernen", COL_TEXT, 3);
+    flux_fb_fill_gradient_h(fb, 16, STATUSBAR_H + 42, 160, 2, COL_ACCENT, COL_ACCENT2);
+
+    int cy = STATUSBAR_H + TITLE_AREA_H + 60;
+
+    uint32_t mic_col = (phase == 1) ? 0xEF4444 :
+                       (phase == 2) ? 0x10B981 :
+                       (phase == 3) ? 0xEF4444 : COL_ACCENT;
+    draw_mic_icon_lg(fb, fb->width / 2, cy, mic_col);
+
+    /* Statustext */
+    int my = cy + 80;
+    if (msg && *msg) {
+        int tw = flux_fb_text_width(msg, 2);
+        if (tw > fb->width - 32) {
+            /* Zeilenumbruch bei zu langem Text */
+            char tmp[256]; strncpy(tmp, msg, 255); tmp[255] = '\0';
+            flux_fb_text(fb, 16, my, tmp, COL_TEXT, 2);
+        } else {
+            flux_fb_text(fb, (fb->width - tw) / 2, my, msg, COL_TEXT, 2);
+        }
+        my += 30;
+    }
+
+    /* Anleitung */
+    const char *hint = (phase == 0) ? "Sagen Sie einen kurzen Satz (3 Sek.)" :
+                       (phase == 1) ? "Aufnahme laeuft..." :
+                       (phase == 2) ? "Stimme gespeichert!" :
+                                      "Fehler -- bitte erneut versuchen";
+    int tw = flux_fb_text_width(hint, 2);
+    flux_fb_text(fb, (fb->width - tw) / 2, my, hint, COL_DIM, 2);
+
+    /* Buttons */
+    int bw = fb->width - 32, bh = 52;
+    int b1y = fb->height - LIST_BACK_H - bh * 2 - 24;
+    int b2y = b1y + bh + 12;
+
+    /* Aufnehmen / Wiederholen */
+    fill_round_rect(fb, 16, b1y, bw, bh, 10, COL_ACCENT);
+    const char *btn1 = (phase == 2) ? "Nochmal aufnehmen" : "Aufnahme starten";
+    tw = flux_fb_text_width(btn1, 2);
+    flux_fb_text(fb, (fb->width - tw) / 2, b1y + (bh - 14) / 2, btn1, 0xFFFFFF, 2);
+
+    /* Ueberspringen / Fertig */
+    fill_round_rect(fb, 16, b2y, bw, bh, 10, COL_SURFACE2);
+    const char *btn2 = (phase == 2) ? "Fertig" : "Ueberspringen";
+    tw = flux_fb_text_width(btn2, 2);
+    flux_fb_text(fb, (fb->width - tw) / 2, b2y + (bh - 14) / 2, btn2, COL_TEXT_MUTED, 2);
+
+    draw_back_bar(fb, "Zurueck");
+    flux_fb_present(fb);
+}
+
+void flux_ui_draw_voice_verify(flux_fb_t *fb, int phase, const char *msg) {
+    flux_fb_clear(fb, COL_BG);
+    draw_statusbar(fb);
+
+    flux_fb_text(fb, 16, STATUSBAR_H + 12, "Stimm-Verifizierung", COL_TEXT, 3);
+    flux_fb_fill_gradient_h(fb, 16, STATUSBAR_H + 42, 180, 2, COL_ACCENT, COL_ACCENT2);
+
+    int cy = STATUSBAR_H + TITLE_AREA_H + 60;
+
+    uint32_t mic_col = (phase == 1) ? 0xEF4444 :
+                       (phase == 2) ? 0x10B981 :
+                       (phase == 3) ? 0xEF4444 : COL_ACCENT;
+    draw_mic_icon_lg(fb, fb->width / 2, cy, mic_col);
+
+    int my = cy + 80;
+    if (msg && *msg) {
+        int tw = flux_fb_text_width(msg, 2);
+        if (tw > fb->width - 32)
+            flux_fb_text(fb, 16, my, msg, COL_TEXT, 2);
+        else
+            flux_fb_text(fb, (fb->width - tw) / 2, my, msg, COL_TEXT, 2);
+        my += 30;
+    }
+
+    const char *hint = (phase == 0) ? "Sprechen Sie bitte (3 Sekunden)" :
+                       (phase == 1) ? "Hoere zu..." :
+                       (phase == 2) ? "Entsperrt!" :
+                                      "Nicht erkannt -- PIN verwenden";
+    int tw = flux_fb_text_width(hint, 2);
+    flux_fb_text(fb, (fb->width - tw) / 2, my,
+                 hint, (phase == 2) ? 0x10B981 : (phase == 3) ? COL_DANGER : COL_DIM, 2);
+
+    int bw = fb->width - 32, bh = 52;
+    int b1y = fb->height - LIST_BACK_H - bh * 2 - 24;
+    int b2y = b1y + bh + 12;
+
+    /* Aufnehmen */
+    fill_round_rect(fb, 16, b1y, bw, bh, 10, (phase == 2) ? 0x10B981 : COL_ACCENT);
+    const char *btn1 = (phase == 2) ? "Weiter" : "Sprechen";
+    tw = flux_fb_text_width(btn1, 2);
+    flux_fb_text(fb, (fb->width - tw) / 2, b1y + (bh - 14) / 2, btn1, 0xFFFFFF, 2);
+
+    /* PIN verwenden */
+    fill_round_rect(fb, 16, b2y, bw, bh, 10, COL_SURFACE2);
+    tw = flux_fb_text_width("PIN verwenden", 2);
+    flux_fb_text(fb, (fb->width - tw) / 2, b2y + (bh - 14) / 2, "PIN verwenden", COL_TEXT_MUTED, 2);
+
+    flux_fb_present(fb);
+}
+
+int flux_ui_voice_hit(const flux_fb_t *fb, int x, int y) {
+    int bw = fb->width - 32, bh = 52;
+    int b1y = fb->height - LIST_BACK_H - bh * 2 - 24;
+    int b2y = b1y + bh + 12;
+    if (x >= 16 && x < 16 + bw && y >= b1y && y < b1y + bh) return 1; /* Aufnehmen */
+    if (x >= 16 && x < 16 + bw && y >= b2y && y < b2y + bh) return 2; /* PIN/Skip */
+    return 0;
+}
+
 /* Animierter Aufnahme-Indikator: Mikrofon + pulsierende Ringe +
  * laufende Wellenform. frame zaehlt mit jedem Redraw hoch (~10 fps). */
 void flux_ui_draw_voice_overlay(flux_fb_t *fb, int elapsed_s, int frame) {

@@ -27,10 +27,13 @@ typedef enum {
     FLUX_SCREEN_CONTACTS,    /* Kontaktliste */
     FLUX_SCREEN_GALLERY,     /* Fotogalerie */
     FLUX_SCREEN_IMAGE_VIEWER, /* Einzelbild-Betrachter mit KI-Analyse */
-    FLUX_SCREEN_MEMORY,      /* KI-Gedaechtnis-Liste */
-    FLUX_SCREEN_MEETING,     /* Meeting-Mitschrift (Audio-Transkription) */
-    FLUX_SCREEN_SEARCH,      /* Semantische KI-Suche ueber alles */
-    FLUX_SCREEN_WIFI,        /* WLAN-Netze scannen und verbinden */
+    FLUX_SCREEN_MEMORY,       /* KI-Gedaechtnis-Liste */
+    FLUX_SCREEN_MEETING,      /* Meeting-Mitschrift (Audio-Transkription) */
+    FLUX_SCREEN_SEARCH,       /* Semantische KI-Suche ueber alles */
+    FLUX_SCREEN_WIFI,         /* WLAN-Netze scannen und verbinden */
+    FLUX_SCREEN_JOURNAL,       /* Tages-Journal Eintraege (Liste + Betrachter) */
+    FLUX_SCREEN_VOICE_ENROLL,  /* Stimme einlernen fuer zweiten Faktor */
+    FLUX_SCREEN_VOICE_VERIFY,  /* Stimm-Verifizierung nach PIN (zweiter Faktor) */
 } flux_screen_t;
 
 typedef enum {
@@ -301,6 +304,34 @@ void flux_ui_draw_action_anim(flux_fb_t *fb, flux_anim_kind_t kind,
  * unavailable: 1 wenn kein WLAN-Interface/wpa_cli vorhanden. */
 void flux_ui_draw_wifi(flux_fb_t *fb, const char *current, const char **names,
                        const char **metas, int n, int scanning, int unavailable);
+
+/* ---- Journal ------------------------------------------------------- */
+
+/* Zeigt Liste aller Journal-Eintraege (Dateinamen ohne .txt, neueste zuerst).
+ * names/n: Array von Datumstrings. selected: markierter Eintrag (-1 = keiner). */
+void flux_ui_draw_journal(flux_fb_t *fb, const char **names, int n,
+                          int scroll, int selected);
+
+/* Hit-Test: gibt Index des angetippten Eintrags (-1 = keiner) oder
+ * setzt *back auf 1 wenn Zurueck-Leiste getippt. */
+int flux_ui_journal_hit(const flux_fb_t *fb, int x, int y,
+                        int n, int *back);
+
+/* ---- Stimm-Entsperrung (zweiter Faktor nach PIN) ------------------- */
+
+/* Enrollment-Screen: zeigt Aufnahme-Anleitung und Status.
+ * phase: 0=Anleitung, 1=Aufnahme laeuft, 2=Erfolg, 3=Fehler.
+ * msg: Statustext aus voice_unlock_enroll(). */
+void flux_ui_draw_voice_enroll(flux_fb_t *fb, int phase, const char *msg);
+
+/* Verification-Screen: zeigt "Sprechen Sie bitte" und Ergebnis.
+ * phase: 0=Warten, 1=Aufnahme, 2=OK, 3=Mismatch/Fehler.
+ * msg: Statustext aus voice_unlock_verify(). */
+void flux_ui_draw_voice_verify(flux_fb_t *fb, int phase, const char *msg);
+
+/* Hit-Test fuer beide Voice-Screens.
+ * Gibt 1 wenn "Aufnehmen"/"Wiederholen", 2 wenn "Ueberspringen"/"PIN", 0 sonst. */
+int flux_ui_voice_hit(const flux_fb_t *fb, int x, int y);
 
 /* ---- Farbthema ----------------------------------------------------- */
 
