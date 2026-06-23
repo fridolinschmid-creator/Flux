@@ -1,6 +1,6 @@
-/* render_screenshots.c -- rendert alle UI-Bildschirme als PPM-Dateien.
+/* render_screenshots.c -- rendert alle UI-Bildschirme direkt als PNG.
  * Kein /dev/fb0 noetig: flux_fb_open_null() ersetzt das Framebuffer-mmap
- * durch malloc'd Speicher. ImageMagick/netpbm kann die PPMs in PNG wandeln.
+ * durch malloc'd Speicher. libpng schreibt die PNG-Dateien.
  *
  * Aufruf: ./render_screenshots [ausgabepfad]
  * Default-Pfad: /tmp/flux_screenshots/
@@ -14,21 +14,39 @@
 #include <stdlib.h>
 #include <time.h>
 #include <sys/stat.h>
+#include <png.h>
 
-static void save_ppm(const flux_fb_t *fb, const char *dir, const char *name) {
+static void save_png(const flux_fb_t *fb, const char *dir, const char *name) {
     char path[512];
-    snprintf(path, sizeof(path), "%s/%s.ppm", dir, name);
+    snprintf(path, sizeof(path), "%s/%s.png", dir, name);
     FILE *f = fopen(path, "wb");
     if (!f) { perror(path); return; }
-    fprintf(f, "P6\n%d %d\n255\n", fb->width, fb->height);
-    for (int i = 0; i < fb->width * fb->height; i++) {
-        uint32_t px = fb->back[i];
-        fputc((px >> 16) & 0xff, f);
-        fputc((px >>  8) & 0xff, f);
-        fputc( px        & 0xff, f);
+
+    png_structp png = png_create_write_struct(PNG_LIBPNG_VER_STRING, NULL, NULL, NULL);
+    png_infop info  = png_create_info_struct(png);
+    if (setjmp(png_jmpbuf(png))) { fclose(f); return; }
+
+    png_init_io(png, f);
+    png_set_IHDR(png, info, (png_uint_32)fb->width, (png_uint_32)fb->height,
+                 8, PNG_COLOR_TYPE_RGB, PNG_INTERLACE_NONE,
+                 PNG_COMPRESSION_TYPE_DEFAULT, PNG_FILTER_TYPE_DEFAULT);
+    png_write_info(png, info);
+
+    uint8_t *row = malloc((size_t)fb->width * 3);
+    for (int y = 0; y < fb->height; y++) {
+        for (int x = 0; x < fb->width; x++) {
+            uint32_t px = fb->back[y * fb->stride_px + x];
+            row[x * 3 + 0] = (px >> 16) & 0xff;
+            row[x * 3 + 1] = (px >>  8) & 0xff;
+            row[x * 3 + 2] =  px        & 0xff;
+        }
+        png_write_row(png, row);
     }
+    free(row);
+    png_write_end(png, NULL);
+    png_destroy_write_struct(&png, &info);
     fclose(f);
-    printf("  gespeichert: %s\n", path);
+    printf("  %s\n", path);
 }
 
 int main(int argc, char *argv[]) {
@@ -55,34 +73,34 @@ int main(int argc, char *argv[]) {
     /* 01 -- Lockscreen */
     flux_ui_set_accent(0x6366F1);
     flux_ui_draw_lock(&fb);
-    save_ppm(&fb, outdir, "01_lockscreen");
+    save_png(&fb, outdir, "01_lockscreen");
 
     /* 02 -- PIN-Eingabe (2 von 4 Ziffern) */
     flux_ui_draw_pin(&fb, 2, 0);
-    save_ppm(&fb, outdir, "02_pin");
+    save_png(&fb, outdir, "02_pin");
 
     /* 03 -- PIN falsch */
     flux_ui_draw_pin(&fb, 0, 1);
-    save_ppm(&fb, outdir, "03_pin_fehler");
+    save_png(&fb, outdir, "03_pin_fehler");
 
     /* 04 -- Assistent leer */
     flux_ui_set_accent(0x6366F1);
     flux_ui_draw_assistant(&fb, "", "", "", 0);
-    save_ppm(&fb, outdir, "04_assistent_leer");
+    save_png(&fb, outdir, "04_assistent_leer");
 
     /* 04b -- Homescreen-Eingangsanimation (Knoepfe poppen auf) */
     flux_ui_set_quick_reveal(2, 50);
     flux_ui_draw_assistant(&fb, "", "", "", 0);
-    save_ppm(&fb, outdir, "04b_home_anim");
+    save_png(&fb, outdir, "04b_home_anim");
     flux_ui_set_quick_reveal(4, 100);
 
     /* 05 -- Assistent: tippt Frage */
     flux_ui_draw_assistant(&fb, "", "schreibe eine E-Mail an Max", "", 0);
-    save_ppm(&fb, outdir, "05_assistent_tipp");
+    save_png(&fb, outdir, "05_assistent_tipp");
 
     /* 06 -- Assistent: denkt nach (Nutzer-Blase + Lade-Blase) */
     flux_ui_draw_assistant(&fb, "schreibe eine E-Mail an Max", "", "", 1);
-    save_ppm(&fb, outdir, "06_assistent_denkt");
+    save_png(&fb, outdir, "06_assistent_denkt");
 
     /* 07 -- Assistent: normale Textantwort (aktuelle Uhrzeit) */
     flux_ui_draw_assistant(&fb,
@@ -90,7 +108,7 @@ int main(int argc, char *argv[]) {
         "",
         ai_time_buf,   /* #1: echte Uhrzeit */
         0);
-    save_ppm(&fb, outdir, "07_assistent_antwort");
+    save_png(&fb, outdir, "07_assistent_antwort");
 
     /* 08 -- Assistent: längere Antwort (Indigo-Akzent bleibt) */
     flux_ui_draw_assistant(&fb,
@@ -102,7 +120,7 @@ int main(int argc, char *argv[]) {
         "Einstellungen und Dateien erreichst du über die zwei "
         "Knöpfe oben oder indem du sie einfach eintippst.",
         0);
-    save_ppm(&fb, outdir, "08_assistent_lange_antwort");
+    save_png(&fb, outdir, "08_assistent_lange_antwort");
 
     /* 09 -- Bestätigungs-Dialog: E-Mail */
     flux_ui_draw_confirm(&fb,
@@ -113,7 +131,7 @@ int main(int argc, char *argv[]) {
         "Ich muss dir leider sagen, dass ich heute krank bin "
         "und nicht ins Büro komme.\n\n"
         "Viele Grüße");
-    save_ppm(&fb, outdir, "09_bestaetigung_email");
+    save_png(&fb, outdir, "09_bestaetigung_email");
 
     /* 10 -- Bestätigungs-Dialog: SMS */
     flux_ui_draw_confirm(&fb,
@@ -121,7 +139,7 @@ int main(int argc, char *argv[]) {
         "+49 151 12345678",
         "",
         "Ich komme heute etwas später, alles gut!");
-    save_ppm(&fb, outdir, "10_bestaetigung_sms");
+    save_png(&fb, outdir, "10_bestaetigung_sms");
 
     /* 11 -- Bestätigungs-Dialog: Anruf */
     flux_ui_draw_confirm(&fb,
@@ -129,7 +147,7 @@ int main(int argc, char *argv[]) {
         "+49 151 12345678",
         "",
         "");
-    save_ppm(&fb, outdir, "11_bestaetigung_anruf");
+    save_png(&fb, outdir, "11_bestaetigung_anruf");
 
     /* 12 -- Text bearbeiten */
     flux_ui_draw_edit_body(&fb,
@@ -137,7 +155,7 @@ int main(int argc, char *argv[]) {
         "Ich muss dir leider sagen, dass ich heute krank bin "
         "und nicht ins Büro komme.\n\n"
         "Viele Grüße");
-    save_ppm(&fb, outdir, "12_text_bearbeiten");
+    save_png(&fb, outdir, "12_text_bearbeiten");
 
     /* 13 -- Einstellungen (#13: TTS "Deutsch", #14: Auto-Sperre "60 s") */
     const char *setting_labels[] = {
@@ -157,28 +175,28 @@ int main(int argc, char *argv[]) {
     };
     flux_ui_set_setting_icons(setting_icons);
     flux_ui_draw_settings(&fb, setting_labels, setting_values, 10);
-    save_ppm(&fb, outdir, "13_einstellungen");
+    save_png(&fb, outdir, "13_einstellungen");
 
     /* 13c -- Eingangsanimation der Einstellungen (Zwischenframe) */
     flux_ui_draw_settings_reveal(&fb, setting_labels, setting_values, 10,
                                  5, 60, 40, 1);
-    save_ppm(&fb, outdir, "13c_einstellungen_anim");
+    save_png(&fb, outdir, "13c_einstellungen_anim");
 
     /* 13b -- E-Mail-Einrichtung: App-Passwort-Schritt */
     flux_ui_set_edit_title("App-Passwort");
     flux_ui_draw_edit_body(&fb, "");
-    save_ppm(&fb, outdir, "13b_email_passwort");
+    save_png(&fb, outdir, "13b_email_passwort");
     flux_ui_set_edit_title(NULL);
 
     /* 14 -- Dateibrowser (#12: kein ".." Eintrag) */
     const char *names[] = { "Documents", "Pictures", "Music", "Videos", "flux.conf" };
     const char *metas[] = { "Ordner", "Ordner", "Ordner", "Ordner", "1.2 KB" };
     flux_ui_draw_files(&fb, "/home/user", names, metas, 5, 0, -1);
-    save_ppm(&fb, outdir, "14_dateien");
+    save_png(&fb, outdir, "14_dateien");
 
     /* 15 -- Dateibrowser mit markierter Datei */
     flux_ui_draw_files(&fb, "/home/user", names, metas, 5, 0, 4);
-    save_ppm(&fb, outdir, "15_dateien_ausgewaehlt");
+    save_png(&fb, outdir, "15_dateien_ausgewaehlt");
 
     /* 16 -- Datei-Betrachter */
     flux_ui_draw_file_viewer(&fb, "/home/user/notizen.txt",
@@ -189,16 +207,16 @@ int main(int argc, char *argv[]) {
         "- Mail an Chef schreiben\n"
         "- Auto in Werkstatt\n",
         0);
-    save_ppm(&fb, outdir, "16_datei_betrachter");
+    save_png(&fb, outdir, "16_datei_betrachter");
 
     /* 17 -- Benachrichtigungs-Overlay */
     flux_ui_draw_notify(&fb);
-    save_ppm(&fb, outdir, "17_benachrichtigungen");
+    save_png(&fb, outdir, "17_benachrichtigungen");
 
     /* 18 -- Assistenten-Bildschirm mit blauem Farbthema */
     flux_ui_set_accent(0x3B82F6);
     flux_ui_draw_assistant(&fb, "wie spät ist es?", "", ai_time_buf, 0);
-    save_ppm(&fb, outdir, "18_assistent_blau");
+    save_png(&fb, outdir, "18_assistent_blau");
     flux_ui_set_accent(0x6366F1);  /* #8: Akzent zurücksetzen */
 
     /* 19 -- Kalender (#2: aktueller Tag) */
@@ -210,7 +228,7 @@ int main(int argc, char *argv[]) {
         };
         flux_ui_draw_calendar(&fb, 2026, 6, today_day, today_day, evs, 2);
     }
-    save_ppm(&fb, outdir, "19_kalender");
+    save_png(&fb, outdir, "19_kalender");
 
     /* 20 -- Kontakte */
     {
@@ -222,7 +240,7 @@ int main(int argc, char *argv[]) {
         };
         flux_ui_draw_contacts(&fb, cnames, cdetails, 3, 0);
     }
-    save_ppm(&fb, outdir, "20_kontakte");
+    save_png(&fb, outdir, "20_kontakte");
     flux_ui_set_accent(0x6366F1);  /* #8: Akzent zurücksetzen */
 
     /* 21 -- Fotogalerie (#11: .jpg statt .ppm) */
@@ -231,7 +249,7 @@ int main(int argc, char *argv[]) {
         const char *gdates[] = { "18.06.2026", "17.06.2026", "15.06.2026" };
         flux_ui_draw_gallery(&fb, gnames, gdates, 3, 0);
     }
-    save_ppm(&fb, outdir, "21_fotogalerie");
+    save_png(&fb, outdir, "21_fotogalerie");
 
     /* 22 -- Bild-Betrachter mit KI-Analyse (#11: .jpg) */
     {
@@ -260,7 +278,7 @@ int main(int argc, char *argv[]) {
             free(test_img);
         }
     }
-    save_ppm(&fb, outdir, "22_bild_betrachter");
+    save_png(&fb, outdir, "22_bild_betrachter");
 
     /* 23 -- KI-Overlay über Datei-Betrachter */
     flux_ui_draw_file_viewer(&fb, "/home/user/mietvertrag.txt",
@@ -274,7 +292,7 @@ int main(int argc, char *argv[]) {
         "Paragraph 8 enthält eine unübliche Klausel: "
         "Der Vermieter darf die Wohnung mit nur 24h Vorankündigung betreten. "
         "Üblich sind 48h. Rechtlich ist das in Deutschland grenzwertig.");
-    save_ppm(&fb, outdir, "23_ki_overlay_datei");
+    save_png(&fb, outdir, "23_ki_overlay_datei");
 
     /* 24 -- KI-Overlay über Kalender (#2: aktueller Tag) */
     {
@@ -285,7 +303,7 @@ int main(int argc, char *argv[]) {
         "Kalender: Juni 2026",
         "Welche freien Tage habe ich diese Woche?",
         "");
-    save_ppm(&fb, outdir, "24_ki_overlay_kalender");
+    save_png(&fb, outdir, "24_ki_overlay_kalender");
 
     /* 25 -- Lockscreen mit proaktiver KI-Benachrichtigung (#3: konsistente Daten) */
     {
@@ -297,7 +315,7 @@ int main(int argc, char *argv[]) {
         }
         flux_ui_set_accent(0x4FD1C5);
         flux_ui_draw_lock(&fb);
-        save_ppm(&fb, outdir, "25_lockscreen_proaktiv");
+        save_png(&fb, outdir, "25_lockscreen_proaktiv");
         unlink("/tmp/flux_proactive.txt");
     }
     flux_ui_set_accent(0x6366F1);  /* #8: Akzent zurücksetzen */
@@ -309,7 +327,7 @@ int main(int argc, char *argv[]) {
         "Anna: Der Backend-Service braucht noch 3 Wochen.\n"
         "Max: Okay, dann priorisieren wir den MVP.",
         "Aufnahme läuft...");
-    save_ppm(&fb, outdir, "26_meeting_aufnahme");
+    save_png(&fb, outdir, "26_meeting_aufnahme");
     flux_ui_set_accent(0x6366F1);  /* #8: Akzent zurücksetzen */
 
     /* 27 -- KI-Gedächtnis (#3: Lauras Geburtstag konsistent am 15. März) */
@@ -324,7 +342,7 @@ int main(int argc, char *argv[]) {
         };
         flux_ui_draw_memory(&fb, mem_entries, 5, 0);
     }
-    save_ppm(&fb, outdir, "27_ki_gedaechtnis");
+    save_png(&fb, outdir, "27_ki_gedaechtnis");
 
     /* 28 -- Semantische KI-Suche (#3: Lauras Geburtstag konsistent) */
     {
@@ -336,11 +354,11 @@ int main(int argc, char *argv[]) {
         };
         flux_ui_draw_search(&fb, "Laura", results, 4, 0);
     }
-    save_ppm(&fb, outdir, "28_semantic_search");
+    save_png(&fb, outdir, "28_semantic_search");
 
     /* 29 -- Spracheingabe-Overlay (animiert, Aufnahme läuft 7 s) */
     flux_ui_draw_voice_overlay(&fb, 7, 6);
-    save_ppm(&fb, outdir, "29_voice_overlay");
+    save_png(&fb, outdir, "29_voice_overlay");
     flux_ui_set_accent(0x6366F1);  /* #8: Akzent zurücksetzen */
 
     /* 30 -- Ehrlicher Cloud-Hinweis (kein API-Key konfiguriert) */
@@ -348,7 +366,7 @@ int main(int argc, char *argv[]) {
         "Kein Cloud-Zugang konfiguriert. Trage in den Einstellungen einen "
         "API-Key für den gewählten Anbieter ein (oder wähle einen anderen "
         "Anbieter).", 0);
-    save_ppm(&fb, outdir, "30_cloud_fallback");
+    save_png(&fb, outdir, "30_cloud_fallback");
 
     /* 31 -- WLAN-Auswahl */
     {
@@ -357,17 +375,91 @@ int main(int argc, char *argv[]) {
                                  "Signal 56% - offen" };
         flux_ui_draw_wifi(&fb, "FritzBox 7590", wnames, wmetas, 3, 0, 0);
     }
-    save_ppm(&fb, outdir, "31_wlan");
+    save_png(&fb, outdir, "31_wlan");
 
     /* 32-34 -- animierte Aktions-Symbole (je ein Frame) */
     flux_ui_draw_action_anim(&fb, FLUX_ANIM_MAIL, 10, "max@example.com");
-    save_ppm(&fb, outdir, "32_anim_mail");
+    save_png(&fb, outdir, "32_anim_mail");
     flux_ui_draw_action_anim(&fb, FLUX_ANIM_CALL, 6, "Stefan Schmied");
-    save_ppm(&fb, outdir, "33_anim_anruf");
+    save_png(&fb, outdir, "33_anim_anruf");
     flux_ui_draw_action_anim(&fb, FLUX_ANIM_SCAN, 7, "WLAN-Suche");
-    save_ppm(&fb, outdir, "34_anim_wlan_suche");
+    save_png(&fb, outdir, "34_anim_wlan_suche");
+
+    /* ---- Neue Features (Batch 5) ---------------------------------------- */
+
+    /* 35 -- Lockscreen mit Notification-Badge + Alarm-Infochip */
+    {
+        /* Mock: 3 ungelesene Benachrichtigungen */
+        FILE *nf = fopen("/tmp/flux_notifications.txt", "w");
+        if (nf) {
+            fprintf(nf, "COUNT:3\n");
+            fprintf(nf, "[2026-06-23 08:45] Wecker: 07:30 Aufstehen\n");
+            fprintf(nf, "[2026-06-23 08:00] Termin: Team-Meeting um 09:00\n");
+            fprintf(nf, "[2026-06-23 07:55] Batterie bei 18%% -- bitte laden.\n");
+            fclose(nf);
+        }
+        /* Mock: Alarm in ~1 Stunde */
+        FILE *af = fopen("/tmp/flux_alarms.txt", "w");
+        if (af) {
+            time_t soon = time(NULL) + 3600;
+            struct tm st; localtime_r(&soon, &st);
+            fprintf(af, "%04d-%02d-%02d %02d:%02d Mittags-Pause\n",
+                    st.tm_year+1900, st.tm_mon+1, st.tm_mday,
+                    st.tm_hour, st.tm_min);
+            fclose(af);
+        }
+        flux_ui_set_accent(0x6366F1);
+        flux_ui_draw_lock(&fb);
+        save_png(&fb, outdir, "35_lockscreen_badge_chip");
+        unlink("/tmp/flux_notifications.txt");
+        unlink("/tmp/flux_alarms.txt");
+    }
+
+    /* 36 -- Lockscreen mit Kalender-Infochip (kein Alarm, aber Termin heute) */
+    {
+        FILE *cf = fopen("/etc/flux/calendar.txt", "w");
+        if (cf) {
+            time_t soon = time(NULL) + 7200;
+            struct tm st; localtime_r(&soon, &st);
+            fprintf(cf, "%04d-%02d-%02d %02d:%02d Team-Retrospektive\n",
+                    st.tm_year+1900, st.tm_mon+1, st.tm_mday,
+                    st.tm_hour, st.tm_min);
+            fclose(cf);
+        }
+        flux_ui_draw_lock(&fb);
+        save_png(&fb, outdir, "36_lockscreen_kalender_chip");
+        unlink("/etc/flux/calendar.txt");
+    }
+
+    /* 37 -- Vollbild-Wecker (Alarm klingelt) */
+    flux_ui_draw_alarm(&fb, "07:30 Aufstehen");
+    save_png(&fb, outdir, "37_alarm_klingelt");
+
+    /* 38 -- Wecker mit langem Label (zweizeilig) */
+    flux_ui_draw_alarm(&fb, "09:00 Team-Meeting mit Max, Anna und Stefan");
+    save_png(&fb, outdir, "38_alarm_lang");
+
+    /* 39 -- Nutzungsgewohnheiten (mehrere Eintraege, reales Format aus habits.c) */
+    {
+        const char *habits[] = {
+            "[2026-06-23 10:42] assistant | wie spät ist es?",
+            "[2026-06-23 10:15] assistant | öffne den Kalender",
+            "[2026-06-23 09:33] assistant | schreibe eine Mail an Max",
+            "[2026-06-23 09:00] assistant | zeige Einstellungen",
+            "[2026-06-23 08:47] assistant | stell einen Wecker auf 09:00",
+            "[2026-06-22 22:15] assistant | gute Nacht, schlaf schön",
+            "[2026-06-22 20:02] assistant | öffne meine Dateien",
+            "[2026-06-22 19:30] assistant | was gibts heute Abend zum Essen?",
+        };
+        flux_ui_draw_habits(&fb, habits, 8, 0);
+    }
+    save_png(&fb, outdir, "39_gewohnheiten");
+
+    /* 40 -- Gewohnheiten (leer -- erster Start) */
+    flux_ui_draw_habits(&fb, NULL, 0, 0);
+    save_png(&fb, outdir, "40_gewohnheiten_leer");
 
     flux_fb_close(&fb);
-    printf("\nFertig! PPM -> PNG: convert %s/XX.ppm %s/XX.png\n", outdir, outdir);
+    printf("\nFertig! %d Screenshots in %s/\n", 40, outdir);
     return 0;
 }

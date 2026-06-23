@@ -3295,9 +3295,34 @@ void flux_ui_draw_habits(flux_fb_t *fb, const char **lines, int n, int scroll) {
         flux_fb_fill_rect(fb, 0, ry, fb->width, HABITS_ROW_H,
                           (i % 2 == 0) ? COL_ROW : COL_ROW_ALT);
         flux_fb_fill_rect(fb, 0, ry + 4, 3, HABITS_ROW_H - 8, COL_ACCENT);
-        /* Text kuerzen wenn zu lang */
-        char buf[80]; snprintf(buf, sizeof(buf), "%.72s", lines[scroll + i]);
-        flux_fb_text(fb, 14, ry + (HABITS_ROW_H - 14) / 2, buf, COL_TEXT_MUTED, 2);
+
+        /* Format: [YYYY-MM-DD HH:MM] screen | topic
+         * Zeige HH:MM (klein, gedaempft) und topic (gedaempft) zweizeilig. */
+        const char *raw = lines[scroll + i];
+        char time_label[8] = {0};
+        const char *topic = raw;
+
+        /* Timestamp parsen: [YYYY-MM-DD HH:MM] */
+        if (raw[0] == '[') {
+            const char *p = raw + 1;
+            /* springe zum HH:MM Teil (nach dem Datum-Leerzeichen) */
+            const char *space = strchr(p, ' ');
+            if (space) {
+                snprintf(time_label, sizeof(time_label), "%.5s", space + 1);
+            }
+            const char *close = strchr(p, ']');
+            if (close) topic = close + 2; /* skip "] " */
+        }
+        /* Thema: nach " | " suchen */
+        const char *pipe = strstr(topic, " | ");
+        if (pipe) topic = pipe + 3;
+
+        int center_y = ry + HABITS_ROW_H / 2;
+        if (time_label[0]) {
+            flux_fb_text(fb, 10, center_y - 13, time_label, COL_DIM, 2);
+        }
+        char tbuf[56]; snprintf(tbuf, sizeof(tbuf), "%.50s", topic);
+        flux_fb_text(fb, 10, center_y + 1, tbuf, COL_TEXT_MUTED, 2);
     }
 
     if (n == 0) {

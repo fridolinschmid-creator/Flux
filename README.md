@@ -29,6 +29,17 @@ hier komplett per Touch-Tastatur eingetippt und abgesendet.
 "Wer bist du" -> kein `FLUX_AI_API_KEY` gesetzt, ehrlich gemeldet statt
 Absturz oder Fantasieantwort, hier per Hardware-Tastatur gestellt.)
 
+### Neue Features (Batch 5)
+
+| Lockscreen: Badge + Alarm-Chip | Lockscreen: Kalender-Chip | Vollbild-Wecker | Nutzungsgewohnheiten |
+|---|---|---|---|
+| ![Lockscreen Badge](docs/screenshots/35_lockscreen_badge_chip.png) | ![Lockscreen Kalender](docs/screenshots/36_lockscreen_kalender_chip.png) | ![Wecker](docs/screenshots/37_alarm_klingelt.png) | ![Gewohnheiten](docs/screenshots/39_gewohnheiten.png) |
+
+- **Lockscreen Badge**: Roter Zaehler oben rechts zeigt ungelesene Benachrichtigungen.
+- **Info-Chip**: Naechster Alarm (< 2h) oder Kalendertermin (< 24h) erscheint direkt unter dem Datum.
+- **Vollbild-Wecker**: `notification.c` prueft jede Minute `/tmp/flux_alarms.txt`; bei Faelligkeit schreibt er `/tmp/flux_alarm_ring.txt`, die Shell zeigt diesen roten Vollbild-Screen.
+- **Gewohnheiten-Screen**: Zeigt alle KI-Anfragen mit Uhrzeit aus `/etc/flux/habits.txt` (neueste zuerst, scrollbar). Erreichbar per `gewohnheiten` / `aktivitaet` / `statistik`.
+
 ---
 
 ## Ehrliche Einordnung (bitte zuerst lesen)
