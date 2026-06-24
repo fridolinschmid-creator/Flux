@@ -28,11 +28,15 @@
  *   translate        -- Text uebersetzen ueber den AKTIVEN Anbieter (local-first,
  *                       wenn der lokale llama.cpp-Anbieter gewaehlt ist),
  *                       ARG: "<zielsprache>: <text>" oder "<text> nach <zielsprache>"
+ *   audit_list       -- Aktions-Protokoll: letzte N ausgefuehrte KI-Aktionen
+ *                       (Mail/SMS/Anruf/Einstellung) neueste zuerst, ohne Geheimnisse,
+ *                       nur /etc/flux/audit.txt, ARG: Anzahl (optional, Default 15)
  */
 #include "tools.h"
 #include "vision.h"
 #include "imap.h"
 #include "provider.h"
+#include "audit.h"
 #include "../../common/flux_config.h"
 
 #include <curl/curl.h>
@@ -2384,6 +2388,62 @@ static int tool_translate(const char *arg, char *out, size_t cap) {
     return 1;
 }
 
+/* ---- audit_list ------------------------------------------------------ */
+
+/* Listet die letzten N Audit-Eintraege (neueste zuerst). Liest AUSSCHLIESSLICH
+ * /etc/flux/audit.txt (kein beliebiger Pfad). EHRLICH: existiert die Datei
+ * noch nicht (keine KI-Aktion bisher), wird das wahrheitsgemaess gemeldet. */
+static int tool_audit_list(const char *arg, char *out, size_t cap) {
+    /* Optionales ARG: gewuenschte Anzahl (Default 15, max 50). */
+    int want = 15;
+    if (arg && *arg) {
+        char *end; long v = strtol(arg, &end, 10);
+        if (end != arg && v > 0) want = (int)v;
+    }
+    if (want > 50) want = 50;
+
+    FILE *f = fopen(FLUX_AUDIT_PATH, "r");
+    if (!f) {
+        snprintf(out, cap, "Noch keine KI-Aktionen protokolliert "
+                 "(es wurde bisher keine Mail/SMS/Anruf/Einstellung ausgefuehrt).");
+        return 1;
+    }
+    /* Letzte Zeilen in einen Ringpuffer laden (neueste am Ende). */
+    static char lines[50][512];
+    int n = 0;
+    char line[512];
+    while (fgets(line, sizeof(line), f)) {
+        size_t l = strlen(line);
+        if (l == 1 && line[0] == '\n') continue;
+        snprintf(lines[n % 50], sizeof(lines[0]), "%s", line);
+        n++;
+    }
+    fclose(f);
+    if (n == 0) {
+        snprintf(out, cap, "Noch keine KI-Aktionen protokolliert.");
+        return 1;
+    }
+    int total = n < 50 ? n : 50;       /* so viele liegen im Ringpuffer */
+    int show  = total < want ? total : want;
+    int start = n - 1;                  /* Index der neuesten Zeile */
+
+    char buf[4096];
+    size_t pos = snprintf(buf, sizeof(buf),
+                          "Aktions-Protokoll (neueste %d von %d):\n", show, n);
+    for (int i = 0; i < show && pos + 4 < sizeof(buf); i++) {
+        int idx = ((start - i) % 50 + 50) % 50;
+        const char *ln = lines[idx];
+        size_t ll = strlen(ln);
+        if (pos + ll + 3 >= sizeof(buf)) break;
+        buf[pos++] = ' '; buf[pos++] = ' ';
+        memcpy(buf + pos, ln, ll); pos += ll;
+        if (buf[pos-1] != '\n') buf[pos++] = '\n';
+        buf[pos] = '\0';
+    }
+    snprintf(out, cap, "%s", buf);
+    return 1;
+}
+
 /* ---- Dispatch -------------------------------------------------------- */
 
 int flux_tool_exec(const char *name, const char *arg,
@@ -2430,6 +2490,7 @@ int flux_tool_exec(const char *name, const char *arg,
     if (strcmp(name, "semantic_search") == 0) return tool_semantic_search(arg, out, out_cap);
     if (strcmp(name, "memory_recall")   == 0) return tool_memory_recall(arg, out, out_cap);
     if (strcmp(name, "translate")       == 0) return tool_translate(arg, out, out_cap);
+    if (strcmp(name, "audit_list")      == 0) return tool_audit_list(arg, out, out_cap);
     return 0; /* unbekanntes Tool */
 }
 
@@ -2500,6 +2561,11 @@ const char *flux_tools_description(void) {
         "ARG: '<zielsprache>: <text>' (z.B. 'englisch: Guten Morgen') ODER "
         "'<text> nach <zielsprache>' (z.B. 'Guten Morgen nach englisch'). "
         "Zielsprache auf Deutsch benennbar (englisch/franzoesisch/spanisch/...).\n"
+        "  audit_list      -- Aktions-Protokoll anzeigen: die letzten von DIR (der KI) "
+        "ausgefuehrten Aktionen (Mail/SMS/Anruf/Einstellung) mit Zeit + Ergebnis, neueste "
+        "zuerst. Nutze dies bei Fragen wie 'was hast du gemacht', 'zeig das Aktions-Protokoll', "
+        "'welche Mails hast du verschickt'. EHRLICH: keine Aktion bisher -> wird so gemeldet. "
+        "ARG: Anzahl (optional, Default 15) -- es werden KEINE Geheimnisse protokolliert.\n"
         "Verwende Tools NUR wenn Echtzeitdaten benoetigt werden (Wetter, Dateien, Berechnung, "
         "aktuelle Infos via web_search usw.). "
         "Wenn der Nutzer dir persoenliche Infos nennt (Name, Geburtstag, Praeferenz), "

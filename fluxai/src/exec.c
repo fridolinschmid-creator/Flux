@@ -1,6 +1,7 @@
 #include "exec.h"
 #include "mail.h"
 #include "telephony.h"
+#include "audit.h"
 #include "../../common/flux_config.h"
 
 #include <stdio.h>
@@ -289,7 +290,27 @@ void flux_exec_action(const char *payload, char *out, size_t out_cap) {
     /* Einstellungs-Aktion: eigenes KEY/VALUE-Format, eigener Pfad mit
      * Allowlist + Wert-Validierung (maßgebliche Sicherheits-Schicht). */
     if (strcasecmp(type, "setting") == 0 || strcasecmp(type, "einstellung") == 0) {
-        exec_setting(line_end ? line_end + 1 : "", out, out_cap);
+        const char *sp = line_end ? line_end + 1 : "";
+        exec_setting(sp, out, out_cap);
+        /* Audit: Key/Value aus dem Payload ziehen (KEINE Geheimnisse -- die
+         * Allowlist im Daemon schliesst pin_hash/Passwoerter aus). */
+        char akey[64] = {0}, aval[128] = {0};
+        for (const char *q = sp; *q; ) {
+            const char *e = strchr(q, '\n');
+            size_t ln = e ? (size_t)(e - q) : strlen(q);
+            if (strncmp(q, "KEY:", 4) == 0) {
+                size_t vl = ln - 4; if (vl >= sizeof(akey)) vl = sizeof(akey) - 1;
+                memcpy(akey, q + 4, vl); akey[vl] = '\0';
+            } else if (strncmp(q, "VALUE:", 6) == 0) {
+                size_t vl = ln - 6; if (vl >= sizeof(aval)) vl = sizeof(aval) - 1;
+                memcpy(aval, q + 6, vl); aval[vl] = '\0';
+            }
+            q = e ? e + 1 : q + ln;
+        }
+        char adesc[256];
+        snprintf(adesc, sizeof(adesc), "%s = %s",
+                 akey[0] ? akey : "(unbekannt)", aval[0] ? aval : "(leer)");
+        flux_audit_log("Einstellung", adesc, out);
         return;
     }
 
@@ -349,13 +370,27 @@ void flux_exec_action(const char *payload, char *out, size_t out_cap) {
             snprintf(out, out_cap,
                      "Keine E-Mail-Adresse fuer \"%s\" gefunden. Lege den Kontakt "
                      "mit E-Mail an oder gib die Adresse direkt an.", to);
+            char d[400];
+            snprintf(d, sizeof(d), "an %s", to);
+            flux_audit_log("Mail", d, out);
             return;
         }
         flux_mail_send(to, subject, body, out, out_cap);
+        /* Audit: Empfaenger + Betreff -- NICHT den Mailtext (kann sensibel sein). */
+        char d[400];
+        snprintf(d, sizeof(d), "an %s, Betreff \"%s\"", to, subject[0] ? subject : "(kein)");
+        flux_audit_log("Mail", d, out);
     } else if (strcasecmp(type, "sms") == 0) {
         flux_telephony_send_sms(to, body, out, out_cap);
+        /* Audit: Empfaenger -- NICHT den SMS-Text (kann sensibel sein). */
+        char d[300];
+        snprintf(d, sizeof(d), "an %s", to);
+        flux_audit_log("SMS", d, out);
     } else if (strcasecmp(type, "call") == 0) {
         flux_telephony_call(to, out, out_cap);
+        char d[300];
+        snprintf(d, sizeof(d), "an %s", to);
+        flux_audit_log("Anruf", d, out);
     } else {
         snprintf(out, out_cap, "Unbekannter Aktionstyp '%s'.", type);
     }

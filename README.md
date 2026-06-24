@@ -126,6 +126,36 @@ bestehenden `brightness_set`-Verhalten. Reine Config-Keys (Theme,
 Router, TTS ...) werden in `/etc/flux/flux.conf` geschrieben und greifen
 sofort.
 
+### Aktions-Protokoll (Nachvollziehbarkeit)
+
+Flux protokolliert **jede** von der KI ausgefuehrte Aktion mit Aussenwirkung
+nach der Ausfuehrung in ein Audit-Log unter `/etc/flux/audit.txt` (append-only,
+`chmod 0600` wie die anderen `/etc/flux`-Dateien). So sieht der Nutzer
+nachvollziehbar, **was** die KI **wann** auf dem Geraet getan hat -- Vertrauen
+durch Transparenz. Eine Zeile pro Aktion, gleiches Format wie habits/memory:
+
+```
+[2026-06-24 14:23] Mail: an anna@example.com, Betreff "Termin" -> E-Mail gesendet.
+[2026-06-24 14:25] SMS: an +49170... -> SMS: kein Modem erkannt
+[2026-06-24 14:31] Einstellung: brightness = 50 -> Helligkeit auf 50% gesetzt.
+```
+
+Geloggt werden Mail-, SMS-, Anruf- und `setting`-Aktionen mit **Typ +
+Empfaenger/Key + Kurzbeschreibung + dem EHRLICHEN Ergebnis** (auch
+Fehlschlaege/Stubs, z.B. "kein Modem erkannt" -- nichts wird beschoenigt).
+
+**Bewusst NICHT geloggt (keine Geheimnisse):** der **vollstaendige Mailtext**
+und der **SMS-Text** (koennen sensibel sein), Passwoerter, PINs, API-Keys.
+Bei Mails wird nur Empfaenger + Betreff festgehalten, bei SMS/Anruf nur der
+Empfaenger.
+
+Lesbar ist das Protokoll ueber das KI-Tool **`audit_list`** ("Was hast du
+gemacht?", "Zeig das Aktions-Protokoll" -- neueste zuerst, ARG = Anzahl,
+Default 15). Es liest ausschliesslich `audit.txt` (kein beliebiger Pfad).
+Gab es noch keine Aktion, meldet es das ehrlich ("noch keine KI-Aktionen
+protokolliert") statt etwas zu erfinden. Einen eigenen Listen-**Screen** fuer
+das Protokoll gibt es (noch) nicht -- das Audit-Tool deckt den Lesepfad ab.
+
 ## Einstellungen & Dateien
 
 - **Einstellungen** (`FLUX_SCREEN_SETTINGS`): PIN-Code, SMTP-Zugangsdaten,
