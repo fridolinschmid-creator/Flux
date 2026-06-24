@@ -314,6 +314,9 @@ nvidia_model=...              # optional
 llamacpp_url=http://127.0.0.1:8080/v1/chat/completions  # Endpunkt des lokalen Servers
 llamacpp_model=local-model    # optional (welches Modell llama-server geladen hat)
 ai_router=off                 # off (Default) | on -- Hybrid-Router (s.u.)
+vision_backend=cloud          # cloud (Default) | local -- Bild-KI Cloud/lokaler VLM (s.u.)
+vlm_url=http://127.0.0.1:8081/v1/chat/completions  # Endpunkt des lokalen VLM-Servers
+vlm_model=moondream           # optional (welches Vision-Modell der VLM-Server geladen hat)
 tts=0                         # 0 (Default) | 1 -- KI-Antworten vorlesen (piper-Stub)
 wakeword=off                  # off (Default) | on -- Wake-Word "Hey Flux" (openWakeWord-Stub)
 ```
@@ -368,6 +371,40 @@ Cloud konfiguriert, bleibt es lokal. Welcher Pfad gewaehlt wurde, steht im
 Log (`/var/log/flux/flux.log`, „Router: lokal/Cloud-Pfad"). Lokale Intents
 (Uhrzeit, Akku, Datum) werden weiterhin **vor** dem Router ohne Netz
 beantwortet.
+
+#### Bildanalyse: Cloud oder lokaler VLM (offline)
+
+Das KI-Tool `image_analyze` („Was ist auf diesem Bild?", „Wo wurde das
+aufgenommen?") kann über **zwei austauschbare Backends** laufen -- gewaehlt
+über den Config-Key `vision_backend`:
+
+| Wert | Backend | Endpunkt | Modell |
+|---|---|---|---|
+| `cloud` (Default) | Anthropic Vision (Messages-API) | `api.anthropic.com` | (fest, Cloud) |
+| `local` | lokaler VLM-Server (OpenAI-kompatibel, Bild-Input) | `vlm_url` (Default `http://127.0.0.1:8081/v1/chat/completions`) | `vlm_model` (Default `moondream`) |
+
+Bei `local` läuft die Bildanalyse **local-first/offline**: das Bild
+verlässt das Gerät bzw. das lokale Netz nicht und es ist kein Cloud-Key
+nötig. Wie beim llama.cpp-Textanbieter bringt Flux **kein** VLM mit (kein
+Vendoring) -- du startest selbst einen Server, der Bild-Input im
+OpenAI-Vision-Format (`image_url` mit `data:`-URI) versteht. Geeignet sind
+z.B. kompakte Vision-Modelle wie **Moondream**, **SmolVLM** oder
+**MiniCPM-V**, etwa über `llama-server` mit einem Multimodal-Projektor:
+```bash
+# Beispiel: llama.cpp-Server mit Vision-Modell + Projektor auf Port 8081
+llama-server -m ./moondream.gguf --mmproj ./moondream-mmproj.gguf --port 8081
+```
+Umschalten in den Einstellungen unter **Bild-KI (Cloud/Lokal)** (Tipp
+schaltet Cloud/Lokal) oder per `/etc/flux/flux.conf` (`vision_backend`,
+`vlm_url`, `vlm_model`; env-Fallback `VLM_URL`). Der Cloud-Pfad bleibt
+unverändert der Standard.
+
+**Ehrlich:** Ist der lokale VLM-Server nicht erreichbar, meldet `fluxaid`
+das wahrheitsgemäß („Kein lokaler VLM-Server erkannt -- laeuft
+moondream/llama-server mit Vision unter <url>?") statt eine Bildbeschreibung
+zu erfinden. Der Pfad ist gegen einen **echten** lokalen VLM-Server bisher
+**nicht in QEMU verifiziert** (nur Compile-Test); die Andock-Stelle ist im
+Code (`fluxai/src/vision.c`, Funktion `vision_local`) klar markiert.
 
 ### E-Mail einrichten (Senden + Lesen)
 In den Einstellungen gibt es **einen** Eintrag „E-Mail Einstellungen": dort
