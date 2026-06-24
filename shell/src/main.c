@@ -23,6 +23,8 @@
 #include "camera.h"
 #include "voice.h"
 #include "voice_unlock.h"
+#include "wakeword.h"
+#include "tts.h"
 #include "wifi.h"
 #include "../../common/flux_protocol.h"
 #include "../../common/flux_config.h"
@@ -204,21 +206,12 @@ static void animate_slide_from_left(flux_fb_t *fb, uint32_t *old_buf) {
 }
 
 /* ---- Sprachausgabe (TTS) --------------------------------------------- */
-
+/* Das eigentliche TTS-Backend lebt jetzt austauschbar in tts.c
+ * (flux_tts_speak); main.c ruft nur noch durch. flux_tts_speak prueft den
+ * `tts`-Schalter UND ob ueberhaupt ein Audiogeraet/Backend (piper) vorhanden
+ * ist -- in QEMU `virt` ohne Audio bleibt es ehrlich lautlos (kein Fake). */
 static void tts_speak(const char *text) {
-    char enabled[8] = {0};
-    flux_config_get("tts", enabled, sizeof(enabled));
-    if (enabled[0] != '1') return;
-    if (!text || !*text) return;
-
-    pid_t p = fork();
-    if (p == 0) {
-        /* espeak bevorzugt (Embedded Linux), dann flite als Fallback */
-        execlp("espeak", "espeak", "-v", "de", "-s", "160", text, NULL);
-        execlp("flite",  "flite",  "-t", text, NULL);
-        _exit(0);
-    }
-    if (p > 0) waitpid(p, NULL, WNOHANG); /* Zombie sofort abraeumen */
+    flux_tts_speak(text);
 }
 
 /* ---- Screenshot --------------------------------------------------------- */
@@ -292,7 +285,7 @@ static void maybe_generate_greeting(void) {
 
 #define FLUX_PIN_LEN       4
 #define FLUX_FILES_MAX     12
-#define FLUX_SETTINGS_N    13   /* + WLAN + Stimme + KI-Router + Stimm-Entsperrung */
+#define FLUX_SETTINGS_N    14   /* + WLAN + Stimme + KI-Router + Stimm-Entsperrung + Wake-Word */
 #define VIEWER_CONTENT_MAX 32768
 
 typedef enum {
@@ -332,6 +325,7 @@ static const char *setting_keys[FLUX_SETTINGS_N] = {
     "theme",    /* teal|blau|lila|orange|gruen|rot */
     "auto_lock",      /* 0=aus, 30, 60, 120, 300 Sekunden */
     "tts",            /* 0=aus, 1=ein */
+    "wakeword",       /* off|on -- Wake-Word "Hey Flux", per Tap (Default aus) */
     "__voice_enroll", /* oeffnet Stimm-Einlern-Screen */
     "voice_unlock_lock", /* off|on -- Stimm-Entsperrung am Lockscreen (nur ohne PIN) */
 };
@@ -347,6 +341,7 @@ static const char *setting_labels[FLUX_SETTINGS_N] = {
     "Farbthema",    /* teal/blau/lila/orange/gruen/rot */
     "Auto-Sperre",  /* 0=aus */
     "Sprache (TTS)",/* 0=aus, 1=ein */
+    "Wake-Word (Hey Flux)", /* tippen schaltet aus/ein */
     "Stimme (2. Faktor)", /* Stimm-Entsperrung einlernen */
     "Stimm-Entsperrung am Lockscreen", /* tippen schaltet aus/ein (nur ohne PIN wirksam) */
 };
@@ -360,6 +355,7 @@ static const int setting_secret[FLUX_SETTINGS_N] = {
     0, /* wifi (zeigt Verbindung) */
     0, /* searxng_url */
     0, 0, 0,  /* theme/auto_lock/tts */
+    0,        /* wakeword */
     0,        /* voice_enroll */
     0,        /* voice_unlock_lock */
 };
@@ -377,6 +373,7 @@ static const int setting_icons[FLUX_SETTINGS_N] = {
     FLUX_SICON_THEME,  /* theme */
     FLUX_SICON_CLOCK,  /* auto_lock */
     FLUX_SICON_SPEAKER,/* tts */
+    FLUX_SICON_AI,     /* wakeword (Hey Flux -> KI-Assistent) */
     FLUX_SICON_LOCK,   /* voice_enroll */
     FLUX_SICON_LOCK,   /* voice_unlock_lock */
 };
@@ -509,6 +506,16 @@ static void load_settings_values(void) {
                       voice_unlock_enrolled() ? "eingelernt" :
                       voice_unlock_available() ? "nicht eingelernt" :
                       "kein Mikrofon (QEMU)");
+        } else if (strcmp(setting_keys[i], "wakeword") == 0) {
+            /* Ehrliche Anzeige: ist das Wake-Word an, aber kein Mikrofon
+             * vorhanden (QEMU), kann nichts gehoert werden -- das sagen wir
+             * direkt, statt einen Schein-Schalter "Ein" zu zeigen. */
+            if (strcmp(raw, "on") == 0)
+                snprintf(setting_values_buf[i], sizeof(setting_values_buf[0]), "%s",
+                          flux_voice_can_record() ? "Ein (Hey Flux)"
+                                                  : "Ein (inaktiv: kein Mikrofon)");
+            else
+                snprintf(setting_values_buf[i], sizeof(setting_values_buf[0]), "Aus");
         } else if (strcmp(setting_keys[i], "voice_unlock_lock") == 0) {
             /* Ehrliche Anzeige: bei gesetzter PIN ist die Stimm-Entsperrung am
              * Lockscreen wirkungslos (PIN bleibt unumgehbar) -- das sagen wir
@@ -1285,6 +1292,9 @@ int main(void) {
     /* Farbthema vor dem ersten Zeichnen laden */
     apply_theme();
     flux_ui_set_setting_icons(setting_icons);   /* Symbole fuer Einstellungen */
+    /* Wake-Word "Hey Flux": liest selbst den `wakeword`-Schalter und bleibt
+     * in QEMU ohne Mikrofon ehrlich inaktiv (siehe wakeword.c). */
+    flux_wakeword_init();
     maybe_generate_greeting();
     /* Kalender auf aktuellen Monat initialisieren */
     {
@@ -1324,9 +1334,15 @@ int main(void) {
     edit_target_t edit_target = EDIT_NONE;
     int edit_setting_index = 0;
 
+    /* Gesetzt, wenn die Aufnahme gestartet werden soll -- entweder per
+     * Mikrofon-Knopf (Tap) oder per Wake-Word "Hey Flux". Beide nutzen
+     * denselben Start-Pfad (start_voice:), kein zweiter Mechanismus. */
+    int want_voice_start = 0;
+
     draw_lock(&fb);
 
     while (1) {
+        want_voice_start = 0;
         fd_set rfds;
         FD_ZERO(&rfds);
         int maxfd = have_input ? flux_input_add_fds(&in, &rfds) : -1;
@@ -1378,8 +1394,26 @@ int main(void) {
                 int elapsed = (int)(time(NULL) - voice_start_t);
                 flux_ui_draw_voice_overlay(&fb, elapsed, voice_frame++);
             }
+            /* Wake-Word "Hey Flux": liefert in QEMU ohne Mikrofon nie einen
+             * Treffer (ehrlich, siehe wakeword.c). Auf echter Hardware mit
+             * Backend wuerde ein Treffer den Assistenten-Eingabemodus
+             * aktivieren -- exakt so, als haette der Nutzer den Mikrofon-Knopf
+             * gedrueckt. Kein zweiter Pfad: dafuer wird unten der bestehende
+             * Mikrofon-Start ueber das Flag want_voice_start wiederverwendet. */
+            if (!voice_active && flux_wakeword_poll()) {
+                /* Nur entsperrt reagieren -- nicht waehrend Lock/PIN/Verify. */
+                if (screen != FLUX_SCREEN_LOCK && screen != FLUX_SCREEN_PIN &&
+                    screen != FLUX_SCREEN_VOICE_VERIFY && !ai_ovl_active) {
+                    if (screen != FLUX_SCREEN_ASSISTANT) {
+                        screen = FLUX_SCREEN_ASSISTANT;
+                        flux_ui_draw_assistant(&fb, last_q, input_buf, answer_buf, 0);
+                    }
+                    want_voice_start = 1;   /* unten in den Mikrofon-Start */
+                }
+            }
             /* Zombie-Kinder (TTS-Prozesse) aufraumen */
             while (waitpid(-1, NULL, WNOHANG) > 0) {}
+            if (want_voice_start) goto start_voice;
             continue;
         }
         /* Jedes verarbeitete Event setzt den Inaktivitaets-Timer zurueck */
@@ -1827,6 +1861,16 @@ int main(void) {
                 char cur[16] = {0};
                 flux_config_get("ai_router", cur, sizeof(cur));
                 flux_config_set("ai_router", !strcmp(cur, "on") ? "off" : "on");
+                load_settings_values();
+                flux_ui_draw_settings(&fb, setting_labels, setting_values, FLUX_SETTINGS_N);
+            } else if (strcmp(setting_keys[idx], "wakeword") == 0) {
+                /* Wake-Word "Hey Flux" per Tap aus/ein schalten (Default: aus).
+                 * Danach das Modul neu initialisieren -- es bleibt in QEMU
+                 * ohne Mikrofon ehrlich inaktiv (siehe wakeword.c). */
+                char cur[16] = {0};
+                flux_config_get("wakeword", cur, sizeof(cur));
+                flux_config_set("wakeword", !strcmp(cur, "on") ? "off" : "on");
+                flux_wakeword_init();
                 load_settings_values();
                 flux_ui_draw_settings(&fb, setting_labels, setting_values, FLUX_SETTINGS_N);
             } else if (strcmp(setting_keys[idx], "voice_unlock_lock") == 0) {
@@ -2708,6 +2752,9 @@ int main(void) {
                 continue;
             }
             if (flux_ui_mic_hit(&fb, ev.x, ev.y)) {
+                /* Gemeinsamer Aufnahme-Start (auch vom Wake-Word genutzt). */
+            start_voice:
+                want_voice_start = 0;
                 if (!flux_voice_can_record()) {
                     snprintf(answer_buf, sizeof(answer_buf),
                              "Kein Mikrofon erkannt -- arecord oder ffmpeg wird benoetigt.");

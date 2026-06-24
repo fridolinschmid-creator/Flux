@@ -116,6 +116,53 @@ Mikrofon erkannt") statt eine Aufnahme zu simulieren. Geplant: lokales
 Systems) -- braucht zuerst ein virtuelles Audiogeraet in der QEMU-Konfig
 und ein gebuendeltes Modell im Rootfs-Overlay, siehe Roadmap.
 
+## Wake-Word "Hey Flux" -- ehrlicher, andockbarer Stub
+
+Unter **Einstellungen → "Wake-Word (Hey Flux)"** (Config-Key `wakeword`,
+Default **aus**) laesst sich ein Wake-Word einschalten. Die Idee: statt den
+Mikrofon-Knopf zu druecken, sagt man "Hey Flux" und der Assistent geht in den
+Spracheingabe-Modus -- **derselbe** Mechanismus wie der Mikrofon-Knopf, kein
+zweiter Pfad.
+
+Das Wake-Word gehoert bewusst zur immer-lauschenden **Shell**-Seite
+(`shell/src/wakeword.c`), nicht zum Daemon -- es soll lokal lauschen und den
+Assistenten wecken. **EHRLICH:** QEMU `virt` hat kein Mikrofon, also keinen
+Audio-Stream, in dem ein Wake-Word gesucht werden koennte. Das Modul bleibt
+dort ehrlich inaktiv (die Einstellung zeigt dann "Ein (inaktiv: kein
+Mikrofon)") und `flux_wakeword_poll()` liefert **nie** einen Treffer -- kein
+Fake-Trigger. Local-first/Privacy: kein Cloud-Wake-Word.
+
+`wakeword.c` ist als **eine austauschbare Datei** geschnitten
+(init/poll/deinit). Auf echter Hardware dockt ein on-device-Wake-Word an --
+**openWakeWord** (`hey_flux.onnx` via ONNX Runtime) oder **porcupine** --, das
+einen kontinuierlichen 16-kHz-Mikrofon-Stream durch ein kleines ONNX-Modell
+schickt und bei Aktivierung den Treffer meldet. UI, Settings-Toggle und die
+Verdrahtung in `main.c` bleiben dabei unveraendert.
+
+## Lokales TTS (Sprachausgabe) -- ehrlicher, andockbarer Stub
+
+Unter **Einstellungen → "Sprache (TTS)"** (Config-Key `tts`, Default aus)
+laesst sich die Sprachausgabe der KI-Antworten einschalten. Ist sie an, wird
+nach jeder Assistenten-Antwort `flux_tts_speak()` aufgerufen
+(`shell/src/tts.c`).
+
+**EHRLICH:** QEMU `virt` hat **kein Audiogeraet** -- es gibt nichts, worueber
+abgespielt werden koennte. `flux_tts_available()` prueft sowohl ein
+TTS-Backend (Binary) **als auch** ein echtes Wiedergabe-Geraet (`/dev/snd`);
+fehlt eines, bleibt die Ausgabe **lautlos** statt eine Wiedergabe
+vorzutaeuschen. Kein stiller Fake-Erfolg, kein Cloud-TTS (local-first).
+
+`tts.c` ist als **eine austauschbare Datei** geschnitten. Bevorzugtes echtes
+Backend ist **piper** (lokales neuronales TTS, offline) -- der Andock-Weg auf
+echter Hardware mit Audiogeraet ist im Code dokumentiert, z.B.:
+```bash
+echo "<text>" | piper --model de_DE-thorsten-medium.onnx --output_raw \
+              | aplay -r 22050 -f S16_LE -t raw -
+```
+espeak/flite sind als zusaetzliche (klassische, ebenfalls lokale)
+Andock-Optionen mitgesucht. Schnittstelle und Aufrufer bleiben beim
+Backend-Tausch unveraendert.
+
 ---
 
 ## Architektur
@@ -267,6 +314,8 @@ nvidia_model=...              # optional
 llamacpp_url=http://127.0.0.1:8080/v1/chat/completions  # Endpunkt des lokalen Servers
 llamacpp_model=local-model    # optional (welches Modell llama-server geladen hat)
 ai_router=off                 # off (Default) | on -- Hybrid-Router (s.u.)
+tts=0                         # 0 (Default) | 1 -- KI-Antworten vorlesen (piper-Stub)
+wakeword=off                  # off (Default) | on -- Wake-Word "Hey Flux" (openWakeWord-Stub)
 ```
 Alternativ per Umgebungsvariable (`FLUX_AI_API_KEY`, `DEEPSEEK_API_KEY`,
 `NVIDIA_API_KEY`, `LLAMACPP_URL`). Bei Rate-Limits (HTTP 429, z.B. NVIDIA)
@@ -392,7 +441,15 @@ austauschbare Score-Funktion vorgesehen und dockt ohne UI-Änderung an.
    Bestaetigungs-Dialog, echte SMTP-Mail~~ (siehe oben)
 6. Lokales `whisper.cpp` fuer den Mikrofon-Knopf -- braucht zuerst ein
    virtuelles Audiogeraet in `build/run-qemu.sh` (aktuell keins
-   vorhanden) und ein gebuendeltes Modell im Rootfs-Overlay
+   vorhanden) und ein gebuendeltes Modell im Rootfs-Overlay.
+   Verwandt (alle drei haengen am selben fehlenden QEMU-Audiogeraet):
+   - **Wake-Word "Hey Flux"** (`shell/src/wakeword.c`, Toggle `wakeword`):
+     ehrlicher Stub, ohne Mikrofon nie ein Treffer; echtes Backend
+     openWakeWord/porcupine (ONNX) dockt ohne UI-Aenderung an. Triggert den
+     gleichen Spracheingabe-Pfad wie der Mikrofon-Knopf.
+   - **Lokales TTS** (`shell/src/tts.c`, Toggle `tts`): ehrlicher Stub,
+     ohne Audiogeraet lautlos; echtes Backend **piper** (neuronal, lokal)
+     dockt ohne Aufruf-Aenderung an.
 7. Echtes Modem-Backend (ofono/ModemManager) fuer SMS/Anruf auf echter
    Hardware -- ersetzt nur `fluxai/src/telephony.c`, siehe oben
 8. ~~Stimm-Erkennung als zweiter Entsperr-Faktor~~ -- `voice_unlock.c/.h`
