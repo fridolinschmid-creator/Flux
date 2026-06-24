@@ -648,11 +648,40 @@ void flux_provider_ask(const char *question, char *out, size_t out_cap) {
 /* Schwelle, ab der eine Anfrage als "lang"/eher hart gilt. */
 #define FLUX_ROUTER_SHORT_LEN 200
 
+/* Akkustand (in %), ab dem der Akkusparmodus greift (darunter -> lokal). */
+#define FLUX_ROUTER_BATTERY_LOW 20
+
 /* 1 = Router aktiv (Config `ai_router` == "on"). */
 static int router_enabled(void) {
     char v[16] = {0};
     flux_config_get("ai_router", v, sizeof(v));
     return strcmp(v, "on") == 0;
+}
+
+/* 1 = Energie-/Akku-Logik aktiv (Config `ai_router_battery`, Default "on").
+ * Greift nur zusaetzlich, wenn der Router selbst aktiv ist. */
+static int router_battery_enabled(void) {
+    char v[16] = {0};
+    flux_config_get("ai_router_battery", v, sizeof(v));
+    /* Default an: nur ein ausdrueckliches "off" deaktiviert die Logik. */
+    return strcmp(v, "off") != 0;
+}
+
+/* Liest den Akkustand EHRLICH aus dem power_supply-Sysfs -- exakt derselbe
+ * Mechanismus wie in actions.c (try_battery). Gibt 0 zurueck und setzt
+ * *pct, wenn ein Sensor gelesen werden konnte; -1, wenn KEIN Akku-Sensor
+ * existiert (z.B. QEMU ohne power_supply-Knoten). In dem Fall wird NICHTS
+ * erfunden -- der Aufrufer behandelt die Energie-Logik dann als inaktiv. */
+static int router_battery_pct(long *pct) {
+    FILE *f = fopen("/sys/class/power_supply/battery/capacity", "r");
+    if (!f) f = fopen("/sys/class/power_supply/BAT0/capacity", "r");
+    if (!f) return -1;
+    long v = -1;
+    int ok = fscanf(f, "%ld", &v) == 1;
+    fclose(f);
+    if (!ok || v < 0) return -1;
+    if (pct) *pct = v;
+    return 0;
 }
 
 /* Prueft per kurzem HTTP-Kontakt, ob der lokale llama.cpp-Server erreichbar
@@ -712,6 +741,30 @@ static const char *router_pick(const char *question, char *path_out) {
 
     int hard = looks_hard(question);
 
+    /* Energie-bewusstes Routing: bei niedrigem Akku das leichtere LOKALE
+     * Modell bevorzugen (spart Energie/Netz) -- AUCH fuer harte Anfragen,
+     * sofern ein lokaler Server erreichbar ist. EHRLICH: gibt es keinen
+     * Akku-Sensor (QEMU!) oder ist der Wert nicht lesbar, ist die Logik
+     * inaktiv (kein erzwungener Akkusparmodus) und das Routing bleibt wie
+     * ohne dieses Feature. Ist kein lokaler Server erreichbar, kann der
+     * Akkusparmodus nichts ausweichen -> normal weiter (Hinweis im Log). */
+    if (router_battery_enabled()) {
+        long pct = -1;
+        if (router_battery_pct(&pct) == 0 && pct < FLUX_ROUTER_BATTERY_LOW) {
+            if (local_url[0] && local_server_reachable(local_url)) {
+                flux_log(FLUX_LOG_INFO,
+                         "Router: Akkusparmodus (%ld%% < %d%%) -> lokal",
+                         pct, FLUX_ROUTER_BATTERY_LOW);
+                *path_out = 'B'; /* lokal wegen Akku (eigener Marker) */
+                return "llamacpp";
+            }
+            /* Akku niedrig, aber kein lokaler Server -> nie ins Leere routen. */
+            flux_log(FLUX_LOG_INFO,
+                     "Router: Akku niedrig (%ld%%), aber kein lokaler Server "
+                     "erreichbar -> normales Routing", pct);
+        }
+    }
+
     /* Harte Anfrage und nutzbare Cloud -> Cloud. */
     if (hard && cloud_ok) { *path_out = 'C'; return cloud->id; }
 
@@ -736,19 +789,22 @@ void flux_provider_route(const char *question, char *out, size_t out_cap) {
     if (router_enabled()) {
         /* Ehrliche Transparenz: welcher Pfad wurde gewaehlt? */
         flux_log(FLUX_LOG_INFO, "Router: %s-Pfad (%s)",
-                 path == 'L' ? "lokal" : "Cloud",
+                 (path == 'L' || path == 'B') ? "lokal" : "Cloud",
                  pick ? pick : "Config-Anbieter");
     }
     provider_ask_with(pick, question, out, out_cap);
 
     /* Dezenter, ehrlicher Marker -- nur wenn Router aktiv UND per
-     * `ai_router_marker` = "on" gewuenscht. Default: kein Marker. */
+     * `ai_router_marker` = "on" gewuenscht. Default: kein Marker.
+     * 'B' = lokal wegen Akkusparmodus (transparent gekennzeichnet). */
     if (router_enabled()) {
         char m[16] = {0};
         flux_config_get("ai_router_marker", m, sizeof(m));
         if (strcmp(m, "on") == 0 && out[0]) {
             char tmp[64];
-            snprintf(tmp, sizeof(tmp), "%s ", path == 'L' ? "[lokal]" : "[cloud]");
+            const char *mk = path == 'B' ? "[lokal: Akkusparmodus]"
+                           : path == 'L' ? "[lokal]" : "[cloud]";
+            snprintf(tmp, sizeof(tmp), "%s ", mk);
             size_t pl = strlen(tmp), ol = strlen(out);
             if (pl + ol < out_cap) {
                 memmove(out + pl, out, ol + 1);

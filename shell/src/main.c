@@ -285,7 +285,7 @@ static void maybe_generate_greeting(void) {
 
 #define FLUX_PIN_LEN       4
 #define FLUX_FILES_MAX     12
-#define FLUX_SETTINGS_N    15   /* + WLAN + Stimme + KI-Router + Stimm-Entsperrung + Wake-Word + Bild-KI */
+#define FLUX_SETTINGS_N    16   /* + WLAN + Stimme + KI-Router + KI-Akkusparmodus + Stimm-Entsperrung + Wake-Word + Bild-KI */
 #define VIEWER_CONTENT_MAX 32768
 
 typedef enum {
@@ -317,6 +317,7 @@ static const char *setting_keys[FLUX_SETTINGS_N] = {
     "pin_hash",
     "ai_provider",      /* anthropic|deepseek|nvidia|llamacpp -- per Tap durchschalten */
     "ai_router",        /* off|on -- Hybrid-Router (einfach=lokal, hart=Cloud), per Tap */
+    "ai_router_battery",/* on|off -- bei niedrigem Akku lokal bevorzugen (Default on), per Tap */
     "vision_backend",   /* cloud|local -- Bild-KI Cloud (Anthropic) oder lokaler VLM, per Tap */
     "__active_key",     /* -> api_key | deepseek_key | nvidia_key | llamacpp_key */
     "__active_model",   /* -> anthropic_model | deepseek_model | nvidia_model | llamacpp_model */
@@ -334,6 +335,7 @@ static const char *setting_labels[FLUX_SETTINGS_N] = {
     "PIN-Code",
     "KI-Anbieter",          /* tippen schaltet anthropic/deepseek/nvidia */
     "KI-Router (lokal/Cloud)", /* tippen schaltet aus/ein */
+    "KI-Akkusparmodus",     /* tippen schaltet aus/ein (nur mit Router + Akku-Sensor) */
     "Bild-KI (Cloud/Lokal)", /* tippen schaltet Cloud (Anthropic) / lokaler VLM */
     "API-Key (Anbieter)",
     "Modell (Anbieter)",
@@ -351,6 +353,7 @@ static const int setting_secret[FLUX_SETTINGS_N] = {
     1, /* pin */
     0, /* provider */
     0, /* ai_router */
+    0, /* ai_router_battery */
     0, /* vision_backend */
     1, /* active key */
     0, /* active model */
@@ -368,6 +371,7 @@ static const int setting_icons[FLUX_SETTINGS_N] = {
     FLUX_SICON_LOCK,   /* pin */
     FLUX_SICON_AI,     /* ai_provider */
     FLUX_SICON_AI,     /* ai_router */
+    FLUX_SICON_AI,     /* ai_router_battery (Akkusparmodus) */
     FLUX_SICON_AI,     /* vision_backend (Bild-KI) */
     FLUX_SICON_KEY,    /* __active_key */
     FLUX_SICON_CHIP,   /* __active_model */
@@ -497,6 +501,26 @@ static void load_settings_values(void) {
         } else if (strcmp(setting_keys[i], "ai_router") == 0) {
             snprintf(setting_values_buf[i], sizeof(setting_values_buf[0]), "%s",
                       !strcmp(raw, "on") ? "Ein (einfach lokal, hart Cloud)" : "Aus");
+        } else if (strcmp(setting_keys[i], "ai_router_battery") == 0) {
+            /* Default an; nur ein ausdrueckliches "off" deaktiviert. Ehrlich:
+             * greift nur, wenn der Router aktiv ist UND ein echter Akku-Sensor
+             * existiert (in QEMU meist nicht -> dann inaktiv). */
+            int on = strcmp(raw, "off") != 0;
+            char router[16] = {0};
+            flux_config_get("ai_router", router, sizeof(router));
+            int has_batt = (access("/sys/class/power_supply/battery/capacity", R_OK) == 0 ||
+                            access("/sys/class/power_supply/BAT0/capacity", R_OK) == 0);
+            if (!on)
+                snprintf(setting_values_buf[i], sizeof(setting_values_buf[0]), "Aus");
+            else if (strcmp(router, "on") != 0)
+                snprintf(setting_values_buf[i], sizeof(setting_values_buf[0]),
+                         "Ein (inaktiv: KI-Router aus)");
+            else if (!has_batt)
+                snprintf(setting_values_buf[i], sizeof(setting_values_buf[0]),
+                         "Ein (inaktiv: kein Akku-Sensor)");
+            else
+                snprintf(setting_values_buf[i], sizeof(setting_values_buf[0]),
+                         "Ein (bei <20%% lokal)");
         } else if (strcmp(setting_keys[i], "vision_backend") == 0) {
             /* Bild-KI-Backend: Cloud (Anthropic) ist Default, "local" nutzt
              * den lokalen VLM-Server (vlm_url). */
@@ -1870,6 +1894,15 @@ int main(void) {
                 char cur[16] = {0};
                 flux_config_get("ai_router", cur, sizeof(cur));
                 flux_config_set("ai_router", !strcmp(cur, "on") ? "off" : "on");
+                load_settings_values();
+                flux_ui_draw_settings(&fb, setting_labels, setting_values, FLUX_SETTINGS_N);
+            } else if (strcmp(setting_keys[idx], "ai_router_battery") == 0) {
+                /* KI-Akkusparmodus per Tap aus/ein (Default: ein). Wirkt nur
+                 * zusaetzlich, wenn der Router aktiv ist und ein echter
+                 * Akku-Sensor existiert -- sonst ehrlich inaktiv (Anzeige). */
+                char cur[16] = {0};
+                flux_config_get("ai_router_battery", cur, sizeof(cur));
+                flux_config_set("ai_router_battery", !strcmp(cur, "off") ? "on" : "off");
                 load_settings_values();
                 flux_ui_draw_settings(&fb, setting_labels, setting_values, FLUX_SETTINGS_N);
             } else if (strcmp(setting_keys[idx], "vision_backend") == 0) {

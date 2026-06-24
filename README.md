@@ -314,6 +314,7 @@ nvidia_model=...              # optional
 llamacpp_url=http://127.0.0.1:8080/v1/chat/completions  # Endpunkt des lokalen Servers
 llamacpp_model=local-model    # optional (welches Modell llama-server geladen hat)
 ai_router=off                 # off (Default) | on -- Hybrid-Router (s.u.)
+ai_router_battery=on          # on (Default) | off -- bei niedrigem Akku lokal (s.u.)
 vision_backend=cloud          # cloud (Default) | local -- Bild-KI Cloud/lokaler VLM (s.u.)
 vlm_url=http://127.0.0.1:8081/v1/chat/completions  # Endpunkt des lokalen VLM-Servers
 vlm_model=moondream           # optional (welches Vision-Modell der VLM-Server geladen hat)
@@ -357,6 +358,7 @@ Einschalten in den Einstellungen unter **KI-Router (lokal/Cloud)** (Tipp
 schaltet Aus/Ein) oder per `/etc/flux/flux.conf`:
 ```ini
 ai_router=on            # off (Default) | on
+ai_router_battery=on    # on (Default) | off -- bei niedrigem Akku lokal bevorzugen
 ai_router_marker=off    # on -> dezenter Marker "[lokal]"/"[cloud]" vor der Antwort
 ```
 
@@ -371,6 +373,24 @@ Cloud konfiguriert, bleibt es lokal. Welcher Pfad gewaehlt wurde, steht im
 Log (`/var/log/flux/flux.log`, „Router: lokal/Cloud-Pfad"). Lokale Intents
 (Uhrzeit, Akku, Datum) werden weiterhin **vor** dem Router ohne Netz
 beantwortet.
+
+**Energie-bewusstes Routing (`ai_router_battery`, Default an).** Ist der
+Router aktiv und der Akkustand **niedrig (< 20 %)**, bevorzugt der Router
+das leichtere **lokale** Modell -- AUCH fuer „harte" Anfragen, sofern ein
+lokaler Server erreichbar ist. Das spart Energie und teure
+Cloud-Roundtrips. Im Log steht dann „Router: Akkusparmodus (…%) -> lokal";
+mit `ai_router_marker=on` wird die Antwort transparent mit
+„[lokal: Akkusparmodus]" gekennzeichnet. Schalten laesst sich das in den
+Einstellungen unter **KI-Akkusparmodus** oder per `ai_router_battery`.
+
+EHRLICH: Der Akkustand wird ueber denselben sysfs-Knoten gelesen wie die
+Akku-Anfrage (`/sys/class/power_supply/.../capacity`). **Gibt es keinen
+Akku-Sensor (z.B. QEMU) oder ist der Wert nicht lesbar, ist diese Logik
+einfach inaktiv** -- es wird kein Akkustand erfunden und kein Sparmodus
+erzwungen; das Routing bleibt dann wie ohne dieses Feature. Ist kein
+lokaler Server erreichbar, kann der Sparmodus nicht ausweichen und es geht
+normal zur Cloud (Log-Hinweis). In QEMU ist diese Funktion daher praktisch
+immer inaktiv und konnte dort **nicht** verifiziert werden.
 
 #### Bildanalyse: Cloud oder lokaler VLM (offline)
 
