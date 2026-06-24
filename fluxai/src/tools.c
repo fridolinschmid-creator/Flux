@@ -21,6 +21,8 @@
  *   memory_delete    -- Erinnerungen loeschen, ARG: Suchbegriff
  *   semantic_search  -- Lokale RAG-Suche ueber Notizen/Memory/Kalender/Kontakte/Journal,
  *                       lexikalische Overlap-Heuristik (kein ML), ARG: Suchbegriff/Frage
+ *   memory_recall    -- Personen-/zeitbezogene Erinnerungssuche im KI-Gedaechtnis,
+ *                       regelbasierter Entitaets-/Zeit-Index (kein ML), ARG: freie Frage
  *   ocr_scan         -- Foto eines Dokuments per lokalem OCR (VLM/tesseract) zu Text,
  *                       verkettbar mit doc_analyze, ARG: Bildpfad oder "letztes"
  */
@@ -1968,6 +1970,329 @@ static int tool_semantic_search(const char *arg, char *out, size_t cap) {
     return 1;
 }
 
+/* ---- memory_recall --------------------------------------------------- */
+/*
+ * Strukturiertes/temporales Gedaechtnis: durchsucht memory.txt nach PERSON
+ * und/oder ZEITRAUM und gibt die passenden Erinnerungen (Zeitstempel +
+ * Kategorie + Inhalt) zurueck. Beantwortet Fragen wie
+ * "Was hat Laura letzte Woche gesagt?".
+ *
+ * EHRLICHE EINORDNUNG: Dies ist ein REGELBASIERTER Entitaets-/Zeit-Index,
+ * KEIN Knowledge-Graph und KEINE Embeddings. Personen werden gegen bekannte
+ * Namen (Kategorie PERSON in memory.txt + Kontakte) abgeglichen, Zeitausdruecke
+ * regelbasiert in einen Datumsbereich aufgeloest, der Rest als lexikalischer
+ * Term-Overlap gewertet (wie semantic_search). Was nicht erkannt wird, wird
+ * EHRLICH ignoriert statt geraten.
+ *
+ * ANDOCK-STELLE fuer ein echtes Backend: An die Stelle des regelbasierten
+ * Entitaets-Abgleichs (mr_known_persons) bzw. der lexikalischen Score-Funktion
+ * (sem_score) wuerde ein echter Entitaets-/Knowledge-Graph oder ein
+ * Embedding-Memory-Backend (z.B. MemX/Mem0-artig, Personen als Knoten,
+ * zeitlich indizierte Episoden) andocken -- Zeitfilter, Top-N und Ausgabe
+ * blieben gleich.
+ *
+ * Unterstuetzte deutsche Zeitausdruecke (bewusst ueberschaubar):
+ *   "heute", "gestern", "vorgestern",
+ *   "diese woche", "letzte woche"/"vorige woche",
+ *   "letzten montag".."letzten sonntag" (Wochentag der Vorwoche),
+ *   "diesen monat", "letzten monat"/"vorigen monat", "dieses jahr",
+ *   "im januar".."im dezember" (Monat im aktuellen Jahr),
+ *   ein konkretes Datum "YYYY-MM-DD" oder Monat "YYYY-MM".
+ * Alles andere -> kein Zeitfilter (ehrlich: nicht geraten).
+ */
+
+/* Sekunden seit Epoch fuer 00:00 lokal des Datums (y,m,d). */
+static time_t mr_day_start(int y, int m, int d) {
+    struct tm tm; memset(&tm, 0, sizeof(tm));
+    tm.tm_year = y - 1900; tm.tm_mon = m - 1; tm.tm_mday = d;
+    tm.tm_isdst = -1;
+    return mktime(&tm);
+}
+
+/* Loest einen deutschen Zeitausdruck im lowercase-Query in [from,to) auf.
+ * Gibt 1 zurueck wenn ein Ausdruck erkannt wurde (dann sind from/to gesetzt),
+ * sonst 0 (kein Zeitfilter). 'to' ist exklusiv (Ende des Bereichs + 1 Tag). */
+static const char *MR_WD[] = { "sonntag","montag","dienstag","mittwoch",
+                               "donnerstag","freitag","samstag" };
+/* Monatsname -> Monatszahl (maerz/märz beide -> 3). */
+static const struct { const char *name; int mm; } MR_MON[] = {
+    {"januar",1},{"februar",2},{"maerz",3},{"märz",3},{"april",4},{"mai",5},
+    {"juni",6},{"juli",7},{"august",8},{"september",9},{"oktober",10},
+    {"november",11},{"dezember",12}
+};
+static int mr_parse_time(const char *q, time_t *from, time_t *to) {
+    time_t now = time(NULL);
+    struct tm tn; localtime_r(&now, &tn);
+    int Y = tn.tm_year + 1900, M = tn.tm_mon + 1, D = tn.tm_mday;
+    time_t today0 = mr_day_start(Y, M, D);
+
+    /* konkretes ISO-Datum oder Monat irgendwo im Query */
+    {
+        const char *p = q;
+        while (*p) {
+            int yy, mm, dd;
+            if (sscanf(p, "%4d-%2d-%2d", &yy, &mm, &dd) == 3 &&
+                yy > 1900 && mm >= 1 && mm <= 12 && dd >= 1 && dd <= 31) {
+                *from = mr_day_start(yy, mm, dd);
+                *to   = *from + 86400;
+                return 1;
+            }
+            if (sscanf(p, "%4d-%2d", &yy, &mm) == 2 &&
+                yy > 1900 && mm >= 1 && mm <= 12 && p[7] != '-') {
+                *from = mr_day_start(yy, mm, 1);
+                int ny = (mm == 12) ? yy + 1 : yy;
+                int nm = (mm == 12) ? 1 : mm + 1;
+                *to = mr_day_start(ny, nm, 1);
+                return 1;
+            }
+            p++;
+        }
+    }
+
+    if (strstr(q, "vorgestern")) { *from = today0 - 2*86400; *to = today0 - 86400; return 1; }
+    if (strstr(q, "gestern"))    { *from = today0 - 86400;   *to = today0;          return 1; }
+    if (strstr(q, "heute"))      { *from = today0;           *to = today0 + 86400;  return 1; }
+
+    if (strstr(q, "letzte woche") || strstr(q, "vorige woche") ||
+        strstr(q, "letzter woche")) {
+        /* Montag dieser Woche (Mo=Start), dann eine Woche zurueck */
+        int wd = (tn.tm_wday + 6) % 7; /* 0=Mo */
+        time_t mon_this = today0 - wd * 86400;
+        *from = mon_this - 7*86400; *to = mon_this; return 1;
+    }
+    if (strstr(q, "diese woche") || strstr(q, "dieser woche")) {
+        int wd = (tn.tm_wday + 6) % 7;
+        time_t mon_this = today0 - wd * 86400;
+        *from = mon_this; *to = mon_this + 7*86400; return 1;
+    }
+    /* "letzten <wochentag>": dieser Wochentag in der Vorwoche */
+    if (strstr(q, "letzten") || strstr(q, "letzte ") || strstr(q, "vorigen")) {
+        for (int i = 0; i < 7; i++) {
+            if (strstr(q, MR_WD[i])) {
+                int wd = (tn.tm_wday + 6) % 7;          /* 0=Mo heute */
+                int target = (i + 6) % 7;               /* 0=Mo Zieltag */
+                time_t mon_this = today0 - wd * 86400;
+                time_t day = mon_this - 7*86400 + target * 86400;
+                *from = day; *to = day + 86400; return 1;
+            }
+        }
+    }
+
+    if (strstr(q, "letzten monat") || strstr(q, "vorigen monat") ||
+        strstr(q, "letzter monat")) {
+        int pm = (M == 1) ? 12 : M - 1;
+        int py = (M == 1) ? Y - 1 : Y;
+        *from = mr_day_start(py, pm, 1);
+        *to   = mr_day_start(Y, M, 1);
+        return 1;
+    }
+    if (strstr(q, "diesen monat") || strstr(q, "dieser monat")) {
+        *from = mr_day_start(Y, M, 1);
+        int nm = (M == 12) ? 1 : M + 1; int ny = (M == 12) ? Y + 1 : Y;
+        *to = mr_day_start(ny, nm, 1);
+        return 1;
+    }
+    if (strstr(q, "dieses jahr")) {
+        *from = mr_day_start(Y, 1, 1); *to = mr_day_start(Y + 1, 1, 1); return 1;
+    }
+    /* "im <monat>": Monat im aktuellen Jahr (nur wenn "im " vorangeht, damit
+     * z.B. "mai" als Name nicht faelschlich triggert). */
+    if (strstr(q, "im ")) {
+        for (int i = 0; i < (int)(sizeof(MR_MON)/sizeof(MR_MON[0])); i++) {
+            if (strstr(q, MR_MON[i].name)) {
+                int mm = MR_MON[i].mm;
+                *from = mr_day_start(Y, mm, 1);
+                int nm = (mm == 12) ? 1 : mm + 1; int ny = (mm == 12) ? Y + 1 : Y;
+                *to = mr_day_start(ny, nm, 1);
+                return 1;
+            }
+        }
+    }
+    return 0;
+}
+
+/* Sammelt bekannte Personennamen (lowercase) aus memory.txt (PERSON-Eintraege,
+ * erstes Wort des Inhalts) und aus contacts.txt (erstes CSV-Feld, erstes Wort).
+ * Schreibt bis zu max Namen nach names[][32]. Gibt die Anzahl zurueck. */
+static int mr_lower_word(const char *src, char *dst, size_t cap) {
+    /* erstes Wort (Buchstaben) aus src nach dst, lowercase */
+    size_t o = 0;
+    const char *p = src;
+    while (*p == ' ' || *p == '\t') p++;
+    while (*p && o + 1 < cap) {
+        unsigned char c = (unsigned char)*p;
+        if ((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || c >= 0x80) {
+            dst[o++] = (c >= 'A' && c <= 'Z') ? (char)(c + 32) : (char)c;
+            p++;
+        } else break;
+    }
+    dst[o] = '\0';
+    return (int)o;
+}
+
+static int mr_known_persons(char names[][32], int max) {
+    int n = 0;
+    /* PERSON-Eintraege aus memory.txt: "[ts] PERSON: Name ..." */
+    FILE *f = fopen(MEMORY_PATH, "r");
+    if (f) {
+        char line[256];
+        while (fgets(line, sizeof(line), f) && n < max) {
+            const char *cat = strstr(line, "] ");
+            if (!cat) continue;
+            cat += 2;
+            if (strncmp(cat, "PERSON:", 7) != 0) continue;
+            char w[32];
+            if (mr_lower_word(cat + 7, w, sizeof(w)) >= 2) {
+                int dup = 0;
+                for (int i = 0; i < n; i++) if (strcmp(names[i], w) == 0) dup = 1;
+                if (!dup) snprintf(names[n++], 32, "%s", w);
+            }
+        }
+        fclose(f);
+    }
+    /* Kontakte: erstes CSV-Feld */
+    f = fopen("/etc/flux/contacts.txt", "r");
+    if (f) {
+        char line[256];
+        while (fgets(line, sizeof(line), f) && n < max) {
+            if (line[0] == '#' || line[0] == '\n') continue;
+            char w[32];
+            if (mr_lower_word(line, w, sizeof(w)) >= 2) {
+                int dup = 0;
+                for (int i = 0; i < n; i++) if (strcmp(names[i], w) == 0) dup = 1;
+                if (!dup) snprintf(names[n++], 32, "%s", w);
+            }
+        }
+        fclose(f);
+    }
+    return n;
+}
+
+/* Parst den fuehrenden Zeitstempel "[YYYY-MM-DD HH:MM]" einer memory.txt-Zeile
+ * zu time_t (Tagesbeginn genuegt fuer Bereichsfilter). Gibt 1 bei Erfolg. */
+static int mr_line_time(const char *line, time_t *t) {
+    int y, m, d, hh, mm;
+    if (line[0] != '[') return 0;
+    if (sscanf(line + 1, "%4d-%2d-%2d %2d:%2d", &y, &m, &d, &hh, &mm) < 3) return 0;
+    struct tm tm; memset(&tm, 0, sizeof(tm));
+    tm.tm_year = y - 1900; tm.tm_mon = m - 1; tm.tm_mday = d;
+    tm.tm_hour = hh; tm.tm_min = mm; tm.tm_isdst = -1;
+    *t = mktime(&tm);
+    return 1;
+}
+
+struct mr_hit { int score; char line[224]; };
+
+static int tool_memory_recall(const char *arg, char *out, size_t cap) {
+    if (!arg || !*arg) {
+        snprintf(out, cap, "Fehler: keine Anfrage angegeben (z.B. 'was hat laura letzte woche gesagt')");
+        return 1;
+    }
+
+    /* lowercase-Kopie der Anfrage fuer Person-/Zeit-Erkennung */
+    char ql[512]; size_t qi = 0;
+    for (const char *p = arg; *p && qi < sizeof(ql) - 1; p++, qi++)
+        ql[qi] = (*p >= 'A' && *p <= 'Z') ? (char)(*p + 32) : *p;
+    ql[qi] = '\0';
+
+    /* 1. Zeitausdruck aufloesen (optional) */
+    time_t tfrom = 0, tto = 0;
+    int have_time = mr_parse_time(ql, &tfrom, &tto);
+
+    /* 2. Person erkennen (Abgleich mit bekannten Namen) */
+    char persons[64][32];
+    int np = mr_known_persons(persons, 64);
+    char matched_person[32] = {0};
+    for (int i = 0; i < np; i++) {
+        if (strstr(ql, persons[i])) {
+            memcpy(matched_person, persons[i], sizeof(matched_person));
+            matched_person[sizeof(matched_person)-1] = '\0';
+            break;
+        }
+    }
+
+    /* 3. Reststichwoerter tokenisieren (wie semantic_search) */
+    char qtoks[SEM_MAX_TOK][SEM_TOK_LEN];
+    int nq = sem_tokenize(arg, qtoks, SEM_MAX_TOK);
+
+    /* memory.txt zeilenweise filtern + scoren */
+    FILE *f = fopen(MEMORY_PATH, "r");
+    if (!f) {
+        snprintf(out, cap, "Noch keine Erinnerungen gespeichert (%s ist leer).", MEMORY_PATH);
+        return 1;
+    }
+    #define MR_TOP 5
+    struct mr_hit top[MR_TOP];
+    int ntop = 0;
+    char line[256];
+    while (fgets(line, sizeof(line), f)) {
+        size_t ll = strlen(line);
+        while (ll > 0 && (line[ll-1] == '\n' || line[ll-1] == '\r')) line[--ll] = '\0';
+        if (ll == 0 || line[0] == '#') continue;
+
+        /* Zeitfilter */
+        if (have_time) {
+            time_t lt;
+            if (!mr_line_time(line, &lt)) continue;      /* ohne Zeitstempel: raus */
+            if (lt < tfrom || lt >= tto) continue;
+        }
+
+        /* Score: Person-Match (stark) + Stichwort-Overlap */
+        int sc = 0;
+        char ll_low[256]; size_t i2 = 0;
+        for (const char *p = line; *p && i2 < sizeof(ll_low) - 1; p++, i2++)
+            ll_low[i2] = (*p >= 'A' && *p <= 'Z') ? (char)(*p + 32) : *p;
+        ll_low[i2] = '\0';
+        if (matched_person[0]) {
+            if (strstr(ll_low, matched_person)) sc += 5;
+            else continue;   /* Person verlangt, aber nicht in dieser Zeile -> raus */
+        }
+        sc += sem_score(qtoks, nq, line);
+        /* Wenn weder Person noch Zeit noch Stichwort matchte: ueberspringen,
+         * ausser es gibt einen reinen Zeitfilter (dann zaehlt der Treffer). */
+        if (sc == 0 && !have_time) continue;
+        if (sc == 0) sc = 1; /* im Zeitbereich, ohne Stichwort -> minimal werten */
+
+        if (ntop < MR_TOP || sc > top[MR_TOP-1].score) {
+            int pos = (ntop < MR_TOP) ? ntop++ : MR_TOP - 1;
+            while (pos > 0 && top[pos-1].score < sc) { top[pos] = top[pos-1]; pos--; }
+            top[pos].score = sc;
+            snprintf(top[pos].line, sizeof(top[pos].line), "%s", line);
+        }
+    }
+    fclose(f);
+
+    /* Beschreibung des Filters fuer ehrliche Rueckmeldung */
+    char filt[160]; size_t fp = 0;
+    if (matched_person[0])
+        fp += (size_t)snprintf(filt + fp, sizeof(filt) - fp, "Person '%s'", matched_person);
+    if (have_time) {
+        struct tm tf; localtime_r(&tfrom, &tf);
+        char fs[16]; strftime(fs, sizeof(fs), "%Y-%m-%d", &tf);
+        time_t tlast = tto - 86400; struct tm tl; localtime_r(&tlast, &tl);
+        char ls[16]; strftime(ls, sizeof(ls), "%Y-%m-%d", &tl);
+        fp += (size_t)snprintf(filt + fp, sizeof(filt) - fp, "%sZeitraum %s..%s",
+                               fp ? ", " : "", fs, ls);
+    }
+    if (fp == 0) snprintf(filt, sizeof(filt), "Stichwortsuche");
+
+    if (ntop == 0) {
+        snprintf(out, cap,
+                 "Nichts Passendes zu %s in deinen Erinnerungen gefunden.", filt);
+        return 1;
+    }
+
+    size_t pos = snprintf(out, cap,
+        "Erinnerungen (%s, regelbasiert, beste %d):\n", filt, ntop);
+    for (int i = 0; i < ntop && pos + 8 < cap; i++) {
+        int w = snprintf(out + pos, cap - pos, "  %s\n", top[i].line);
+        if (w < 0) break;
+        pos += (size_t)w;
+        if (pos >= cap) { pos = cap - 1; out[pos] = '\0'; break; }
+    }
+    return 1;
+}
+
 /* ---- Dispatch -------------------------------------------------------- */
 
 int flux_tool_exec(const char *name, const char *arg,
@@ -2012,6 +2337,7 @@ int flux_tool_exec(const char *name, const char *arg,
     if (strcmp(name, "doc_analyze")   == 0) return tool_doc_analyze(arg, out, out_cap);
     if (strcmp(name, "ocr_scan")      == 0) return tool_ocr_scan(arg, out, out_cap);
     if (strcmp(name, "semantic_search") == 0) return tool_semantic_search(arg, out, out_cap);
+    if (strcmp(name, "memory_recall")   == 0) return tool_memory_recall(arg, out, out_cap);
     return 0; /* unbekanntes Tool */
 }
 
@@ -2070,6 +2396,13 @@ const char *flux_tools_description(void) {
         "Kalender, Kontakte, Journal). Nutze dies bei 'such in meinen Notizen/Erinnerungen/"
         "im Journal nach ...' oder 'was weiss mein Geraet ueber ...'. Lexikalische Offline-"
         "Suche, gibt die besten passenden Snippets mit Quelle zurueck. ARG: Suchbegriff/Frage\n"
+        "  memory_recall   -- PERSONEN-/ZEITbezogene Erinnerungssuche im KI-Gedaechtnis "
+        "(memory.txt). Nutze dies bei Fragen wie 'was hat laura letzte woche gesagt', "
+        "'was weiss ich ueber max von gestern', 'erinnerungen aus diesem monat'. "
+        "Filtert nach erkannter Person UND/ODER Zeitausdruck (heute/gestern/letzte woche/"
+        "letzten montag/diesen monat/letzten monat/im maerz/YYYY-MM-DD) und gibt die "
+        "passenden Eintraege mit Zeitstempel + Kategorie zurueck. Regelbasiert, offline. "
+        "ARG: freie Frage (z.B. 'was hat laura letzte woche gesagt')\n"
         "Verwende Tools NUR wenn Echtzeitdaten benoetigt werden (Wetter, Dateien, Berechnung, "
         "aktuelle Infos via web_search usw.). "
         "Wenn der Nutzer dir persoenliche Infos nennt (Name, Geburtstag, Praeferenz), "

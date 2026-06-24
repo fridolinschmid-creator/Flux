@@ -504,6 +504,8 @@ static int parse_tool_call(const char *response,
     "(Namen, Beziehungen, Geburtstage, Praeferenzen, Preise, wichtige Fakten), " \
     "speichere diese SOFORT mit dem memory_save-Tool, bevor du antwortest. " \
     "Bestaetigung: 'Notiert.' oder 'Gespeichert.' genuegt. " \
+    "Bei personen-/zeitbezogenen Erinnerungsfragen (z.B. 'was hat Laura letzte " \
+    "Woche gesagt') nutze das memory_recall-Tool. " \
     "Du kannst MEHRERE Tools nacheinander aufrufen -- eines pro Antwort. " \
     "Enthaelt eine Anfrage mehrere Aufgaben (z.B. Wecker stellen UND eine Mail " \
     "schreiben), erledige JEDE Teilaufgabe. Fuehre eindeutige Aufgaben wie " \

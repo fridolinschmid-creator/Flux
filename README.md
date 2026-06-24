@@ -499,6 +499,21 @@ keine Cloud — alles bleibt auf dem Gerät. Ein echtes Embedding-Backend
 (z. B. nomic-embed / all-MiniLM via llama-server `/embeddings`) ist als
 austauschbare Score-Funktion vorgesehen und dockt ohne UI-Änderung an.
 
+### Personen-/zeitbezogene Erinnerungssuche (`memory_recall`)
+Das KI-Tool `memory_recall` durchsucht das KI-Gedächtnis
+(`/etc/flux/memory.txt`) gezielt nach **Person** und/oder **Zeitraum** und
+beantwortet Fragen wie „Was hat Laura letzte Woche gesagt?". Personen werden
+gegen bekannte Namen (Kategorie `PERSON` + Kontakte) abgeglichen, deutsche
+Zeitausdrücke (`heute`, `gestern`, `letzte woche`, `letzten montag`,
+`diesen monat`, `letzten monat`, `im märz`, `YYYY-MM-DD`) regelbasiert in einen
+Datumsbereich aufgelöst, der Rest als lexikalischer Term-Overlap gewertet.
+**Ehrlich:** Das ist ein **regelbasierter Entitäts-/Zeit-Index**, kein
+Knowledge-Graph und keine Embeddings; nicht erkannte Zeitausdrücke werden
+ignoriert statt geraten, und ohne Treffer gibt es eine wahrheitsgemäße Meldung.
+Ein echtes Graph-/Embedding-Memory-Backend (MemX/Mem0-artig) dockt an derselben
+Stelle an (Personen-Abgleich bzw. Score-Funktion), ohne dass sich Zeitfilter
+oder Ausgabe ändern.
+
 ---
 
 ## Roadmap
