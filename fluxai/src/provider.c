@@ -1,6 +1,7 @@
 #include "provider.h"
 #include "tools.h"
 #include "../../common/flux_config.h"
+#include "../../common/flux_log.h"
 
 #include <curl/curl.h>
 #include <time.h>
@@ -96,12 +97,21 @@ static void resolve_url(const flux_provider_def_t *p, char *url_out, size_t url_
     }
 }
 
-/* Ermittelt den aktiven Anbieter, dessen API-Key und Modell. */
-static const flux_provider_def_t *resolve_provider(char *key_out, size_t key_cap,
-                                                   char *model_out, size_t model_cap) {
-    char sel[64] = {0};
-    flux_config_get("ai_provider", sel, sizeof(sel));
-    const flux_provider_def_t *p = provider_by_id(sel);
+/* Ermittelt einen Anbieter (per override_id oder Config `ai_provider`),
+ * dessen API-Key und Modell. override_id != NULL erzwingt einen bestimmten
+ * Anbieter -- so kann der Hybrid-Router pro Anfrage einen anderen waehlen,
+ * ohne die fest gewaehlte Einstellung zu veraendern. */
+static const flux_provider_def_t *resolve_provider_id(const char *override_id,
+                                                      char *key_out, size_t key_cap,
+                                                      char *model_out, size_t model_cap) {
+    const flux_provider_def_t *p;
+    if (override_id && *override_id) {
+        p = provider_by_id(override_id);
+    } else {
+        char sel[64] = {0};
+        flux_config_get("ai_provider", sel, sizeof(sel));
+        p = provider_by_id(sel);
+    }
 
     if (key_out && key_cap) {
         key_out[0] = '\0';
@@ -121,6 +131,12 @@ static const flux_provider_def_t *resolve_provider(char *key_out, size_t key_cap
             snprintf(model_out, model_cap, "%s", p->default_model);
     }
     return p;
+}
+
+/* Kurzform: aktiver Anbieter laut Config (kein Override). */
+static const flux_provider_def_t *resolve_provider(char *key_out, size_t key_cap,
+                                                   char *model_out, size_t model_cap) {
+    return resolve_provider_id(NULL, key_out, key_cap, model_out, model_cap);
 }
 
 int flux_provider_active(char *key_out, size_t key_cap,
@@ -536,12 +552,15 @@ static void build_system_prompt(char *system_prompt, size_t cap) {
     }
 }
 
-void flux_provider_ask(const char *question, char *out, size_t out_cap) {
+/* Beantwortet eine Frage ueber einen bestimmten Anbieter (override_id) oder,
+ * falls override_id NULL ist, ueber den in der Config gewaehlten Anbieter. */
+static void provider_ask_with(const char *override_id,
+                              const char *question, char *out, size_t out_cap) {
     char api_key[512] = {0};
     char model[200]   = {0};
     char url[512]     = {0};
     const flux_provider_def_t *prov =
-        resolve_provider(api_key, sizeof(api_key), model, sizeof(model));
+        resolve_provider_id(override_id, api_key, sizeof(api_key), model, sizeof(model));
     resolve_url(prov, url, sizeof(url));
 
     if (!prov->local && !api_key[0]) {
@@ -603,4 +622,138 @@ void flux_provider_ask(const char *question, char *out, size_t out_cap) {
     }
 
     ctx_add(question, out);
+}
+
+/* Oeffentlicher Einstieg fuer Hintergrund-Aufrufer (Journal, Habits,
+ * Proactive): immer der in der Config gewaehlte Anbieter, kein Routing. */
+void flux_provider_ask(const char *question, char *out, size_t out_cap) {
+    provider_ask_with(NULL, question, out, out_cap);
+}
+
+/* ============================================================================
+ * Hybrid-Router (lokal vs. Cloud) -- bewusst SIMPLE, ehrliche Heuristik.
+ *
+ * Idee (Local-first): einfache, kurze, plauder-/wissensartige Anfragen vom
+ * lokalen llama.cpp-Server beantworten lassen; "harte" Anfragen (lang, Code,
+ * Tool-/Aktionsverdacht) an den konfigurierten Cloud-Anbieter eskalieren.
+ *
+ * KEIN gelerntes Routing, keine Magie -- nur Laenge + Schluesselwoerter.
+ * Aktiv NUR wenn Config-Key `ai_router` = "on" ist. Ist er aus (Default),
+ * passiert hier nichts und es bleibt beim fest gewaehlten Anbieter.
+ *
+ * Fallback ist ehrlich: ist der lokale Server nicht erreichbar, geht es zur
+ * Cloud; ist keine Cloud konfiguriert, bleibt es lokal. Nie faken.
+ * ========================================================================== */
+
+/* Schwelle, ab der eine Anfrage als "lang"/eher hart gilt. */
+#define FLUX_ROUTER_SHORT_LEN 200
+
+/* 1 = Router aktiv (Config `ai_router` == "on"). */
+static int router_enabled(void) {
+    char v[16] = {0};
+    flux_config_get("ai_router", v, sizeof(v));
+    return strcmp(v, "on") == 0;
+}
+
+/* Prueft per kurzem HTTP-Kontakt, ob der lokale llama.cpp-Server erreichbar
+ * ist. Gibt 1 zurueck, wenn eine Antwort kommt (egal welcher Status), 0 bei
+ * Verbindungsfehler. Kurzer Timeout, damit das Routing nicht haengt. */
+static int local_server_reachable(const char *url) {
+    if (!url || !url[0]) return 0;
+    CURL *curl = curl_easy_init();
+    if (!curl) return 0;
+    char respbuf[256];
+    struct membuf mb = { .data = respbuf, .len = 0, .cap = sizeof(respbuf) };
+    curl_easy_setopt(curl, CURLOPT_URL, url);
+    curl_easy_setopt(curl, CURLOPT_NOBODY, 1L);   /* HEAD-artig, nur Erreichbarkeit */
+    curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, curl_write_cb);
+    curl_easy_setopt(curl, CURLOPT_WRITEDATA, &mb);
+    curl_easy_setopt(curl, CURLOPT_TIMEOUT, 2L);
+    curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT, 2L);
+    CURLcode res = curl_easy_perform(curl);
+    curl_easy_cleanup(curl);
+    return res == CURLE_OK;
+}
+
+/* Schaetzt, ob eine Anfrage "hart" ist (=> Cloud). Bewusst grob:
+ * lange Anfragen ODER bestimmte Schluesselwoerter (Code/Analyse/...). */
+static int looks_hard(const char *q) {
+    if (!q) return 0;
+    if (strlen(q) >= FLUX_ROUTER_SHORT_LEN) return 1;
+    static const char *kw[] = {
+        "code", "programmier", "schreib mir ein", "funktion", "skript",
+        "analysiere", "analyse", "ausfuehrlich", "ausführlich", "lang",
+        "debug", "fehler im", "uebersetze den", "übersetze den", NULL
+    };
+    for (int i = 0; kw[i]; i++)
+        if (strcasestr(q, kw[i])) return 1;
+    return 0;
+}
+
+/* Waehlt fuer DIESE Anfrage die Provider-id (oder NULL fuer "Config-Default").
+ * Schreibt in *path_out 'L' (lokal) oder 'C' (cloud) fuer einen optionalen,
+ * ehrlichen Marker. Die eigentliche Anbieter-Aufloesung passiert weiter ueber
+ * resolve_provider_id -- der Router waehlt nur die id. */
+static const char *router_pick(const char *question, char *path_out) {
+    *path_out = 'C';
+    if (!router_enabled()) return NULL; /* Router aus -> Config-Anbieter */
+
+    /* Lokalen Anbieter und seinen Endpunkt aufloesen. */
+    const flux_provider_def_t *local = provider_by_id("llamacpp");
+    char local_url[512] = {0};
+    resolve_url(local, local_url, sizeof(local_url));
+
+    /* Konfigurierten (Cloud-)Anbieter ermitteln -- ist er selbst der lokale,
+     * gibt es nichts zu eskalieren. */
+    char cloud_key[512] = {0};
+    const flux_provider_def_t *cloud =
+        resolve_provider_id(NULL, cloud_key, sizeof(cloud_key), NULL, 0);
+    int cloud_ok = !cloud->local && cloud_key[0];
+
+    int hard = looks_hard(question);
+
+    /* Harte Anfrage und nutzbare Cloud -> Cloud. */
+    if (hard && cloud_ok) { *path_out = 'C'; return cloud->id; }
+
+    /* Einfache Anfrage: lokal bevorzugen, wenn URL gesetzt UND erreichbar. */
+    if (!hard && local_url[0] && local_server_reachable(local_url)) {
+        *path_out = 'L';
+        return "llamacpp";
+    }
+
+    /* Fallbacks (ehrlich): keine Cloud -> versuche lokal, sonst Config. */
+    if (!cloud_ok && local_url[0] && local_server_reachable(local_url)) {
+        *path_out = 'L';
+        return "llamacpp";
+    }
+    *path_out = 'C';
+    return NULL; /* es bleibt beim Config-Anbieter */
+}
+
+void flux_provider_route(const char *question, char *out, size_t out_cap) {
+    char path = 'C';
+    const char *pick = router_pick(question, &path);
+    if (router_enabled()) {
+        /* Ehrliche Transparenz: welcher Pfad wurde gewaehlt? */
+        flux_log(FLUX_LOG_INFO, "Router: %s-Pfad (%s)",
+                 path == 'L' ? "lokal" : "Cloud",
+                 pick ? pick : "Config-Anbieter");
+    }
+    provider_ask_with(pick, question, out, out_cap);
+
+    /* Dezenter, ehrlicher Marker -- nur wenn Router aktiv UND per
+     * `ai_router_marker` = "on" gewuenscht. Default: kein Marker. */
+    if (router_enabled()) {
+        char m[16] = {0};
+        flux_config_get("ai_router_marker", m, sizeof(m));
+        if (strcmp(m, "on") == 0 && out[0]) {
+            char tmp[64];
+            snprintf(tmp, sizeof(tmp), "%s ", path == 'L' ? "[lokal]" : "[cloud]");
+            size_t pl = strlen(tmp), ol = strlen(out);
+            if (pl + ol < out_cap) {
+                memmove(out + pl, out, ol + 1);
+                memcpy(out, tmp, pl);
+            }
+        }
+    }
 }

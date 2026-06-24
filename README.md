@@ -266,6 +266,7 @@ deepseek_model=...            # optional
 nvidia_model=...              # optional
 llamacpp_url=http://127.0.0.1:8080/v1/chat/completions  # Endpunkt des lokalen Servers
 llamacpp_model=local-model    # optional (welches Modell llama-server geladen hat)
+ai_router=off                 # off (Default) | on -- Hybrid-Router (s.u.)
 ```
 Alternativ per Umgebungsvariable (`FLUX_AI_API_KEY`, `DEEPSEEK_API_KEY`,
 `NVIDIA_API_KEY`, `LLAMACPP_URL`). Bei Rate-Limits (HTTP 429, z.B. NVIDIA)
@@ -290,6 +291,34 @@ ist nicht noetig: der Anbieter gilt als verfuegbar, sobald eine URL
 gesetzt ist. Ist der Server nicht erreichbar, meldet `fluxaid` das
 ehrlich („Kein lokaler KI-Server erkannt -- laeuft llama-server...?")
 statt eine Antwort zu erfinden.
+
+#### Hybrid-Router (lokal/Cloud)
+
+Optional kann Flux pro Anfrage **selbst entscheiden**, ob sie lokal
+(llama.cpp) oder beim konfigurierten Cloud-Anbieter beantwortet wird --
+Local-first: einfache, kurze Anfragen bleiben auf dem Geraet, nur die
+„harten" gehen in die Cloud. Der Router ist **standardmaessig aus** und
+aendert nur dann etwas, wenn er eingeschaltet ist; sonst gilt unveraendert
+der fest gewaehlte Anbieter.
+
+Einschalten in den Einstellungen unter **KI-Router (lokal/Cloud)** (Tipp
+schaltet Aus/Ein) oder per `/etc/flux/flux.conf`:
+```ini
+ai_router=on            # off (Default) | on
+ai_router_marker=off    # on -> dezenter Marker "[lokal]"/"[cloud]" vor der Antwort
+```
+
+Die Heuristik ist bewusst **simpel und ehrlich** (kein gelerntes Routing,
+keine Magie): Eine Anfrage gilt als „hart" (→ Cloud), wenn sie lang ist
+(ab ~200 Zeichen) oder Schluesselwoerter wie „code", „programmier",
+„analysiere", „ausfuehrlich" enthaelt -- dann ist meist Tiefe oder
+Tool-Nutzung noetig. Alles andere geht an den lokalen Server, **sofern er
+erreichbar ist** (kurzer Verbindungstest). Ist der lokale Server nicht
+erreichbar, faellt der Router ehrlich auf die Cloud zurueck; ist keine
+Cloud konfiguriert, bleibt es lokal. Welcher Pfad gewaehlt wurde, steht im
+Log (`/var/log/flux/flux.log`, „Router: lokal/Cloud-Pfad"). Lokale Intents
+(Uhrzeit, Akku, Datum) werden weiterhin **vor** dem Router ohne Netz
+beantwortet.
 
 ### E-Mail einrichten (Senden + Lesen)
 In den Einstellungen gibt es **einen** Eintrag „E-Mail Einstellungen": dort

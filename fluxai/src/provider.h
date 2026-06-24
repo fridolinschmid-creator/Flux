@@ -13,6 +13,14 @@
 void flux_provider_init(void);
 void flux_provider_ask(const char *question, char *out, size_t out_cap);
 
+/* Wie flux_provider_ask(), aber mit Hybrid-Router: ist der Config-Key
+ * `ai_router` == "on", entscheidet eine simple Heuristik pro Anfrage, ob sie
+ * lokal (llama.cpp) oder beim konfigurierten Cloud-Anbieter beantwortet wird.
+ * Ist der Router aus (Default), verhaelt sich der Aufruf exakt wie
+ * flux_provider_ask() (fest gewaehlter Anbieter). Gedacht fuer den
+ * interaktiven Q:-Pfad; Hintergrunddienste nutzen weiter flux_provider_ask(). */
+void flux_provider_route(const char *question, char *out, size_t out_cap);
+
 /* 1, wenn der aktuell gewaehlte Anbieter einen nutzbaren API-Key hat. */
 int flux_provider_available(void);
 

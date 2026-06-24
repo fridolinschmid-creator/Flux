@@ -53,8 +53,11 @@ static void handle_client(int cfd) {
         char *nl = strchr(line, '\n');
         if (nl) *nl = '\0';
         const char *question = line + 2;
+        /* Lokale Intents zuerst (kein Netz); sonst ueber den Hybrid-Router,
+         * der bei aktivem `ai_router` einfache Anfragen lokal beantwortet
+         * und harte zur Cloud eskaliert (sonst fester Anbieter). */
         if (!flux_actions_try(question, answer, sizeof(answer)))
-            flux_provider_ask(question, answer, sizeof(answer));
+            flux_provider_route(question, answer, sizeof(answer));
         /* Nutzungsgewohnheiten loggen (ersten 80 Zeichen der Frage) */
         char topic[84];
         snprintf(topic, sizeof(topic), "%.80s", question);

@@ -292,7 +292,7 @@ static void maybe_generate_greeting(void) {
 
 #define FLUX_PIN_LEN       4
 #define FLUX_FILES_MAX     12
-#define FLUX_SETTINGS_N    11   /* + WLAN + Stimme */
+#define FLUX_SETTINGS_N    12   /* + WLAN + Stimme + KI-Router */
 #define VIEWER_CONTENT_MAX 32768
 
 typedef enum {
@@ -323,6 +323,7 @@ static char email_pending[256] = {0};
 static const char *setting_keys[FLUX_SETTINGS_N] = {
     "pin_hash",
     "ai_provider",      /* anthropic|deepseek|nvidia|llamacpp -- per Tap durchschalten */
+    "ai_router",        /* off|on -- Hybrid-Router (einfach=lokal, hart=Cloud), per Tap */
     "__active_key",     /* -> api_key | deepseek_key | nvidia_key | llamacpp_key */
     "__active_model",   /* -> anthropic_model | deepseek_model | nvidia_model | llamacpp_model */
     "__email",          /* E-Mail-Adresse + App-Passwort (leitet SMTP/IMAP ab) */
@@ -336,6 +337,7 @@ static const char *setting_keys[FLUX_SETTINGS_N] = {
 static const char *setting_labels[FLUX_SETTINGS_N] = {
     "PIN-Code",
     "KI-Anbieter",          /* tippen schaltet anthropic/deepseek/nvidia */
+    "KI-Router (lokal/Cloud)", /* tippen schaltet aus/ein */
     "API-Key (Anbieter)",
     "Modell (Anbieter)",
     "E-Mail Einstellungen", /* Adresse + App-Passwort, Rest automatisch */
@@ -349,6 +351,7 @@ static const char *setting_labels[FLUX_SETTINGS_N] = {
 static const int setting_secret[FLUX_SETTINGS_N] = {
     1, /* pin */
     0, /* provider */
+    0, /* ai_router */
     1, /* active key */
     0, /* active model */
     0, /* email (zeigt Adresse) */
@@ -362,6 +365,7 @@ static const int setting_secret[FLUX_SETTINGS_N] = {
 static const int setting_icons[FLUX_SETTINGS_N] = {
     FLUX_SICON_LOCK,   /* pin */
     FLUX_SICON_AI,     /* ai_provider */
+    FLUX_SICON_AI,     /* ai_router */
     FLUX_SICON_KEY,    /* __active_key */
     FLUX_SICON_CHIP,   /* __active_model */
     FLUX_SICON_MAIL,   /* __email */
@@ -485,6 +489,9 @@ static void load_settings_values(void) {
                              : !strcmp(p, "llamacpp") ? "Lokal (llama.cpp)"
                                                       : "Anthropic Claude";
             snprintf(setting_values_buf[i], sizeof(setting_values_buf[0]), "%s", nice);
+        } else if (strcmp(setting_keys[i], "ai_router") == 0) {
+            snprintf(setting_values_buf[i], sizeof(setting_values_buf[0]), "%s",
+                      !strcmp(raw, "on") ? "Ein (einfach lokal, hart Cloud)" : "Aus");
         } else if (strcmp(setting_keys[i], "__active_model") == 0) {
             snprintf(setting_values_buf[i], sizeof(setting_values_buf[0]), "%s",
                       raw[0] ? raw : active_default_model());
@@ -1745,6 +1752,13 @@ int main(void) {
                 else if (!strcmp(cur, "llamacpp")) next = "anthropic";
                 else next = "deepseek"; /* von anthropic/leer aus */
                 flux_config_set("ai_provider", next);
+                load_settings_values();
+                flux_ui_draw_settings(&fb, setting_labels, setting_values, FLUX_SETTINGS_N);
+            } else if (strcmp(setting_keys[idx], "ai_router") == 0) {
+                /* Hybrid-Router per Tap aus/ein schalten (Default: aus) */
+                char cur[16] = {0};
+                flux_config_get("ai_router", cur, sizeof(cur));
+                flux_config_set("ai_router", !strcmp(cur, "on") ? "off" : "on");
                 load_settings_values();
                 flux_ui_draw_settings(&fb, setting_labels, setting_values, FLUX_SETTINGS_N);
             } else if (strcmp(setting_keys[idx], "__wifi") == 0) {
