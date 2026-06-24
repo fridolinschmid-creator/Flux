@@ -292,7 +292,7 @@ static void maybe_generate_greeting(void) {
 
 #define FLUX_PIN_LEN       4
 #define FLUX_FILES_MAX     12
-#define FLUX_SETTINGS_N    12   /* + WLAN + Stimme + KI-Router */
+#define FLUX_SETTINGS_N    13   /* + WLAN + Stimme + KI-Router + Stimm-Entsperrung */
 #define VIEWER_CONTENT_MAX 32768
 
 typedef enum {
@@ -333,6 +333,7 @@ static const char *setting_keys[FLUX_SETTINGS_N] = {
     "auto_lock",      /* 0=aus, 30, 60, 120, 300 Sekunden */
     "tts",            /* 0=aus, 1=ein */
     "__voice_enroll", /* oeffnet Stimm-Einlern-Screen */
+    "voice_unlock_lock", /* off|on -- Stimm-Entsperrung am Lockscreen (nur ohne PIN) */
 };
 static const char *setting_labels[FLUX_SETTINGS_N] = {
     "PIN-Code",
@@ -347,6 +348,7 @@ static const char *setting_labels[FLUX_SETTINGS_N] = {
     "Auto-Sperre",  /* 0=aus */
     "Sprache (TTS)",/* 0=aus, 1=ein */
     "Stimme (2. Faktor)", /* Stimm-Entsperrung einlernen */
+    "Stimm-Entsperrung am Lockscreen", /* tippen schaltet aus/ein (nur ohne PIN wirksam) */
 };
 static const int setting_secret[FLUX_SETTINGS_N] = {
     1, /* pin */
@@ -359,6 +361,7 @@ static const int setting_secret[FLUX_SETTINGS_N] = {
     0, /* searxng_url */
     0, 0, 0,  /* theme/auto_lock/tts */
     0,        /* voice_enroll */
+    0,        /* voice_unlock_lock */
 };
 
 /* Symbol je Einstellungs-Zeile (parallel zu setting_keys). */
@@ -375,6 +378,7 @@ static const int setting_icons[FLUX_SETTINGS_N] = {
     FLUX_SICON_CLOCK,  /* auto_lock */
     FLUX_SICON_SPEAKER,/* tts */
     FLUX_SICON_LOCK,   /* voice_enroll */
+    FLUX_SICON_LOCK,   /* voice_unlock_lock */
 };
 
 /* Aktuell gewaehlter Anbieter aus der Config (Standard: anthropic). */
@@ -505,6 +509,18 @@ static void load_settings_values(void) {
                       voice_unlock_enrolled() ? "eingelernt" :
                       voice_unlock_available() ? "nicht eingelernt" :
                       "kein Mikrofon (QEMU)");
+        } else if (strcmp(setting_keys[i], "voice_unlock_lock") == 0) {
+            /* Ehrliche Anzeige: bei gesetzter PIN ist die Stimm-Entsperrung am
+             * Lockscreen wirkungslos (PIN bleibt unumgehbar) -- das sagen wir
+             * dem Nutzer direkt, statt einen Schein-Schalter anzubieten. */
+            char ph[128] = {0};
+            flux_config_get("pin_hash", ph, sizeof(ph));
+            if (strcmp(raw, "on") == 0 && ph[0])
+                snprintf(setting_values_buf[i], sizeof(setting_values_buf[0]),
+                         "Ein (inaktiv: PIN gesetzt)");
+            else
+                snprintf(setting_values_buf[i], sizeof(setting_values_buf[0]), "%s",
+                         strcmp(raw, "on") == 0 ? "Ein" : "Aus");
         } else if (setting_secret[i]) {
             snprintf(setting_values_buf[i], sizeof(setting_values_buf[0]), "%s",
                       raw[0] ? "********" : "(nicht gesetzt)");
@@ -693,6 +709,34 @@ static void load_journal_list(void) {
 }
 
 /* Stimm-Entsperrung */
+/* Gibt 1 zurueck, wenn am Lockscreen ein Sprechen-Entsperr-Weg angeboten
+ * werden darf. Sicherheits-Default (siehe README/voice_unlock.h): Stimme ist
+ * NIE alleinige Schranke. Deshalb genau dann, wenn
+ *   (a) eine Stimme eingelernt ist UND
+ *   (b) der Nutzer voice_unlock_lock=on gesetzt hat UND
+ *   (c) KEINE PIN gesetzt ist.
+ * Ist eine PIN gesetzt, erscheint der Sprechen-Weg am Lockscreen NICHT --
+ * die PIN bleibt unumgehbar. (Die Stimme bleibt dort weiter als zweiter
+ * Faktor NACH korrekter PIN aktiv -- das ist der bestehende Flow.) */
+static int lockscreen_voice_allowed(void) {
+    char on[8] = {0};
+    flux_config_get("voice_unlock_lock", on, sizeof(on));
+    if (strcmp(on, "on") != 0) return 0;
+    if (!voice_unlock_enrolled()) return 0;
+    char ph[128] = {0};
+    flux_config_get("pin_hash", ph, sizeof(ph));
+    if (ph[0]) return 0;   /* PIN gesetzt -> Stimme nie allein am Lockscreen */
+    return 1;
+}
+
+/* Zeichnet den Lockscreen und setzt vorher den Mikrofon-Chip-Hinweis passend
+ * (nur sichtbar, wenn lockscreen_voice_allowed()). Ein Aufruf statt vier mal
+ * Flag+Draw -- haelt Anzeige und Entsperr-Logik synchron. */
+static void draw_lock(flux_fb_t *fb) {
+    flux_ui_set_lock_voice_hint(lockscreen_voice_allowed());
+    flux_ui_draw_lock(fb);
+}
+
 static int  voice_enroll_phase  = 0;  /* 0=Anleitung 1=Aufnahme 2=OK 3=Fehler */
 static char voice_enroll_msg[256] = {0};
 static int  voice_verify_phase  = 0;  /* 0=Warten 1=Aufnahme 2=OK 3=Fehler */
@@ -1269,6 +1313,10 @@ int main(void) {
     char pin_buf[FLUX_PIN_LEN + 1] = {0};
     int  pin_len = 0;
     int  pin_error = 0;
+    /* 1 = der aktuelle Voice-Verify-Screen wurde direkt vom Lockscreen
+     * geoeffnet (keine PIN gesetzt). Steuert das Verhalten von "PIN
+     * verwenden"/Mismatch: zurueck zum Lockscreen statt in den Assistenten. */
+    int  voice_verify_from_lock = 0;
 
     flux_action_t pending_action;
     memset(&pending_action, 0, sizeof(pending_action));
@@ -1276,7 +1324,7 @@ int main(void) {
     edit_target_t edit_target = EDIT_NONE;
     int edit_setting_index = 0;
 
-    flux_ui_draw_lock(&fb);
+    draw_lock(&fb);
 
     while (1) {
         fd_set rfds;
@@ -1314,7 +1362,7 @@ int main(void) {
             }
             /* Kein Input -- Uhr auf dem Lockscreen, Auto-Sperre pruefen. */
             if (screen == FLUX_SCREEN_LOCK) {
-                flux_ui_draw_lock(&fb);
+                draw_lock(&fb);
             } else {
                 char auto_lock_s[16] = {0};
                 flux_config_get("auto_lock", auto_lock_s, sizeof(auto_lock_s));
@@ -1322,7 +1370,7 @@ int main(void) {
                 if (timeout > 0 && time(NULL) - last_event_time >= (time_t)timeout) {
                     if (voice_active) { flux_voice_cancel(); voice_active = 0; }
                     screen = FLUX_SCREEN_LOCK;
-                    flux_ui_draw_lock(&fb);
+                    draw_lock(&fb);
                 }
             }
             /* Spracheingabe: animierten Aufnahme-Indikator weiterzeichnen */
@@ -1341,9 +1389,11 @@ int main(void) {
         if (ev.type == FLUX_EV_NONE) continue;
 
         /* ---- Globaler KI-Overlay (Wisch nach rechts) ----------------
-         * Funktioniert auf ALLEN Screens ausser Lock/PIN.
-         * Overlay abfangen bevor irgendein Screen-Handler greift. */
-        if (screen != FLUX_SCREEN_LOCK && screen != FLUX_SCREEN_PIN) {
+         * Funktioniert auf ALLEN Screens ausser den Entsperr-Screens
+         * (Lock/PIN/Voice-Verify) -- waehrend des Entsperrens darf die KI
+         * nicht erreichbar sein. */
+        if (screen != FLUX_SCREEN_LOCK && screen != FLUX_SCREEN_PIN &&
+            screen != FLUX_SCREEN_VOICE_VERIFY) {
 
             /* Wisch nach rechts oeffnet den Overlay */
             if (ev.type == FLUX_EV_SWIPE_RIGHT && !ai_ovl_active) {
@@ -1440,6 +1490,23 @@ int main(void) {
         /* ---- Ende KI-Overlay ---------------------------------------- */
 
         if (screen == FLUX_SCREEN_LOCK) {
+            /* Tap auf den Mikrofon-Chip: Stimm-Entsperrung am Lockscreen.
+             * Nur moeglich, wenn lockscreen_voice_allowed() (eingelernt +
+             * Toggle an + KEINE PIN). flux_ui_lock_voice_hit prueft selbst,
+             * ob der Chip ueberhaupt sichtbar ist -- ein Fehlklick ins Leere
+             * tut nichts, der Wisch nach oben bleibt der Standardweg. */
+            if (ev.type == FLUX_EV_TAP && lockscreen_voice_allowed()
+                && flux_ui_lock_voice_hit(&fb, ev.x, ev.y)) {
+                voice_verify_from_lock = 1;
+                voice_verify_phase = 0;
+                voice_verify_msg[0] = '\0';
+                uint32_t *old = capture_frame(&fb);
+                screen = FLUX_SCREEN_VOICE_VERIFY;
+                flux_ui_draw_voice_verify(&fb, voice_verify_phase, voice_verify_msg);
+                animate_slide_in(&fb, old);
+                free(old);
+                continue;
+            }
             if (ev.type == FLUX_EV_ENTER || ev.type == FLUX_EV_SWIPE_UP) {
                 char stored[128] = {0};
                 if (flux_config_get("pin_hash", stored, sizeof(stored)) && stored[0]) {
@@ -1498,6 +1565,7 @@ int main(void) {
                 if (strcmp(hash, stored) == 0) {
                     /* PIN korrekt -- zweiten Faktor pruefen (falls eingerichtet) */
                     if (voice_unlock_enrolled()) {
+                        voice_verify_from_lock = 0;  /* kam ueber PIN, nicht direkt */
                         voice_verify_phase = 0;
                         voice_verify_msg[0] = '\0';
                         uint32_t *old = capture_frame(&fb);
@@ -1759,6 +1827,14 @@ int main(void) {
                 char cur[16] = {0};
                 flux_config_get("ai_router", cur, sizeof(cur));
                 flux_config_set("ai_router", !strcmp(cur, "on") ? "off" : "on");
+                load_settings_values();
+                flux_ui_draw_settings(&fb, setting_labels, setting_values, FLUX_SETTINGS_N);
+            } else if (strcmp(setting_keys[idx], "voice_unlock_lock") == 0) {
+                /* Stimm-Entsperrung am Lockscreen per Tap aus/ein (Default: aus).
+                 * Wirkt nur, wenn keine PIN gesetzt ist -- siehe Lockscreen-Logik. */
+                char cur[16] = {0};
+                flux_config_get("voice_unlock_lock", cur, sizeof(cur));
+                flux_config_set("voice_unlock_lock", !strcmp(cur, "on") ? "off" : "on");
                 load_settings_values();
                 flux_ui_draw_settings(&fb, setting_labels, setting_values, FLUX_SETTINGS_N);
             } else if (strcmp(setting_keys[idx], "__wifi") == 0) {
@@ -2391,7 +2467,10 @@ int main(void) {
                         flux_ui_draw_voice_verify(&fb, voice_verify_phase, voice_verify_msg);
                     }
                 } else if (hit == 1 && voice_verify_phase == 2) {
-                    /* Weiter nach OK */
+                    /* Weiter nach OK -- entsperrt (Stimme der richtigen Person
+                     * verifiziert). Gilt fuer beide Pfade: nach PIN ODER direkt
+                     * vom Lockscreen (dann nur erreichbar, wenn keine PIN). */
+                    voice_verify_from_lock = 0;
                     screen = FLUX_SCREEN_ASSISTANT;
                     input_buf[0] = '\0'; answer_buf[0] = '\0';
                     flux_ui_set_quick_reveal(0, 0);
@@ -2400,14 +2479,30 @@ int main(void) {
                     animate_slide_in(&fb, old); free(old);
                     animate_home_intro(&fb, &in, last_q, input_buf, answer_buf);
                 } else if (hit == 2) {
-                    /* PIN verwenden -- Stimm-Schutz ueberspringen (immer erlaubt) */
-                    screen = FLUX_SCREEN_ASSISTANT;
-                    input_buf[0] = '\0'; answer_buf[0] = '\0';
-                    flux_ui_set_quick_reveal(0, 0);
-                    uint32_t *old = capture_frame(&fb);
-                    flux_ui_draw_assistant(&fb, last_q, input_buf, answer_buf, 0);
-                    animate_slide_in(&fb, old); free(old);
-                    animate_home_intro(&fb, &in, last_q, input_buf, answer_buf);
+                    if (voice_verify_from_lock) {
+                        /* Lockscreen-Pfad (keine PIN): "Ueberspringen" oder
+                         * eine fehlgeschlagene Verifikation entsperrt NICHT --
+                         * zurueck zum Lockscreen. Der Wisch nach oben bleibt
+                         * der normale Weg (ohne PIN ohnehin keine Schranke).
+                         * So fuehrt ein Mikrofon-Ausfall nie zum Lockout. */
+                        voice_verify_from_lock = 0;
+                        uint32_t *old = capture_frame(&fb);
+                        screen = FLUX_SCREEN_LOCK;
+                        draw_lock(&fb);
+                        animate_slide_from_left(&fb, old);
+                        free(old);
+                    } else {
+                        /* PIN-Pfad: PIN war bereits korrekt -- Stimm-Schutz als
+                         * zweiter Faktor ueberspringen ist erlaubt (bestehender
+                         * Flow, die PIN war die eigentliche Schranke). */
+                        screen = FLUX_SCREEN_ASSISTANT;
+                        input_buf[0] = '\0'; answer_buf[0] = '\0';
+                        flux_ui_set_quick_reveal(0, 0);
+                        uint32_t *old = capture_frame(&fb);
+                        flux_ui_draw_assistant(&fb, last_q, input_buf, answer_buf, 0);
+                        animate_slide_in(&fb, old); free(old);
+                        animate_home_intro(&fb, &in, last_q, input_buf, answer_buf);
+                    }
                 }
             }
             continue;
@@ -2420,7 +2515,7 @@ int main(void) {
                 ev.type == FLUX_EV_SWIPE_UP || ev.type == FLUX_EV_SWIPE_DOWN) {
                 alarm_label[0] = '\0';
                 screen = FLUX_SCREEN_LOCK;
-                flux_ui_draw_lock(&fb);
+                draw_lock(&fb);
             }
             continue;
         }

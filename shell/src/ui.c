@@ -19,6 +19,13 @@ void flux_ui_set_accent(uint32_t rgb) {
     else g_accent2 = rgb;
 }
 
+/* Lockscreen-Stimm-Entsperrung: 1 = Mikrofon-Chip "Zum Entsperren sprechen"
+ * zusaetzlich zum Wisch-Hinweis anzeigen. main.c setzt das nur, wenn eine
+ * Stimme eingelernt UND der Toggle aktiv UND KEINE PIN gesetzt ist (Stimme
+ * darf eine PIN nie ersetzen -- Sicherheit vor Bequemlichkeit). */
+static int g_lock_voice_hint = 0;
+void flux_ui_set_lock_voice_hint(int on) { g_lock_voice_hint = on ? 1 : 0; }
+
 /* Premium Dark-Mode Palette "Deep Space" */
 #define COL_BG          0x07080D   /* Tiefstes Schwarz-Blau */
 #define COL_SURFACE     0x0F1117   /* Leicht erhoehte Oberflaeche */
@@ -361,6 +368,19 @@ static void draw_keyboard(flux_fb_t *fb) {
 
 /* ---- Lockscreen ----------------------------------------------------- */
 
+/* Geometrie des Lockscreen-Mikrofon-Chips "Zum Entsperren sprechen".
+ * Eine Funktion fuer Zeichnen UND Hit-Test, damit beide nie auseinanderlaufen
+ * (Touch-first-Konvention wie bei Tastatur/Listen). */
+static void lock_voice_chip_geom(const flux_fb_t *fb, int *x, int *y,
+                                 int *w, int *h) {
+    int cw = 260; if (cw > fb->width - 32) cw = fb->width - 32;
+    int ch = 48;
+    *w = cw; *h = ch;
+    *x = (fb->width - cw) / 2;
+    /* Knapp ueber dem Wisch-Indikator (der bei height-42 sitzt). */
+    *y = fb->height - 42 - 30 - ch;
+}
+
 void flux_ui_draw_lock(flux_fb_t *fb) {
     /* Hintergrund: vertikaler Verlauf von COL_BG nach leicht hellerem COL_SURFACE */
     flux_fb_fill_gradient_v(fb, 0, 0, fb->width, fb->height, COL_BG, 0x0B0D14);
@@ -554,6 +574,23 @@ void flux_ui_draw_lock(flux_fb_t *fb) {
         }
     }
 
+    /* Mikrofon-Chip "Zum Entsperren sprechen" -- nur wenn aktiviert
+     * (Stimme eingelernt + Toggle an + keine PIN gesetzt, siehe main.c).
+     * Der Wisch bleibt immer zusaetzlich verfuegbar -- die Stimme ist nur
+     * ein bequemer Zusatzweg, nie die einzige Schranke. */
+    if (g_lock_voice_hint) {
+        int cx2, cy2, cw2, ch2;
+        lock_voice_chip_geom(fb, &cx2, &cy2, &cw2, &ch2);
+        fill_round_rect(fb, cx2, cy2, cw2, ch2, ch2 / 2, COL_SURFACE2);
+        /* Mikrofon-Symbol links: Kapsel + Standfuss */
+        int mx = cx2 + 26, my = cy2 + ch2 / 2;
+        fill_round_rect(fb, mx - 5, my - 11, 10, 16, 5, COL_ACCENT);
+        draw_thick_line(fb, mx, my + 5, mx, my + 9, 2, COL_ACCENT);
+        draw_thick_line(fb, mx - 6, my + 9, mx + 6, my + 9, 2, COL_ACCENT);
+        const char *lbl = "Zum Entsperren sprechen";
+        flux_fb_text(fb, cx2 + 48, cy2 + (ch2 - 14) / 2, lbl, COL_TEXT, 2);
+    }
+
     /* Wisch-nach-oben Indikator -- stilisierte animierte Linie statt Text */
     {
         int ind_y = fb->height - 42;
@@ -570,6 +607,15 @@ void flux_ui_draw_lock(flux_fb_t *fb) {
     }
 
     flux_fb_present(fb);
+}
+
+/* Hit-Test fuer den Lockscreen-Mikrofon-Chip. Gibt 1 nur zurueck, wenn der
+ * Chip ueberhaupt angezeigt wird (g_lock_voice_hint) und getroffen wurde. */
+int flux_ui_lock_voice_hit(const flux_fb_t *fb, int x, int y) {
+    if (!g_lock_voice_hint) return 0;
+    int cx, cy, cw, ch;
+    lock_voice_chip_geom(fb, &cx, &cy, &cw, &ch);
+    return (x >= cx && x < cx + cw && y >= cy && y < cy + ch);
 }
 
 /* ---- PIN-Sperre -------------------------------------------------------

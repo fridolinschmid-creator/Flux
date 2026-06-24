@@ -399,6 +399,14 @@ austauschbare Score-Funktion vorgesehen und dockt ohne UI-Änderung an.
    (RMS-Fingerabdruck-Stub), `FLUX_SCREEN_VOICE_ENROLL` + `FLUX_SCREEN_VOICE_VERIFY`,
    Einstellungs-Eintrag. QEMU: kein Mikrofon vorhanden, ehrliche Meldung.
    Backend (nur `voice_unlock.c`) durch ECAPA-TDNN ersetzbar ohne UI-Aenderung.
+   Zusaetzlich (neu) auch **Entsperren direkt am Lockscreen per Stimme**:
+   Mikrofon-Chip "Zum Entsperren sprechen" -- erscheint **nur, wenn eine
+   Stimme eingelernt ist, der Toggle "Stimm-Entsperrung am Lockscreen"
+   (`voice_unlock_lock`, Default aus) aktiv ist UND keine PIN gesetzt ist**.
+   Ist eine PIN gesetzt, bleibt die Stimme ausschliesslich der zweite Faktor
+   NACH korrekter PIN -- die PIN ist nie per Stimme umgehbar. Der Wisch nach
+   oben bleibt immer als Standardweg sichtbar; kein Mikrofon / keine Stimme
+   erkannt fuehrt zurueck zum Lockscreen (nie Lockout), kein Fake-Erfolg.
 9. Echter Compositor (DRM/KMS, GPU-Beschleunigung, Animationen, mehrere
    "Karten" statt nur Lockscreen+Assistent)
 10. ~~Benachrichtigungen als eigener Systemdienst~~ -- `notification.c/.h`
@@ -422,8 +430,20 @@ Modell) lokal ausfuehren, Aehnlichkeit zu einem beim Einrichten aufgenommenen
 Referenz-Embedding pruefen, und das **immer** nur als zweiten Faktor neben
 dem PIN anbieten, nie als alleinigen. Das ist deutlich mehr Infrastruktur
 (Mikrofon in QEMU, Embedding-Modell, sicherer Speicherort fuer das
-Referenz-Embedding) als der aktuelle Funktionsumfang -- bewusst nicht in
-dieser Iteration umgesetzt.
+Referenz-Embedding) als der aktuelle Funktionsumfang.
+
+Inzwischen kann die Stimme **auch direkt am Lockscreen** entsperren -- aber
+bewusst nur dort, wo sie keine Schranke schwaecht: nur wenn **keine PIN**
+gesetzt ist (dann ist das Geraet ohnehin nicht durch ein Geheimnis geschuetzt
+und die Stimme ist reine Bequemlichkeit, kein Sicherheitsgewinn). Sobald eine
+PIN existiert, verschwindet der Sprechen-Weg vom Lockscreen vollstaendig und
+die Stimme bleibt **zweiter Faktor nach der PIN** -- die PIN ist nie per
+Stimme allein umgehbar. Ein Mikrofonausfall oder eine nicht erkannte Stimme
+fuehrt nie zum Lockout: der Wisch nach oben bleibt immer der Standardweg, und
+der RMS-Stub meldet "kein Mikrofon erkannt" ehrlich, statt Erfolg vorzutaeuschen.
+Das echte Sprecher-Embedding (ECAPA-TDNN/x-vector) bleibt der austauschbare
+Backend-Teil in `voice_unlock.c` -- die UI- und Entsperr-Logik aendern sich
+dadurch nicht.
 
 ## Sicherheits-Hinweis (Dev-Build)
 Das gebaute Image hat einen Root-Login ohne Passwort auf der seriellen

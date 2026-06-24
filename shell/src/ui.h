@@ -51,6 +51,16 @@ typedef enum {
 
 void flux_ui_draw_lock(flux_fb_t *fb);
 
+/* Schaltet den Lockscreen-Mikrofon-Chip "Zum Entsperren sprechen" ein/aus.
+ * main.c setzt das nur, wenn eine Stimme eingelernt ist, der Toggle
+ * voice_unlock_lock aktiv ist UND KEINE PIN gesetzt ist -- die Stimme darf
+ * eine PIN nie ersetzen (Sicherheit vor Bequemlichkeit). */
+void flux_ui_set_lock_voice_hint(int on);
+
+/* Hit-Test fuer den Lockscreen-Mikrofon-Chip. Gibt 1 nur bei sichtbarem
+ * Chip und Treffer zurueck (sonst 0 -- der Wisch bleibt unberuehrt). */
+int flux_ui_lock_voice_hit(const flux_fb_t *fb, int x, int y);
+
 /* entered: Anzahl bereits eingegebener Ziffern (fuer die Punktanzeige).
  * error: 1, wenn der zuletzt eingegebene Code falsch war. */
 void flux_ui_draw_pin(flux_fb_t *fb, int entered, int error);
