@@ -94,6 +94,38 @@ austauschbares Backend geschnitten: auf echter Hardware mit
 ofono/ModemManager ersetzt eine neue Implementierung nur diese eine
 Datei, Protokoll und UI bleiben unveraendert.
 
+### Einstellungen per Sprache aendern (mit Bestaetigung)
+
+Auch Systemeinstellungen lassen sich per natuerlicher Sprache aendern --
+**immer ueber denselben Bestaetigungs-Dialog**, nie direkt. Sagt man
+"stell die Helligkeit auf 50%", "aktivier den KI-Router", "schalt die
+Sprachausgabe aus" oder "setz das Theme auf lila", antwortet `fluxaid`
+mit einem `ACTION:setting`-Block (KEY/VALUE/DESC). `flux-shell` zeigt
+daraus einen verstaendlichen Dialog ("Helligkeit -> 50%", "KI-Router ->
+Ein"); der Wert ist vor dem Uebernehmen antippbar/bearbeitbar. Erst ein
+Tap auf "Übernehmen" schickt `X:setting` an `fluxaid`.
+
+**Allowlist (maßgeblich im Daemon, `fluxai/src/exec.c`):** Nur eine fest
+definierte Liste sicherer Schluessel ist per Sprache aenderbar --
+`brightness` (0-100), `theme` (teal/blau/lila/orange/gruen/rot),
+`ai_provider`, `ai_router`, `ai_router_battery`, `tts`, `wakeword`,
+`vision_backend` (cloud/local), `auto_lock` (0/30/60/120/300 s) und
+`voice_unlock_lock`. Schluessel **und** Wert werden im Daemon validiert
+und normalisiert (Booleans als ein/aus, Bereiche geprueft) -- selbst wenn
+die KI einen anderen Key vorschlaegt, lehnt der Daemon ihn ab. Die
+**PIN** und andere Geheimnisse (Passwoerter, API-Keys) stehen bewusst
+**nicht** in der Allowlist und sind nie per Sprache aenderbar (nur ueber
+die Einstellungs-Maske mit gehashter Speicherung) -- Sicherheit vor
+Bequemlichkeit.
+
+**QEMU-Grenze (ehrlich):** `brightness` wird real ueber
+`/sys/class/backlight` gesetzt. Fehlt dieser Knoten (typisch in QEMU
+`virt`), meldet der Daemon das wahrheitsgemaess ("kein Backlight-Knoten
+gefunden") statt einen Erfolg zu erfinden -- konsistent mit dem
+bestehenden `brightness_set`-Verhalten. Reine Config-Keys (Theme,
+Router, TTS ...) werden in `/etc/flux/flux.conf` geschrieben und greifen
+sofort.
+
 ## Einstellungen & Dateien
 
 - **Einstellungen** (`FLUX_SCREEN_SETTINGS`): PIN-Code, SMTP-Zugangsdaten,

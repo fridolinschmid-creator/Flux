@@ -106,6 +106,13 @@ void flux_ui_draw_confirm(flux_fb_t *fb, const char *type_label,
  * noetig, damit der Hit-Test die antippbaren Zeilen richtig zuordnet. */
 flux_confirm_hit_t flux_ui_confirm_hit(const flux_fb_t *fb, int x, int y, int has_subject);
 
+/* Bestaetigungs-Dialog fuer eine Einstellungsaenderung (KI will eine
+ * Systemeinstellung setzen). desc ist eine fertige deutsche Beschreibung
+ * (z.B. "Helligkeit -> 50%"), key/value die technischen Werte. */
+void flux_ui_draw_confirm_setting(flux_fb_t *fb, const char *desc,
+                                  const char *key, const char *value);
+flux_confirm_hit_t flux_ui_confirm_setting_hit(const flux_fb_t *fb, int x, int y);
+
 /* ---- Text bearbeiten (vor dem Senden einer Aktion) ---------------- */
 
 void flux_ui_draw_edit_body(flux_fb_t *fb, const char *body);

@@ -522,7 +522,30 @@ static int parse_tool_call(const char *response,
     "SUBJECT:<Betreff, nur bei mail>\n" \
     "BODY:\n" \
     "<Text>\n" \
-    "Falls Empfaenger oder Inhalt wirklich unklar sind, frage nach. "
+    "Falls Empfaenger oder Inhalt wirklich unklar sind, frage nach. " \
+    "WENN der Nutzer eindeutig eine SYSTEMEINSTELLUNG aendern moechte " \
+    "(z.B. 'stell die Helligkeit auf 50%', 'aktivier den KI-Router', " \
+    "'schalt das Theme auf hell/dunkel', 'schalt die Sprachausgabe aus', " \
+    "'mach Wake-Word an'), fuehre das NICHT direkt aus, sondern antworte " \
+    "AUSSCHLIESSLICH in diesem Format (der Nutzer bestaetigt es dann):\n" \
+    "ACTION:setting\n" \
+    "KEY:<einer der erlaubten Schluessel>\n" \
+    "VALUE:<Wert>\n" \
+    "DESC:<kurze deutsche Beschreibung, z.B. Helligkeit -> 50%>\n" \
+    "Erlaubte KEY=Werte (NUR diese, nichts anderes):\n" \
+    "  brightness = 0-100 (Helligkeit in Prozent)\n" \
+    "  theme = teal|blau|lila|orange|gruen|rot (Farbthema; 'hell'->teal, 'dunkel'->teal ist Default)\n" \
+    "  ai_provider = anthropic|deepseek|nvidia|llamacpp\n" \
+    "  ai_router = on|off (Hybrid-Router lokal/Cloud)\n" \
+    "  ai_router_battery = on|off (Akkusparmodus des Routers)\n" \
+    "  tts = on|off (Sprachausgabe)\n" \
+    "  wakeword = on|off (Wake-Word 'Hey Flux')\n" \
+    "  vision_backend = cloud|local (Bild-KI)\n" \
+    "  auto_lock = 0|30|60|120|300 (Auto-Sperre in Sekunden, 0=aus)\n" \
+    "  voice_unlock_lock = on|off (Stimm-Entsperrung am Lockscreen)\n" \
+    "Andere Einstellungen (z.B. die PIN, Passwoerter, API-Keys) kannst du " \
+    "NICHT per Sprache aendern -- sage das dann ehrlich und verweise auf " \
+    "die Einstellungen. Ist der gewuenschte Wert unklar, frage nach. "
 
 static void build_system_prompt(char *system_prompt, size_t cap) {
     time_t _t = time(NULL); struct tm _tm; localtime_r(&_t, &_tm);
@@ -614,8 +637,9 @@ static void provider_ask_with(const char *override_id,
                  "Bereits ausgefuehrte Schritte (Tool => Ergebnis):\n%s\n"
                  "Wenn fuer die Anfrage noch ein weiterer Schritt noetig ist, "
                  "rufe das naechste Tool auf (NUR im Format TOOL:/ARG:). "
-                 "Wenn eine Mail/SMS/ein Anruf zu bestaetigen ist, antworte im "
-                 "ACTION:-Format. Sonst antworte final auf Deutsch, kurz und klar "
+                 "Wenn eine Mail/SMS/ein Anruf ODER eine Einstellungsaenderung "
+                 "zu bestaetigen ist, antworte im ACTION:-Format. Sonst antworte "
+                 "final auf Deutsch, kurz und klar "
                  "und fasse zusammen, was erledigt wurde.",
                  question, log);
 

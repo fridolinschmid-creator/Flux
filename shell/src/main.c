@@ -293,6 +293,7 @@ typedef enum {
     EDIT_ACTION_BODY,
     EDIT_ACTION_TO,       /* Empfaenger im Bestaetigungs-Dialog aendern */
     EDIT_ACTION_SUBJECT,  /* Betreff im Bestaetigungs-Dialog aendern */
+    EDIT_ACTION_SETTING_VALUE, /* Wert einer Einstellungs-Aktion aendern */
     EDIT_SETTING_FIELD,
     EDIT_NEW_FOLDER,
     EDIT_EMAIL_ADDR,    /* Schritt 1: E-Mail-Adresse */
@@ -1663,6 +1664,41 @@ int main(void) {
 
         if (screen == FLUX_SCREEN_CONFIRM) {
             if (ev.type != FLUX_EV_TAP) continue;
+
+            /* Einstellungs-Aktion: eigener Dialog, nur Wert ist editierbar. */
+            if (pending_action.type == FLUX_ACTION_SETTING) {
+                flux_confirm_hit_t sh = flux_ui_confirm_setting_hit(&fb, ev.x, ev.y);
+                if (sh == FLUX_CONFIRM_CANCEL) {
+                    uint32_t *old = capture_frame(&fb);
+                    screen = FLUX_SCREEN_ASSISTANT;
+                    snprintf(answer_buf, sizeof(answer_buf), "Abgebrochen.");
+                    flux_ui_draw_assistant(&fb, last_q, input_buf, answer_buf, 0);
+                    animate_slide_in(&fb, old);
+                    free(old);
+                } else if (sh == FLUX_CONFIRM_EDIT_BODY) {
+                    snprintf(edit_buf, sizeof(edit_buf), "%s", pending_action.value);
+                    edit_target = EDIT_ACTION_SETTING_VALUE;
+                    flux_ui_set_edit_title("Wert");
+                    uint32_t *old = capture_frame(&fb);
+                    screen = FLUX_SCREEN_EDIT_BODY;
+                    flux_ui_draw_edit_body(&fb, edit_buf);
+                    animate_slide_in(&fb, old);
+                    free(old);
+                } else if (sh == FLUX_CONFIRM_SEND) {
+                    char req[FLUX_MAX_LINE];
+                    flux_action_build_request(&pending_action, req, sizeof(req));
+                    flux_ipc_send_raw(req, answer_buf, sizeof(answer_buf));
+                    /* Einstellung lokal in der Shell anwenden, falls noetig
+                     * (z.B. Theme/Akzentfarbe sofort sichtbar). Der Daemon
+                     * hat den Wert bereits validiert + in flux.conf geschrieben. */
+                    if (strcmp(pending_action.key, "theme") == 0)
+                        apply_theme();
+                    screen = FLUX_SCREEN_ASSISTANT;
+                    flux_ui_draw_assistant(&fb, last_q, input_buf, answer_buf, 0);
+                }
+                continue;
+            }
+
             flux_confirm_hit_t hit = flux_ui_confirm_hit(&fb, ev.x, ev.y,
                                                          pending_action.subject[0] != 0);
             if (hit == FLUX_CONFIRM_CANCEL) {
@@ -1787,6 +1823,15 @@ int main(void) {
                     screen = FLUX_SCREEN_CONFIRM;
                     flux_ui_draw_confirm(&fb, flux_action_type_label(pending_action.type),
                                           pending_action.to, pending_action.subject, pending_action.body);
+                    animate_slide_in(&fb, old);
+                    free(old);
+                } else if (edit_target == EDIT_ACTION_SETTING_VALUE) {
+                    snprintf(pending_action.value, sizeof(pending_action.value), "%s", edit_buf);
+                    flux_ui_set_edit_title(NULL);
+                    uint32_t *old = capture_frame(&fb);
+                    screen = FLUX_SCREEN_CONFIRM;
+                    flux_ui_draw_confirm_setting(&fb, pending_action.desc,
+                                                 pending_action.key, pending_action.value);
                     animate_slide_in(&fb, old);
                     free(old);
                 } else if (edit_target == EDIT_NEW_FOLDER) {
@@ -3089,8 +3134,12 @@ int main(void) {
             if (flux_action_parse(answer_buf, &pending_action)) {
                 uint32_t *old = capture_frame(&fb);
                 screen = FLUX_SCREEN_CONFIRM;
-                flux_ui_draw_confirm(&fb, flux_action_type_label(pending_action.type),
-                                      pending_action.to, pending_action.subject, pending_action.body);
+                if (pending_action.type == FLUX_ACTION_SETTING)
+                    flux_ui_draw_confirm_setting(&fb, pending_action.desc,
+                                                 pending_action.key, pending_action.value);
+                else
+                    flux_ui_draw_confirm(&fb, flux_action_type_label(pending_action.type),
+                                          pending_action.to, pending_action.subject, pending_action.body);
                 animate_slide_in(&fb, old);
                 free(old);
             } else {

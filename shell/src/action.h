@@ -18,6 +18,7 @@ typedef enum {
     FLUX_ACTION_MAIL,
     FLUX_ACTION_SMS,
     FLUX_ACTION_CALL,
+    FLUX_ACTION_SETTING,   /* Systemeinstellung aendern (mit Bestaetigung) */
 } flux_action_type_t;
 
 typedef struct {
@@ -25,6 +26,12 @@ typedef struct {
     char to[256];
     char subject[256];
     char body[4096];
+    /* Nur fuer FLUX_ACTION_SETTING: KEY/VALUE der Einstellung + eine
+     * menschenlesbare Beschreibung fuer den Bestaetigungs-Dialog
+     * (z.B. "Helligkeit -> 50%"). */
+    char key[64];
+    char value[256];
+    char desc[256];
 } flux_action_t;
 
 const char *flux_action_type_label(flux_action_type_t type);
