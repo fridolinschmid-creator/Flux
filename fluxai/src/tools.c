@@ -25,10 +25,14 @@
  *                       regelbasierter Entitaets-/Zeit-Index (kein ML), ARG: freie Frage
  *   ocr_scan         -- Foto eines Dokuments per lokalem OCR (VLM/tesseract) zu Text,
  *                       verkettbar mit doc_analyze, ARG: Bildpfad oder "letztes"
+ *   translate        -- Text uebersetzen ueber den AKTIVEN Anbieter (local-first,
+ *                       wenn der lokale llama.cpp-Anbieter gewaehlt ist),
+ *                       ARG: "<zielsprache>: <text>" oder "<text> nach <zielsprache>"
  */
 #include "tools.h"
 #include "vision.h"
 #include "imap.h"
+#include "provider.h"
 #include "../../common/flux_config.h"
 
 #include <curl/curl.h>
@@ -2293,6 +2297,93 @@ static int tool_memory_recall(const char *arg, char *out, size_t cap) {
     return 1;
 }
 
+/* ---- translate ------------------------------------------------------- */
+
+/* Offline-/lokale Uebersetzung: die eigentliche Uebersetzung macht das
+ * Sprachmodell des AKTIVEN Anbieters (flux_provider_complete). Ist der lokale
+ * llama.cpp-Anbieter gewaehlt, laeuft das offline (local-first); sonst Cloud.
+ *
+ * ARG-Format (robustes, einfaches Parsing):
+ *   (1) "<zielsprache>: <text>"   z.B. "englisch: Guten Morgen"
+ *       -- alles VOR dem ERSTEN ':' ist die Zielsprache, danach der Text.
+ *   (2) "<text> nach <zielsprache>" z.B. "Guten Morgen nach englisch"
+ *       -- nur genutzt, wenn (1) nicht greift: das LETZTE " nach " trennt.
+ * Greift keines der Muster -> ehrliche Hinweis-Meldung mit Beispiel.
+ *
+ * KEINE eigene HTTP-Schicht -- es wird der vorhandene Provider-Pfad genutzt.
+ * Da dieses Tool AUS der Agenten-Tool-Schleife laeuft, ruft es bewusst den
+ * tool-/kontextfreien flux_provider_complete() auf (keine Rekursion). */
+static int tool_translate(const char *arg, char *out, size_t cap) {
+    if (!arg || !*arg) {
+        snprintf(out, cap,
+                 "Fehler: kein Text. ARG-Format: '<zielsprache>: <text>' oder "
+                 "'<text> nach <zielsprache>' (z.B. 'englisch: Guten Morgen').");
+        return 1;
+    }
+
+    char lang[64] = {0};
+    char text[3072] = {0};
+
+    /* (1) "<zielsprache>: <text>" -- erstes ':' trennt. Die Sprache vor dem
+     * ':' muss kurz sein (Sprachname, kein Doppelpunkt im Satz). */
+    const char *colon = strchr(arg, ':');
+    if (colon && (size_t)(colon - arg) > 0 && (size_t)(colon - arg) < sizeof(lang)) {
+        size_t ll = (size_t)(colon - arg);
+        memcpy(lang, arg, ll);
+        lang[ll] = '\0';
+        const char *t = colon + 1;
+        while (*t == ' ' || *t == '\t') t++;
+        snprintf(text, sizeof(text), "%s", t);
+    } else {
+        /* (2) "<text> nach <zielsprache>" -- LETZTES " nach " trennt. */
+        const char *sep = NULL, *p = arg;
+        while ((p = strstr(p, " nach ")) != NULL) { sep = p; p += 6; }
+        if (sep) {
+            size_t tl = (size_t)(sep - arg);
+            if (tl >= sizeof(text)) tl = sizeof(text) - 1;
+            memcpy(text, arg, tl);
+            text[tl] = '\0';
+            snprintf(lang, sizeof(lang), "%s", sep + 6);
+        }
+    }
+
+    /* Sprache/Text rechts trimmen (Sprachname wird von der KI ohnehin robust
+     * interpretiert -- 'englisch', 'Englisch', 'en' funktionieren alle). */
+    { size_t l = strlen(lang); while (l > 0 && (lang[l-1]==' '||lang[l-1]=='\t')) lang[--l]='\0'; }
+    { size_t l = strlen(text); while (l > 0 && (text[l-1]==' '||text[l-1]=='\t'||text[l-1]=='\n')) text[--l]='\0'; }
+
+    if (!lang[0] || !text[0]) {
+        snprintf(out, cap,
+                 "Fehler: Zielsprache oder Text fehlt. ARG-Format: "
+                 "'<zielsprache>: <text>' oder '<text> nach <zielsprache>' "
+                 "(z.B. 'franzoesisch: Guten Tag').");
+        return 1;
+    }
+
+    /* Klarer Uebersetzungs-Prompt: NUR die Uebersetzung, keine Erklaerung. */
+    char sys[256];
+    snprintf(sys, sizeof(sys),
+             "Du bist ein praeziser Uebersetzer. Gib NUR die reine Uebersetzung "
+             "zurueck -- keine Erklaerung, keine Anfuehrungszeichen, kein Vortext.");
+    char user[3200];
+    snprintf(user, sizeof(user),
+             "Uebersetze den folgenden Text nach %s. Gib NUR die Uebersetzung "
+             "zurueck, keine Erklaerung:\n\n%s", lang, text);
+
+    char ans[2048] = {0};
+    if (!flux_provider_complete(sys, user, ans, sizeof(ans))) {
+        /* EHRLICH: kein Anbieter nutzbar oder Aufruf fehlgeschlagen -- die
+         * wahrheitsgemaesse Meldung aus dem Provider steht bereits in ans. */
+        snprintf(out, cap, "%s", ans[0] ? ans :
+                 "Uebersetzung nicht moeglich -- kein KI-Anbieter verfuegbar.");
+        return 1;
+    }
+
+    /* Ausgabe begrenzen wie die anderen Tools. */
+    snprintf(out, cap, "%.*s", (int)(cap - 1), ans);
+    return 1;
+}
+
 /* ---- Dispatch -------------------------------------------------------- */
 
 int flux_tool_exec(const char *name, const char *arg,
@@ -2338,6 +2429,7 @@ int flux_tool_exec(const char *name, const char *arg,
     if (strcmp(name, "ocr_scan")      == 0) return tool_ocr_scan(arg, out, out_cap);
     if (strcmp(name, "semantic_search") == 0) return tool_semantic_search(arg, out, out_cap);
     if (strcmp(name, "memory_recall")   == 0) return tool_memory_recall(arg, out, out_cap);
+    if (strcmp(name, "translate")       == 0) return tool_translate(arg, out, out_cap);
     return 0; /* unbekanntes Tool */
 }
 
@@ -2403,6 +2495,11 @@ const char *flux_tools_description(void) {
         "letzten montag/diesen monat/letzten monat/im maerz/YYYY-MM-DD) und gibt die "
         "passenden Eintraege mit Zeitstempel + Kategorie zurueck. Regelbasiert, offline. "
         "ARG: freie Frage (z.B. 'was hat laura letzte woche gesagt')\n"
+        "  translate       -- Text uebersetzen. Laeuft ueber den AKTIVEN KI-Anbieter, "
+        "also LOKAL/OFFLINE, wenn der lokale llama.cpp-Anbieter gewaehlt ist (sonst Cloud). "
+        "ARG: '<zielsprache>: <text>' (z.B. 'englisch: Guten Morgen') ODER "
+        "'<text> nach <zielsprache>' (z.B. 'Guten Morgen nach englisch'). "
+        "Zielsprache auf Deutsch benennbar (englisch/franzoesisch/spanisch/...).\n"
         "Verwende Tools NUR wenn Echtzeitdaten benoetigt werden (Wetter, Dateien, Berechnung, "
         "aktuelle Infos via web_search usw.). "
         "Wenn der Nutzer dir persoenliche Infos nennt (Name, Geburtstag, Praeferenz), "

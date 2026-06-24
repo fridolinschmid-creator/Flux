@@ -514,6 +514,20 @@ Ein echtes Graph-/Embedding-Memory-Backend (MemX/Mem0-artig) dockt an derselben
 Stelle an (Personen-Abgleich bzw. Score-Funktion), ohne dass sich Zeitfilter
 oder Ausgabe ändern.
 
+### Übersetzung über den aktiven Anbieter (`translate`)
+Das KI-Tool `translate` übersetzt Text mit dem Sprachmodell des **aktiven**
+KI-Anbieters. Ist der lokale llama.cpp-Anbieter gewählt, läuft die Übersetzung
+**offline/local-first**; sonst über die konfigurierte Cloud. ARG-Format:
+`<zielsprache>: <text>` (z. B. `englisch: Guten Morgen`) oder
+`<text> nach <zielsprache>` (z. B. `Guten Morgen nach englisch`); die
+Zielsprache ist auf Deutsch benennbar (englisch/französisch/spanisch/…). Intern
+wird der vorhandene Provider-Pfad wiederverwendet (kein zweiter HTTP-Stack), und
+zwar als **tool- und kontextfreier** Modell-Aufruf (`flux_provider_complete`),
+damit das aus der Agenten-Tool-Schleife heraus aufgerufene Tool keine
+Tool-Rekursion auslöst. **Ehrlich:** Ist kein Anbieter nutzbar (kein lokaler
+Server, kein Cloud-Key), gibt es eine wahrheitsgemäße Meldung statt einer
+erfundenen Übersetzung.
+
 ---
 
 ## Roadmap

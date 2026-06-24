@@ -632,6 +632,49 @@ void flux_provider_ask(const char *question, char *out, size_t out_cap) {
     provider_ask_with(NULL, question, out, out_cap);
 }
 
+/* Direkter Modell-Aufruf OHNE Tools und OHNE Gespraechsverlauf.
+ *
+ * Gedacht fuer Tools, die SELBST das Sprachmodell brauchen (z.B. translate):
+ * Da diese aus der Agenten-Tool-Schleife heraus laufen, darf hier KEINE
+ * weitere Tool-Schleife angestossen werden -- sonst droht Rekursion. Diese
+ * Funktion macht daher genau EINEN api_call mit einem eigenen System-Prompt
+ * (ohne flux_tools_description, also ohne Tool-Angebot) und ohne Kontext.
+ *
+ * Nutzt den AKTIVEN Anbieter laut Config -- ist das der lokale llama.cpp /
+ * der Router-Default lokal, laeuft die Anfrage offline (local-first). EHRLICH:
+ * ist kein Anbieter nutzbar (kein lokaler Server, kein Cloud-Key), liefert die
+ * Funktion 0 und eine wahrheitsgemaesse Meldung in out -- nie eine Erfindung. */
+int flux_provider_complete(const char *system_prompt, const char *user_prompt,
+                           char *out, size_t out_cap) {
+    char api_key[512] = {0};
+    char model[200]   = {0};
+    char url[512]     = {0};
+    const flux_provider_def_t *prov =
+        resolve_provider_id(NULL, api_key, sizeof(api_key), model, sizeof(model));
+    resolve_url(prov, url, sizeof(url));
+
+    if (!prov->local && !api_key[0]) {
+        snprintf(out, out_cap,
+            "Kein KI-Zugang fuer %s konfiguriert. Trage in den Einstellungen "
+            "einen API-Key ein oder waehle den lokalen Anbieter (llama.cpp).",
+            prov->label);
+        return 0;
+    }
+    if (!url[0]) {
+        snprintf(out, out_cap,
+            "Keine Endpunkt-URL fuer %s konfiguriert (z.B. `llamacpp_url`).",
+            prov->label);
+        return 0;
+    }
+
+    const char *sys = (system_prompt && *system_prompt)
+                          ? system_prompt
+                          : "Du bist ein praeziser Assistent. Antworte knapp.";
+    /* use_ctx = 0: kein Gespraechsverlauf; System-Prompt ohne Tool-Angebot
+     * -> das Modell kann hier gar kein Tool aufrufen, keine Rekursion. */
+    return api_call(prov, api_key, model, url, sys, user_prompt, out, out_cap, 0);
+}
+
 /* ============================================================================
  * Hybrid-Router (lokal vs. Cloud) -- bewusst SIMPLE, ehrliche Heuristik.
  *
