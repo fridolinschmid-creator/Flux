@@ -243,29 +243,53 @@ und sagt ehrlich, dass kein Cloud-Zugang konfiguriert ist.
 
 **KI-Anbieter waehlbar.** Flux unterstuetzt mehrere vorkonfigurierte
 Anbieter; der aktive wird in den Einstellungen unter **KI-Anbieter** per
-Tipp durchgeschaltet (Anthropic → DeepSeek → NVIDIA). API-Key und Modell
-darunter beziehen sich immer auf den gerade gewaehlten Anbieter:
+Tipp durchgeschaltet (Anthropic → DeepSeek → NVIDIA → Lokal (llama.cpp)).
+API-Key und Modell darunter beziehen sich immer auf den gerade gewaehlten
+Anbieter:
 
 | Anbieter | Format | Endpunkt | Standardmodell |
 |---|---|---|---|
 | Anthropic Claude | Messages API (+ Prompt-Caching) | `api.anthropic.com` | `claude-haiku-4-5-20251001` |
 | DeepSeek | OpenAI-kompatibel | `api.deepseek.com` | `deepseek-chat` |
 | NVIDIA NIM | OpenAI-kompatibel | `integrate.api.nvidia.com` | `meta/llama-3.1-8b-instruct` |
+| Lokal (llama.cpp) | OpenAI-kompatibel | `llamacpp_url` (Default `http://127.0.0.1:8080/v1/chat/completions`) | `local-model` |
 
 Konfiguriert wird ueber die Einstellungen oder direkt in
 `/etc/flux/flux.conf`:
 ```ini
-ai_provider=deepseek          # anthropic | deepseek | nvidia
+ai_provider=deepseek          # anthropic | deepseek | nvidia | llamacpp
 api_key=...                   # Anthropic-Key
 deepseek_key=...              # DeepSeek-Key
 nvidia_key=...                # NVIDIA-NIM-Key
 anthropic_model=...           # optional, sonst Standardmodell
 deepseek_model=...            # optional
 nvidia_model=...              # optional
+llamacpp_url=http://127.0.0.1:8080/v1/chat/completions  # Endpunkt des lokalen Servers
+llamacpp_model=local-model    # optional (welches Modell llama-server geladen hat)
 ```
 Alternativ per Umgebungsvariable (`FLUX_AI_API_KEY`, `DEEPSEEK_API_KEY`,
-`NVIDIA_API_KEY`). Bei Rate-Limits (HTTP 429, z.B. NVIDIA) wiederholt
-`fluxaid` die Anfrage automatisch mit kurzem Backoff.
+`NVIDIA_API_KEY`, `LLAMACPP_URL`). Bei Rate-Limits (HTTP 429, z.B. NVIDIA)
+wiederholt `fluxaid` die Anfrage automatisch mit kurzem Backoff.
+
+#### On-Device-LLM lokal (llama.cpp, offline)
+
+Der Anbieter **Lokal (llama.cpp)** spricht einen selbst gestarteten
+`llama-server` an (Teil von [llama.cpp](https://github.com/ggml-org/llama.cpp),
+OpenAI-kompatible HTTP-API). Damit laeuft die KI **local-first/offline** --
+keine Anfrage verlaesst das Geraet bzw. das lokale Netz, kein Cloud-Key
+noetig. Flux bringt llama.cpp **nicht** mit (kein Vendoring); du startest
+den Server selbst, z.B.:
+```bash
+llama-server -m ./modell.gguf --port 8080
+```
+Danach in den Einstellungen **KI-Anbieter** auf „Lokal (llama.cpp)"
+schalten. Den Endpunkt setzt du in `/etc/flux/flux.conf`
+(`llamacpp_url=...`) -- dieser Anbieter hat in der Einstellungs-Liste
+keinen eigenen URL-Eintrag, nur Modell ist dort editierbar. Ein API-Key
+ist nicht noetig: der Anbieter gilt als verfuegbar, sobald eine URL
+gesetzt ist. Ist der Server nicht erreichbar, meldet `fluxaid` das
+ehrlich („Kein lokaler KI-Server erkannt -- laeuft llama-server...?")
+statt eine Antwort zu erfinden.
 
 ### E-Mail einrichten (Senden + Lesen)
 In den Einstellungen gibt es **einen** Eintrag „E-Mail Einstellungen": dort

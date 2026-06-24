@@ -18,7 +18,8 @@
  *                      Header x-api-key + anthropic-version, Prompt-Caching)
  *   - FMT_OPENAI     : OpenAI-kompatibel (system als erste Nachricht,
  *                      choices[].message.content, Header Authorization: Bearer)
- *                      -- DeepSeek und NVIDIA NIM nutzen dieses Format.
+ *                      -- DeepSeek, NVIDIA NIM und ein lokaler
+ *                      llama.cpp-Server (llama-server) nutzen dieses Format.
  *
  * Der aktive Anbieter wird ueber den Config-Key `ai_provider` gewaehlt
  * (Standard: anthropic). Der API-Key kommt aus dem providerspezifischen
@@ -35,12 +36,16 @@ typedef enum { FMT_ANTHROPIC, FMT_OPENAI } api_format_t;
 typedef struct {
     const char  *id;            /* interner Bezeichner (ai_provider-Wert) */
     const char  *label;         /* Anzeigename */
-    const char  *url;           /* API-Endpunkt */
+    const char  *url;           /* fester API-Endpunkt (NULL = aus Config) */
     api_format_t format;
     const char  *key_cfg;       /* Config-Key fuer den API-Key */
     const char  *model_cfg;     /* Config-Key fuer das Modell */
     const char  *default_model; /* Standardmodell, falls keins gesetzt */
     const char  *env_key;       /* Umgebungsvariable als Fallback fuer Key */
+    const char  *url_cfg;       /* Config-Key fuer ueberschreibbaren Endpunkt */
+    const char  *url_env;       /* Umgebungsvariable als Fallback fuer URL */
+    const char  *default_url;   /* Standard-Endpunkt, falls keiner gesetzt */
+    int          local;         /* 1 = lokaler Server, kein API-Key noetig */
 } flux_provider_def_t;
 
 /* Vordefinierte Anbieter -- in den Einstellungen auswaehlbar. */
@@ -48,15 +53,23 @@ static const flux_provider_def_t PROVIDERS[] = {
     { "anthropic", "Anthropic Claude",
       "https://api.anthropic.com/v1/messages", FMT_ANTHROPIC,
       "api_key", "anthropic_model", "claude-haiku-4-5-20251001",
-      "FLUX_AI_API_KEY" },
+      "FLUX_AI_API_KEY", NULL, NULL, NULL, 0 },
     { "deepseek", "DeepSeek",
       "https://api.deepseek.com/chat/completions", FMT_OPENAI,
       "deepseek_key", "deepseek_model", "deepseek-chat",
-      "DEEPSEEK_API_KEY" },
+      "DEEPSEEK_API_KEY", NULL, NULL, NULL, 0 },
     { "nvidia", "NVIDIA NIM",
       "https://integrate.api.nvidia.com/v1/chat/completions", FMT_OPENAI,
       "nvidia_key", "nvidia_model", "meta/llama-3.1-8b-instruct",
-      "NVIDIA_API_KEY" },
+      "NVIDIA_API_KEY", NULL, NULL, NULL, 0 },
+    /* Lokaler llama.cpp-Server (llama-server, OpenAI-kompatible API).
+     * Endpunkt aus Config-Key `llamacpp_url` (env-Fallback LLAMACPP_URL),
+     * kein API-Key noetig (local-first, offline). */
+    { "llamacpp", "Lokal (llama.cpp)",
+      NULL, FMT_OPENAI,
+      "llamacpp_key", "llamacpp_model", "local-model",
+      NULL, "llamacpp_url", "LLAMACPP_URL",
+      "http://127.0.0.1:8080/v1/chat/completions", 1 },
 };
 static const int PROVIDERS_N = (int)(sizeof(PROVIDERS) / sizeof(PROVIDERS[0]));
 
@@ -67,8 +80,23 @@ static const flux_provider_def_t *provider_by_id(const char *id) {
     return &PROVIDERS[0]; /* Standard: anthropic */
 }
 
-/* Ermittelt den aktiven Anbieter, dessen API-Key und Modell.
- * Gibt 1 zurueck, wenn ein nutzbarer Key vorliegt, sonst 0. */
+/* Ermittelt den Endpunkt des Anbieters. Feste URL hat Vorrang; sonst
+ * Config-Key (`url_cfg`), Umgebungsvariable (`url_env`) und Default. */
+static void resolve_url(const flux_provider_def_t *p, char *url_out, size_t url_cap) {
+    if (!url_out || !url_cap) return;
+    url_out[0] = '\0';
+    if (p->url) { snprintf(url_out, url_cap, "%s", p->url); return; }
+    char buf[512] = {0};
+    if (p->url_cfg && flux_config_get(p->url_cfg, buf, sizeof(buf)) && buf[0])
+        snprintf(url_out, url_cap, "%s", buf);
+    else {
+        const char *env = p->url_env ? getenv(p->url_env) : NULL;
+        if (env && *env) snprintf(url_out, url_cap, "%s", env);
+        else if (p->default_url) snprintf(url_out, url_cap, "%s", p->default_url);
+    }
+}
+
+/* Ermittelt den aktiven Anbieter, dessen API-Key und Modell. */
 static const flux_provider_def_t *resolve_provider(char *key_out, size_t key_cap,
                                                    char *model_out, size_t model_cap) {
     char sel[64] = {0};
@@ -98,14 +126,27 @@ static const flux_provider_def_t *resolve_provider(char *key_out, size_t key_cap
 int flux_provider_active(char *key_out, size_t key_cap,
                          char *model_out, size_t model_cap) {
     char key[512] = {0};
-    resolve_provider(key, sizeof(key), model_out, model_cap);
+    const flux_provider_def_t *p =
+        resolve_provider(key, sizeof(key), model_out, model_cap);
     if (key_out && key_cap) snprintf(key_out, key_cap, "%s", key);
+    if (p->local) {
+        /* Lokaler Server braucht keinen API-Key -- verfuegbar, sobald eine
+         * URL aufgeloest werden kann. */
+        char url[512] = {0};
+        resolve_url(p, url, sizeof(url));
+        return url[0] != '\0';
+    }
     return key[0] != '\0';
 }
 
 int flux_provider_available(void) {
     char key[512] = {0};
-    resolve_provider(key, sizeof(key), NULL, 0);
+    const flux_provider_def_t *p = resolve_provider(key, sizeof(key), NULL, 0);
+    if (p->local) {
+        char url[512] = {0};
+        resolve_url(p, url, sizeof(url));
+        return url[0] != '\0';
+    }
     return key[0] != '\0';
 }
 
@@ -275,7 +316,8 @@ static int extract_text(const char *json, api_format_t fmt, char *out, size_t ou
 /* Baut den Request-Body fuer das jeweilige Format und sendet ihn.
  * Gibt 1 bei Erfolg. */
 static int api_call(const flux_provider_def_t *prov, const char *api_key,
-                    const char *model, const char *system_prompt,
+                    const char *model, const char *url,
+                    const char *system_prompt,
                     const char *final_q, char *out, size_t out_cap, int use_ctx) {
     char body[24576];
 
@@ -336,10 +378,10 @@ static int api_call(const flux_provider_def_t *prov, const char *api_key,
         headers = curl_slist_append(headers, auth_header);
         headers = curl_slist_append(headers, "anthropic-version: 2023-06-01");
         headers = curl_slist_append(headers, "anthropic-beta: prompt-caching-2024-07-31");
-    } else {
+    } else if (api_key && api_key[0]) {
         snprintf(auth_header, sizeof(auth_header), "Authorization: Bearer %s", api_key);
         headers = curl_slist_append(headers, auth_header);
-    }
+    } /* lokaler Server (llama.cpp) braucht typischerweise keinen Bearer-Key */
     headers = curl_slist_append(headers, "content-type: application/json");
 
     /* Bis zu 2 Versuche bei Rate-Limit (HTTP 429), z.B. NVIDIA NIM. */
@@ -354,7 +396,7 @@ static int api_call(const flux_provider_def_t *prov, const char *api_key,
         respbuf[0] = '\0';
         struct membuf mb = { .data = respbuf, .len = 0, .cap = sizeof(respbuf) };
 
-        curl_easy_setopt(curl, CURLOPT_URL, prov->url);
+        curl_easy_setopt(curl, CURLOPT_URL, url);
         curl_easy_setopt(curl, CURLOPT_POST, 1L);
         curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
         curl_easy_setopt(curl, CURLOPT_POSTFIELDS, body);
@@ -368,8 +410,15 @@ static int api_call(const flux_provider_def_t *prov, const char *api_key,
         curl_easy_cleanup(curl);
 
         if (res != CURLE_OK) {
-            snprintf(out, out_cap, "Netzwerkfehler (%s): %s",
-                     prov->label, curl_easy_strerror(res));
+            if (prov->local) {
+                /* Ehrlich: lokaler Server nicht erreichbar statt Fantasie. */
+                snprintf(out, out_cap,
+                    "Kein lokaler KI-Server erkannt -- laeuft llama-server "
+                    "unter %s? (%s)", url, curl_easy_strerror(res));
+            } else {
+                snprintf(out, out_cap, "Netzwerkfehler (%s): %s",
+                         prov->label, curl_easy_strerror(res));
+            }
             break;
         }
         if (http == 429 && attempt < 2) {
@@ -490,14 +539,24 @@ static void build_system_prompt(char *system_prompt, size_t cap) {
 void flux_provider_ask(const char *question, char *out, size_t out_cap) {
     char api_key[512] = {0};
     char model[200]   = {0};
+    char url[512]     = {0};
     const flux_provider_def_t *prov =
         resolve_provider(api_key, sizeof(api_key), model, sizeof(model));
+    resolve_url(prov, url, sizeof(url));
 
-    if (!api_key[0]) {
+    if (!prov->local && !api_key[0]) {
         snprintf(out, out_cap,
             "Kein Cloud-Zugang fuer %s konfiguriert. Trage in den Einstellungen "
             "einen API-Key fuer den gewaehlten Anbieter ein (oder waehle einen "
             "anderen Anbieter).", prov->label);
+        return;
+    }
+    if (!url[0]) {
+        /* Lokaler Anbieter ohne konfigurierte URL -- ehrlich melden. */
+        snprintf(out, out_cap,
+            "Keine Endpunkt-URL fuer %s konfiguriert. Setze `llamacpp_url` in "
+            "den Einstellungen bzw. /etc/flux/flux.conf (z.B. "
+            "http://127.0.0.1:8080/v1/chat/completions).", prov->label);
         return;
     }
 
@@ -505,7 +564,7 @@ void flux_provider_ask(const char *question, char *out, size_t out_cap) {
     build_system_prompt(system_prompt, sizeof(system_prompt));
 
     /* Erster API-Aufruf -- mit Gespraechsverlauf */
-    if (!api_call(prov, api_key, model, system_prompt, question, out, out_cap, 1))
+    if (!api_call(prov, api_key, model, url, system_prompt, question, out, out_cap, 1))
         return;
 
     /* Agenten-Schleife: solange die Antwort ein Tool-Aufruf ist, das Tool
@@ -539,7 +598,7 @@ void flux_provider_ask(const char *question, char *out, size_t out_cap) {
                  "und fasse zusammen, was erledigt wurde.",
                  question, log);
 
-        if (!api_call(prov, api_key, model, system_prompt, followup, out, out_cap, 0))
+        if (!api_call(prov, api_key, model, url, system_prompt, followup, out, out_cap, 0))
             return;
     }
 

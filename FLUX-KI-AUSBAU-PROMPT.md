@@ -78,7 +78,7 @@ Flux' ganze Identität ist **ehrliche Einordnung**. Halte das strikt ein:
   später: Einstellungen ändern, Dateien schreiben) geht **immer** erst
   durch den Bestätigungs-Dialog (Senden/Abbrechen/Bearbeiten).
 - **Anbieter-unabhängig:** Tool-/Intent-Logik darf nicht an einen einzelnen
-  KI-Anbieter gebunden sein (Anthropic/DeepSeek/NVIDIA sind austauschbar).
+  KI-Anbieter gebunden sein (Anthropic/DeepSeek/NVIDIA/llama.cpp sind austauschbar).
 - **Kein zweites App-Grid.** Neue Funktionen werden über den Assistenten
   bzw. ehrliche Schnellzugriffe erreichbar, nicht über Icon-Raster.
 
@@ -213,12 +213,12 @@ erst nach „Geplant" hochziehen, wenn sie bewertet und priorisiert sind.
 - [ ] Sicherheitsmodell – App-Sandbox/Permissions, root-freier Betrieb  — Pflicht vor echtem Einsatz
 
 ### Ideen aus Recherche (unsortiert, noch zu bewerten)
-- [ ] (2026-06-23, llama.cpp-Doku) On-Device-LLM als Anbieter-Option – llama.cpp auf ARM64, austauschbares Backend — passt zu Flux, weil Local-first + Privacy
 - [ ] (2026-06-23, whisper.cpp-Repo) Stream-Modus in whisper.cpp – Echtzeit-Transkription statt Batch — passt zu Flux, weil Mikrofon-Button reaktiver wird
 - [ ] (2026-06-23, postmarketOS-Wiki) ECAPA-TDNN ONNX-Modell ~20 MB – echtes Speaker-Embedding für voice_unlock.c — passt zu Flux, weil Stub damit ersetzbar ohne UI-Änderung
 - [ ] (2026-06-23, ofono-Doku) ofono/ModemManager statt Telephony-Stub – echtes SMS/Anruf-Backend — passt zu Flux, weil telephony.c als austauschbares Backend gebaut ist
 
 ### Erledigt
+- [x] On-Device-LLM als 4. Anbieter „Lokal (llama.cpp)" – neuer Eintrag im PROVIDERS[]-Array (provider.c, FMT_OPENAI, konfigurierbarer Endpunkt `llamacpp_url`/env `LLAMACPP_URL`, Default 127.0.0.1:8080, Modell `llamacpp_model`/Default "local-model", kein API-Key noetig), `flux_provider_available()` wuergt key-lose lokale Anbieter nicht mehr ab, ehrliche Fehlermeldung wenn llama-server nicht erreichbar; Shell-Provider-Rotation um „llamacpp" erweitert, Modell-Feld editierbar, URL nur per flux.conf (kein eigener Listeneintrag, ehrlich dokumentiert); README-Tabelle + Start-Anleitung ergaenzt  — Compile-Test bestanden (fluxai + shell, keine neuen Warnungen), gegen echten llama-server nicht in QEMU verifiziert
 - [x] FLUX_SCREEN_JOURNAL – dedizierter Journal-Screen (Liste, Tap öffnet Eintrag, kein Löschen)  — Compile-Test bestanden, QEMU nicht verifiziert
 - [x] journal_list / journal_read KI-Tools  — Compile-Test bestanden
 - [x] meeting_list / meeting_read KI-Tools  — Compile-Test bestanden
