@@ -19,6 +19,8 @@
  *   memory_list      -- Alle KI-Erinnerungen anzeigen, ARG: (leer)
  *   memory_search    -- KI-Erinnerungen durchsuchen, ARG: Suchbegriff
  *   memory_delete    -- Erinnerungen loeschen, ARG: Suchbegriff
+ *   semantic_search  -- Lokale RAG-Suche ueber Notizen/Memory/Kalender/Kontakte/Journal,
+ *                       lexikalische Overlap-Heuristik (kein ML), ARG: Suchbegriff/Frage
  */
 #include "tools.h"
 #include "vision.h"
@@ -1555,6 +1557,205 @@ static int tool_doc_analyze(const char *arg, char *out, size_t cap) {
     return 1;
 }
 
+/* ---- semantic_search ------------------------------------------------- */
+/*
+ * Lokale "semantische" Suche / RAG-Kontext ueber feste Wissensquellen auf
+ * dem Geraet. EHRLICH: Dies ist KEIN ML-Embedding, sondern eine lexikalische
+ * Overlap-Heuristik. Query und jede Zeile werden tokenisiert (lowercasen,
+ * an Nicht-Buchstaben splitten); gewertet wird ueber Term-Overlap der
+ * Query-Tokens mit den Zeilen-Tokens, plus eine leichte Gewichtung fuer
+ * Mehrfachtreffer. Es laeuft komplett offline -- kein Netz, keine Cloud.
+ *
+ * Austauschbares Backend: Ein echtes Embedding-Backend (z.B. nomic-embed
+ * oder all-MiniLM via llama-server /embeddings) wuerde genau HIER andocken:
+ * statt token_overlap_score() wuerde man Query- und Zeilen-Vektoren holen
+ * und per Cosinus-Aehnlichkeit ranken. Quellen-Iteration, Top-N-Auswahl und
+ * Ausgabeformat blieben gleich -- nur die Score-Funktion wird getauscht.
+ */
+
+/* Eine feste Wissensquelle: Datei-Pfad + menschenlesbare Kategorie. */
+struct sem_source { const char *path; const char *label; };
+
+/* Zerlegt s in Tokens (lowercase, nur Buchstaben a-z/0-9 zaehlen als Teil
+ * eines Tokens). Schreibt bis zu max_tok Tokens nach toks[][SEM_TOK_LEN].
+ * Gibt die Anzahl gefundener Tokens zurueck. */
+#define SEM_TOK_LEN  32
+#define SEM_MAX_TOK  32
+static int sem_tokenize(const char *s, char toks[][SEM_TOK_LEN], int max_tok) {
+    int n = 0; size_t tl = 0;
+    for (const char *p = s; ; p++) {
+        unsigned char c = (unsigned char)*p;
+        int is_word = (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+                      (c >= '0' && c <= '9');
+        if (is_word) {
+            if (n < max_tok && tl < SEM_TOK_LEN - 1) {
+                char lc = (c >= 'A' && c <= 'Z') ? (char)(c + 32) : (char)c;
+                toks[n][tl++] = lc;
+            }
+        } else {
+            if (tl > 0) {
+                if (n < max_tok) { toks[n][tl] = '\0'; n++; }
+                tl = 0;
+            }
+            if (!*p) break;
+        }
+    }
+    return n;
+}
+
+/* Lexikalischer Overlap-Score zwischen Query-Tokens und einer Zeile.
+ * Zaehlt, wie oft ein Query-Token (Substring-Match auf Token-Ebene, damit
+ * z.B. "geburtstag" auch "geburtstags" trifft) in den Zeilen-Tokens vorkommt.
+ * Mehrfachtreffer erhoehen den Score leicht (Term-Frequenz). */
+static int sem_score(char qtoks[][SEM_TOK_LEN], int nq, const char *line) {
+    char ltoks[SEM_MAX_TOK][SEM_TOK_LEN];
+    int nl = sem_tokenize(line, ltoks, SEM_MAX_TOK);
+    int score = 0;
+    for (int i = 0; i < nq; i++) {
+        for (int j = 0; j < nl; j++) {
+            if (strstr(ltoks[j], qtoks[i]) || strstr(qtoks[i], ltoks[j]))
+                score++;
+        }
+    }
+    return score;
+}
+
+/* Ein gefundenes Snippet im Ranking. */
+struct sem_hit { int score; char line[200]; const char *label; };
+
+static int tool_semantic_search(const char *arg, char *out, size_t cap) {
+    if (!arg || !*arg) {
+        snprintf(out, cap, "Fehler: keine Suchanfrage angegeben");
+        return 1;
+    }
+
+    /* Query tokenisieren */
+    char qtoks[SEM_MAX_TOK][SEM_TOK_LEN];
+    int nq = sem_tokenize(arg, qtoks, SEM_MAX_TOK);
+    if (nq == 0) {
+        snprintf(out, cap, "Fehler: keine durchsuchbaren Woerter in der Anfrage");
+        return 1;
+    }
+
+    /* Feste lokale Quellen -- nur diese werden gelesen (Path-Traversal-sicher:
+     * das ARG wird NIE als Pfad interpretiert). Journal-Dateien werden separat
+     * unten aufgesammelt. */
+    static const struct sem_source sources[] = {
+        { MEMORY_PATH,              "Memory" },
+        { NOTES_PATH,               "Notiz" },
+        { "/etc/flux/calendar.txt", "Kalender" },
+        { "/etc/flux/contacts.txt", "Kontakt" },
+        { NULL, NULL }
+    };
+
+    /* Top-N Snippets (Insertion in eine kleine sortierte Liste). */
+    #define SEM_TOP 5
+    struct sem_hit top[SEM_TOP];
+    int ntop = 0;
+    int sources_with_data = 0;
+
+    /* Hilfs-Lambda-Ersatz: eine geoeffnete Datei zeilenweise scoren. */
+    /* (als Schleifenkoerper unten dupliziert -- C hat keine Closures) */
+
+    for (int si = 0; sources[si].path; si++) {
+        FILE *f = fopen(sources[si].path, "r");
+        if (!f) continue;
+        sources_with_data++;
+        char line[256];
+        while (fgets(line, sizeof(line), f)) {
+            /* Newline strippen */
+            size_t ll = strlen(line);
+            while (ll > 0 && (line[ll-1] == '\n' || line[ll-1] == '\r'))
+                line[--ll] = '\0';
+            if (ll == 0 || line[0] == '#') continue;
+            int sc = sem_score(qtoks, nq, line);
+            if (sc <= 0) continue;
+            /* In Top-N einsortieren */
+            if (ntop < SEM_TOP || sc > top[SEM_TOP-1].score) {
+                int pos = (ntop < SEM_TOP) ? ntop++ : SEM_TOP - 1;
+                while (pos > 0 && top[pos-1].score < sc) {
+                    top[pos] = top[pos-1];
+                    pos--;
+                }
+                top[pos].score = sc;
+                top[pos].label = sources[si].label;
+                snprintf(top[pos].line, sizeof(top[pos].line), "%s", line);
+            }
+        }
+        fclose(f);
+    }
+
+    /* Journal-Verzeichnis: alle .txt-Dateien (eine pro Tag) durchsuchen. */
+    DIR *jd = opendir("/home/user/Journal");
+    if (jd) {
+        struct dirent *de;
+        while ((de = readdir(jd)) != NULL) {
+            if (de->d_name[0] == '.') continue;
+            size_t dl = strlen(de->d_name);
+            if (dl <= 4 || strcmp(de->d_name + dl - 4, ".txt") != 0) continue;
+            char jpath[320];
+            snprintf(jpath, sizeof(jpath), "/home/user/Journal/%s", de->d_name);
+            FILE *f = fopen(jpath, "r");
+            if (!f) continue;
+            sources_with_data++;
+            /* Datum (Dateiname ohne .txt) als Label-Zusatz */
+            char jdate[16]; snprintf(jdate, sizeof(jdate), "%.*s",
+                                     (int)(dl - 4 < 15 ? dl - 4 : 15), de->d_name);
+            char line[256];
+            while (fgets(line, sizeof(line), f)) {
+                size_t ll = strlen(line);
+                while (ll > 0 && (line[ll-1] == '\n' || line[ll-1] == '\r'))
+                    line[--ll] = '\0';
+                if (ll == 0) continue;
+                int sc = sem_score(qtoks, nq, line);
+                if (sc <= 0) continue;
+                if (ntop < SEM_TOP || sc > top[SEM_TOP-1].score) {
+                    int pos = (ntop < SEM_TOP) ? ntop++ : SEM_TOP - 1;
+                    while (pos > 0 && top[pos-1].score < sc) {
+                        top[pos] = top[pos-1];
+                        pos--;
+                    }
+                    top[pos].score = sc;
+                    /* Label "Journal JJJJ-MM-TT" -- in statischem Puffer pro Treffer
+                     * nicht moeglich; wir kodieren das Datum in die Zeile. */
+                    static const char *jlabel = "Journal";
+                    top[pos].label = jlabel;
+                    snprintf(top[pos].line, sizeof(top[pos].line), "(%s) %s",
+                             jdate, line);
+                }
+            }
+            fclose(f);
+        }
+        closedir(jd);
+    }
+
+    /* Ehrliche Ausgabe */
+    if (sources_with_data == 0) {
+        snprintf(out, cap,
+                 "Keine lokalen Wissensquellen vorhanden (Memory, Notizen, "
+                 "Kalender, Kontakte, Journal sind alle leer/nicht angelegt).");
+        return 1;
+    }
+    if (ntop == 0) {
+        snprintf(out, cap,
+                 "Nichts Passendes zu \"%s\" in deinen lokalen Notizen, "
+                 "Erinnerungen, Terminen, Kontakten oder im Journal gefunden.",
+                 arg);
+        return 1;
+    }
+
+    size_t pos = snprintf(out, cap,
+        "Lokale Treffer zu \"%s\" (lexikalische Suche, beste %d):\n", arg, ntop);
+    for (int i = 0; i < ntop && pos + 8 < cap; i++) {
+        int w = snprintf(out + pos, cap - pos, "  [%s] %s\n",
+                         top[i].label, top[i].line);
+        if (w < 0) break;
+        pos += (size_t)w;
+        if (pos >= cap) { pos = cap - 1; out[pos] = '\0'; break; }
+    }
+    return 1;
+}
+
 /* ---- Dispatch -------------------------------------------------------- */
 
 int flux_tool_exec(const char *name, const char *arg,
@@ -1597,6 +1798,7 @@ int flux_tool_exec(const char *name, const char *arg,
     if (strcmp(name, "meeting_list")  == 0) return tool_meeting_list(arg, out, out_cap);
     if (strcmp(name, "meeting_read")  == 0) return tool_meeting_read(arg, out, out_cap);
     if (strcmp(name, "doc_analyze")   == 0) return tool_doc_analyze(arg, out, out_cap);
+    if (strcmp(name, "semantic_search") == 0) return tool_semantic_search(arg, out, out_cap);
     return 0; /* unbekanntes Tool */
 }
 
@@ -1646,6 +1848,10 @@ const char *flux_tools_description(void) {
         "  mail_unread     -- Ungelesene E-Mails abrufen (Von/Betreff/Datum, fuer Zusammenfassungen). ARG: (leer)\n"
         "  mail_read       -- Text einer E-Mail lesen. ARG: UID (aus mail_unread)\n"
         "  web_search      -- Im Internet suchen (aktuelle Infos/News/Fakten). ARG: Suchbegriff\n"
+        "  semantic_search -- Lokal ueber ALLES auf dem Geraet suchen (Notizen, Memory, "
+        "Kalender, Kontakte, Journal). Nutze dies bei 'such in meinen Notizen/Erinnerungen/"
+        "im Journal nach ...' oder 'was weiss mein Geraet ueber ...'. Lexikalische Offline-"
+        "Suche, gibt die besten passenden Snippets mit Quelle zurueck. ARG: Suchbegriff/Frage\n"
         "Verwende Tools NUR wenn Echtzeitdaten benoetigt werden (Wetter, Dateien, Berechnung, "
         "aktuelle Infos via web_search usw.). "
         "Wenn der Nutzer dir persoenliche Infos nennt (Name, Geburtstag, Praeferenz), "

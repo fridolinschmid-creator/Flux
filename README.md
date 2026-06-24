@@ -365,6 +365,19 @@ Danach kann jeder KI-Anbieter über `web_search` aktuelle Infos holen
 („Suche im Internet nach …"). Später lässt sich dieselbe Konfiguration auf
 einen produktiven SearXNG-/Such-Proxy umstellen, ohne Code-Änderung.
 
+### Lokale Suche über alles auf dem Gerät (`semantic_search`)
+Das KI-Tool `semantic_search` durchsucht **offline** die festen lokalen
+Wissensquellen — Memory (`/etc/flux/memory.txt`), Notizen
+(`/etc/flux/notes.txt`), Kalender, Kontakte und das Tages-Journal
+(`/home/user/Journal/`) — und gibt der KI die besten passenden Snippets mit
+Quelle als RAG-Kontext zurück („such in meinen Notizen nach …", „was weiß mein
+Gerät über …"). **Ehrlich:** Das ist **kein** ML-Embedding, sondern eine
+lexikalische Overlap-Heuristik (Tokenisierung + Term-Overlap, Top-5). Findet
+nichts passt, sagt es das wahrheitsgemäß statt etwas zu erfinden. Kein Netz,
+keine Cloud — alles bleibt auf dem Gerät. Ein echtes Embedding-Backend
+(z. B. nomic-embed / all-MiniLM via llama-server `/embeddings`) ist als
+austauschbare Score-Funktion vorgesehen und dockt ohne UI-Änderung an.
+
 ---
 
 ## Roadmap
