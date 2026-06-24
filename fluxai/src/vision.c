@@ -33,11 +33,17 @@
 #define VLM_DEFAULT_URL   "http://127.0.0.1:8081/v1/chat/completions"
 #define VLM_DEFAULT_MODEL "moondream"
 
-/* Bild-Analyse-Prompt -- fuer beide Backends gleich. */
+/* Bild-Analyse-Prompt -- Standard fuer flux_vision_analyze. */
 #define VISION_PROMPT \
     "Beschreibe kurz, was auf diesem Bild zu sehen ist. " \
     "Nenne Motive, Stimmung und -- falls erkennbar -- den Ort oder Kontext. " \
     "Antworte auf Deutsch, maximal 3 Saetze."
+
+/* OCR-Prompt -- fuer flux_vision_ocr (Text wortgetreu, keine Beschreibung). */
+#define VISION_OCR_PROMPT \
+    "Gib NUR den Text wieder, der im Bild zu sehen ist -- wortgetreu, Zeile " \
+    "fuer Zeile. Keine Beschreibung, keine Kommentare, keine Anfuehrungszeichen. " \
+    "Wenn kein Text erkennbar ist, antworte mit: (kein Text erkannt)."
 
 /* ---- Base64-Encoder ------------------------------------------------- */
 
@@ -175,7 +181,8 @@ static char *load_image_b64(const char *ppm_path, char *out, size_t out_cap) {
 
 /* ---- Cloud-Backend (Anthropic Vision, unveraendertes Verhalten) ----- */
 
-static int vision_cloud(const char *b64, char *out, size_t out_cap,
+static int vision_cloud(const char *b64, const char *prompt,
+                        char *out, size_t out_cap,
                         const char *api_key_hint) {
     /* API-Key bestimmen */
     char key_buf[256] = {0};
@@ -203,9 +210,9 @@ static int vision_cloud(const char *b64, char *out, size_t out_cap,
             "\"type\":\"base64\","
             "\"media_type\":\"image/jpeg\","
             "\"data\":\"%s\"}},"
-        "{\"type\":\"text\",\"text\":\"" VISION_PROMPT "\"}"
+        "{\"type\":\"text\",\"text\":\"%s\"}"
         "]}]}",
-        VISION_MODEL, b64);
+        VISION_MODEL, b64, prompt);
 
     if (blen <= 0 || (size_t)blen >= body_cap) {
         free(body);
@@ -264,7 +271,8 @@ static int vision_cloud(const char *b64, char *out, size_t out_cap,
  * der Bild-Input im OpenAI-Format versteht -- z.B. moondream, SmolVLM oder
  * MiniCPM-V (per llama-server mit --mmproj oder einem eigenen Server). Modell
  * `vlm_model` und Endpunkt `vlm_url` machen das Backend austauschbar. */
-static int vision_local(const char *b64, char *out, size_t out_cap) {
+static int vision_local(const char *b64, const char *prompt,
+                        char *out, size_t out_cap) {
     /* Endpunkt aufloesen: Config `vlm_url` > env VLM_URL > Default. */
     char url[512] = {0};
     if (!(flux_config_get("vlm_url", url, sizeof(url)) && url[0])) {
@@ -285,11 +293,11 @@ static int vision_local(const char *b64, char *out, size_t out_cap) {
     int blen = snprintf(body, body_cap,
         "{\"model\":\"%s\",\"max_tokens\":600,"
         "\"messages\":[{\"role\":\"user\",\"content\":["
-        "{\"type\":\"text\",\"text\":\"" VISION_PROMPT "\"},"
+        "{\"type\":\"text\",\"text\":\"%s\"},"
         "{\"type\":\"image_url\",\"image_url\":{"
             "\"url\":\"data:image/jpeg;base64,%s\"}}"
         "]}]}",
-        model, b64);
+        model, prompt, b64);
 
     if (blen <= 0 || (size_t)blen >= body_cap) {
         free(body);
@@ -340,11 +348,12 @@ static int vision_local(const char *b64, char *out, size_t out_cap) {
     return ok;
 }
 
-/* Dispatcher: waehlt anhand des Config-Keys `vision_backend` zwischen dem
- * Cloud-Pfad (Default, Anthropic) und dem lokalen VLM-Pfad. Die Bild-Aufbereitung
+/* Gemeinsamer Dispatcher: waehlt anhand des Config-Keys `vision_backend`
+ * zwischen dem Cloud-Pfad (Default, Anthropic) und dem lokalen VLM-Pfad und
+ * schickt das Bild mit dem uebergebenen Prompt. Die Bild-Aufbereitung
  * (PPM→JPEG→base64) ist fuer beide gleich und passiert nur einmal. */
-int flux_vision_analyze(const char *ppm_path, char *out, size_t out_cap,
-                        const char *api_key_hint) {
+static int vision_dispatch(const char *ppm_path, const char *prompt,
+                           char *out, size_t out_cap, const char *api_key_hint) {
     char backend[16] = {0};
     flux_config_get("vision_backend", backend, sizeof(backend));
     int local = (strcmp(backend, "local") == 0);
@@ -352,8 +361,23 @@ int flux_vision_analyze(const char *ppm_path, char *out, size_t out_cap,
     char *b64 = load_image_b64(ppm_path, out, out_cap);
     if (!b64) return 0; /* Fehlermeldung steht bereits in out */
 
-    int ok = local ? vision_local(b64, out, out_cap)
-                    : vision_cloud(b64, out, out_cap, api_key_hint);
+    int ok = local ? vision_local(b64, prompt, out, out_cap)
+                    : vision_cloud(b64, prompt, out, out_cap, api_key_hint);
     free(b64);
     return ok;
+}
+
+/* Bildbeschreibung (Standard-Prompt). */
+int flux_vision_analyze(const char *ppm_path, char *out, size_t out_cap,
+                        const char *api_key_hint) {
+    return vision_dispatch(ppm_path, VISION_PROMPT, out, out_cap, api_key_hint);
+}
+
+/* OCR ueber das VLM: gleicher Pfad, aber OCR-Prompt (nur Text wortgetreu).
+ * Bevorzugtes lokales OCR-Backend, wenn `vision_backend=local` gesetzt ist;
+ * der Cloud-Pfad funktioniert ebenfalls (Anthropic Vision kann Text lesen).
+ * Klassisches OCR via tesseract dockt in tools.c an (kein Netz noetig). */
+int flux_vision_ocr(const char *ppm_path, char *out, size_t out_cap,
+                    const char *api_key_hint) {
+    return vision_dispatch(ppm_path, VISION_OCR_PROMPT, out, out_cap, api_key_hint);
 }

@@ -19,4 +19,11 @@
 int flux_vision_analyze(const char *ppm_path, char *out, size_t out_cap,
                         const char *api_key);
 
+/* OCR auf einer PPM-Bilddatei: gibt NUR den erkannten Text zurueck (OCR-Prompt
+ * statt Beschreibung). Nutzt dasselbe Backend wie flux_vision_analyze
+ * (lokales VLM bei `vision_backend=local`, sonst Cloud). Gibt 1 bei Erfolg.
+ * Ist kein VLM erreichbar, steht eine ehrliche Meldung in out (kein Fake-Text).*/
+int flux_vision_ocr(const char *ppm_path, char *out, size_t out_cap,
+                    const char *api_key);
+
 #endif

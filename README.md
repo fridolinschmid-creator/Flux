@@ -406,6 +406,21 @@ zu erfinden. Der Pfad ist gegen einen **echten** lokalen VLM-Server bisher
 **nicht in QEMU verifiziert** (nur Compile-Test); die Andock-Stelle ist im
 Code (`fluxai/src/vision.c`, Funktion `vision_local`) klar markiert.
 
+#### Foto eines Dokuments lesen: Kamera-OCR (local-first)
+
+Das KI-Tool `ocr_scan` macht aus einem **Foto eines Dokuments** (Brief,
+Vertrag, Bon) wortgetreuen Text, sodass die KI darüber sprechen kann
+(„Was ist die Kündigungsfrist?") -- **komplett auf dem Gerät, kein
+Cloud-Scandienst**. ARG ist ein Bildpfad (in `/home/user/Pictures` oder
+`/home/user/Documents`) oder `letztes` für das zuletzt aufgenommene Foto.
+OCR läuft über das **vorhandene lokale VLM** (`vision_backend=local`, mit
+OCR-Prompt) oder klassisch über das **`tesseract`-Binary** (rein lokal),
+sofern installiert. Ist weder ein lokaler VLM-Server erreichbar noch
+tesseract vorhanden, meldet `fluxaid` das **ehrlich** („kein OCR-Backend
+verfügbar") statt Text zu erfinden. Der erkannte Text wird zusätzlich nach
+`/home/user/Documents/ocr_<Zeitstempel>.txt` geschrieben und ist damit direkt
+mit `doc_analyze` verkettbar -- die KI liest die Datei für Detailfragen.
+
 ### E-Mail einrichten (Senden + Lesen)
 In den Einstellungen gibt es **einen** Eintrag „E-Mail Einstellungen": dort
 nur die **E-Mail-Adresse** und das **App-Passwort** eingeben. SMTP- und

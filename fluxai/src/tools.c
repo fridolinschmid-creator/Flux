@@ -21,6 +21,8 @@
  *   memory_delete    -- Erinnerungen loeschen, ARG: Suchbegriff
  *   semantic_search  -- Lokale RAG-Suche ueber Notizen/Memory/Kalender/Kontakte/Journal,
  *                       lexikalische Overlap-Heuristik (kein ML), ARG: Suchbegriff/Frage
+ *   ocr_scan         -- Foto eines Dokuments per lokalem OCR (VLM/tesseract) zu Text,
+ *                       verkettbar mit doc_analyze, ARG: Bildpfad oder "letztes"
  */
 #include "tools.h"
 #include "vision.h"
@@ -36,6 +38,8 @@
 #include <unistd.h>
 #include <dirent.h>
 #include <sys/stat.h>
+#include <sys/wait.h>
+#include <fcntl.h>
 #include <limits.h>
 
 #define NOTES_PATH      "/etc/flux/notes.txt"
@@ -1557,6 +1561,214 @@ static int tool_doc_analyze(const char *arg, char *out, size_t cap) {
     return 1;
 }
 
+/* ---- ocr_scan -------------------------------------------------------- */
+/*
+ * Kamera-OCR -> Dokument-KI: macht aus einem Foto eines Dokuments (Brief,
+ * Vertrag, Bon) wortgetreuen Text, ueber den die KI danach sprechen kann.
+ * Komplett auf dem Geraet -- KEIN Cloud-Scandienst.
+ *
+ * ARG: Bildpfad (in /home/user/Pictures oder /home/user/Documents) ODER
+ *      "letztes"/"neuestes" fuer das zuletzt aufgenommene Foto in Pictures.
+ *
+ * OCR-Backend, ehrlich + austauschbar (Reihenfolge):
+ *   1. Lokales VLM (vision.c, vision_backend=local) mit OCR-Prompt -- bevorzugt.
+ *   2. ANDOCK-STELLE: klassisches OCR via tesseract-Binary (rein lokal, kein
+ *      Netz), wenn vorhanden.
+ *   3. Weder lokales VLM erreichbar noch tesseract da -> wahrheitsgemaesse
+ *      Meldung statt erfundenem Text. NIEMALS Text faken.
+ *
+ * Der erkannte Text wird zusaetzlich nach /home/user/Documents/ocr_<ts>.txt
+ * geschrieben, damit die KI direkt `doc_analyze` auf diesen Pfad anwenden kann.
+ */
+#define OCR_TEXT_MAX 6000
+
+/* Findet die neueste regulaere Bilddatei (.ppm/.jpg/.png) in /home/user/Pictures.
+ * Schreibt den vollen Pfad nach buf. Gibt 1 bei Erfolg. */
+static int ocr_newest_picture(char *buf, size_t cap) {
+    DIR *d = opendir("/home/user/Pictures");
+    if (!d) return 0;
+    char newest[512] = {0};
+    time_t newest_mt = 0;
+    struct dirent *e;
+    while ((e = readdir(d)) != NULL) {
+        if (e->d_name[0] == '.') continue;
+        size_t nl = strlen(e->d_name);
+        if (nl < 4) continue;
+        const char *ext = e->d_name + nl - 4;
+        if (strcmp(ext, ".ppm") != 0 && strcmp(ext, ".jpg") != 0 &&
+            strcmp(ext, ".png") != 0) continue;
+        char full[512];
+        snprintf(full, sizeof(full), "/home/user/Pictures/%s", e->d_name);
+        struct stat st;
+        if (stat(full, &st) != 0 || !S_ISREG(st.st_mode)) continue;
+        if (st.st_mtime >= newest_mt) {
+            newest_mt = st.st_mtime;
+            snprintf(newest, sizeof(newest), "%s", full);
+        }
+    }
+    closedir(d);
+    if (!newest[0]) return 0;
+    snprintf(buf, cap, "%s", newest);
+    return 1;
+}
+
+/* Prueft, ob das tesseract-Binary im PATH liegt (Andock-Stelle klassisches OCR). */
+static int ocr_tesseract_available(void) {
+    char path_env[1024];
+    const char *penv = getenv("PATH");
+    if (!penv) return 0;
+    snprintf(path_env, sizeof(path_env), "%s", penv);
+    char *save = NULL;
+    for (char *dir = strtok_r(path_env, ":", &save); dir;
+         dir = strtok_r(NULL, ":", &save)) {
+        char probe[1100];
+        snprintf(probe, sizeof(probe), "%s/tesseract", dir);
+        if (access(probe, X_OK) == 0) return 1;
+    }
+    return 0;
+}
+
+/* Fuehrt tesseract <img> stdout aus (Sprachen deu+eng) und liest den Text nach
+ * out. Gibt 1 bei Erfolg, 0 sonst. Kein Shell-Aufruf (fork/execvp). */
+static int ocr_run_tesseract(const char *img, char *out, size_t cap) {
+    int pipefd[2];
+    if (pipe(pipefd) != 0) return 0;
+    pid_t pid = fork();
+    if (pid < 0) { close(pipefd[0]); close(pipefd[1]); return 0; }
+    if (pid == 0) {
+        /* Child: stdout -> pipe, stderr verwerfen */
+        dup2(pipefd[1], STDOUT_FILENO);
+        int devnull = open("/dev/null", O_WRONLY);
+        if (devnull >= 0) { dup2(devnull, STDERR_FILENO); close(devnull); }
+        close(pipefd[0]); close(pipefd[1]);
+        /* "stdout" als Ausgabe-Basename -> Text auf stdout; deu+eng falls da */
+        char *argv[] = { "tesseract", (char *)img, "stdout",
+                         "-l", "deu+eng", NULL };
+        execvp("tesseract", argv);
+        /* Fallback ohne Sprachpaket (Default-Sprache) */
+        char *argv2[] = { "tesseract", (char *)img, "stdout", NULL };
+        execvp("tesseract", argv2);
+        _exit(127);
+    }
+    close(pipefd[1]);
+    size_t pos = 0;
+    ssize_t r;
+    char rb[1024];
+    while (pos + 1 < cap && (r = read(pipefd[0], rb, sizeof(rb))) > 0) {
+        size_t add = (size_t)r;
+        if (pos + add >= cap) add = cap - 1 - pos;
+        memcpy(out + pos, rb, add);
+        pos += add;
+    }
+    out[pos] = '\0';
+    close(pipefd[0]);
+    int wstatus = 0;
+    waitpid(pid, &wstatus, 0);
+    if (!WIFEXITED(wstatus) || WEXITSTATUS(wstatus) != 0) return 0;
+    /* Whitespace-only Ausgabe als Misserfolg werten */
+    for (size_t i = 0; out[i]; i++)
+        if ((unsigned char)out[i] > ' ') return 1;
+    return 0;
+}
+
+static int tool_ocr_scan(const char *arg, char *out, size_t cap) {
+    /* 1. Bildpfad aufloesen ------------------------------------------------ */
+    char img[PATH_MAX];
+    if (!arg || !*arg || strcmp(arg, "letztes") == 0 ||
+        strcmp(arg, "neuestes") == 0 || strcmp(arg, "neueste") == 0) {
+        if (!ocr_newest_picture(img, sizeof(img))) {
+            snprintf(out, cap, "Keine Fotos in /home/user/Pictures/ gefunden.");
+            return 1;
+        }
+    } else {
+        char raw[512];
+        if (arg[0] == '/') snprintf(raw, sizeof(raw), "%s", arg);
+        else snprintf(raw, sizeof(raw), "/home/user/Pictures/%s", arg);
+        /* Path-Traversal-Schutz: kanonischer Pfad muss unter Pictures/Documents
+         * liegen (gleiche Absicherung wie doc_analyze). */
+        char real[PATH_MAX];
+        if (!realpath(raw, real)) {
+            snprintf(out, cap, "Bilddatei nicht gefunden: %s", raw);
+            return 1;
+        }
+        if (strncmp(real, "/home/user/Pictures/", 20) != 0 &&
+            strncmp(real, "/home/user/Documents/", 21) != 0) {
+            snprintf(out, cap,
+                     "Zugriff verweigert: OCR nur fuer Bilder unter "
+                     "/home/user/Pictures/ oder /home/user/Documents/.");
+            return 1;
+        }
+        snprintf(img, sizeof(img), "%s", real);
+    }
+    if (access(img, R_OK) != 0) {
+        snprintf(out, cap, "Bilddatei nicht lesbar: %s", img);
+        return 1;
+    }
+
+    /* 2. OCR ausfuehren ---------------------------------------------------- */
+    char text[OCR_TEXT_MAX];
+    text[0] = '\0';
+    int got = 0;
+    const char *backend_used = NULL;
+
+    /* Backend-Wahl: bei vision_backend=local zuerst das lokale VLM (local-first),
+     * sonst zuerst tesseract (rein lokal). Jeweils der andere als Fallback. */
+    char vb[16] = {0};
+    flux_config_get("vision_backend", vb, sizeof(vb));
+    int prefer_vlm = (strcmp(vb, "local") == 0);
+    int have_tess = ocr_tesseract_available();
+
+    if (prefer_vlm) {
+        if (flux_vision_ocr(img, text, sizeof(text), NULL)) {
+            got = 1; backend_used = "lokales VLM";
+        } else if (have_tess && ocr_run_tesseract(img, text, sizeof(text))) {
+            got = 1; backend_used = "tesseract";
+        }
+    } else {
+        if (have_tess && ocr_run_tesseract(img, text, sizeof(text))) {
+            got = 1; backend_used = "tesseract";
+        } else if (flux_vision_ocr(img, text, sizeof(text), NULL)) {
+            got = 1; backend_used = "VLM";
+        }
+    }
+
+    if (!got) {
+        /* EHRLICH: kein OCR-Backend lieferte Text -- niemals Text erfinden. */
+        snprintf(out, cap,
+            "Kein OCR-Backend verfuegbar -- lokalen VLM-Server starten "
+            "(vision_backend=local, vlm_url) oder tesseract installieren. "
+            "%s%s",
+            have_tess ? "" : "(tesseract nicht gefunden) ",
+            prefer_vlm ? "" : "(VLM-Backend nicht aktiv/erreichbar)");
+        return 1;
+    }
+
+    /* 3. Text nach /home/user/Documents/ocr_<ts>.txt schreiben ------------- */
+    mkdir("/home/user", 0755);
+    mkdir("/home/user/Documents", 0755);
+    time_t t = time(NULL); struct tm tmv; localtime_r(&t, &tmv);
+    char docpath[256];
+    strftime(docpath, sizeof(docpath),
+             "/home/user/Documents/ocr_%Y%m%d_%H%M%S.txt", &tmv);
+    int saved = 0;
+    FILE *df = fopen(docpath, "w");
+    if (df) { fputs(text, df); fputc('\n', df); fclose(df); saved = 1; }
+
+    /* 4. Pfad + Textauszug zurueckgeben (verkettbar mit doc_analyze) ------- */
+    size_t pos = 0;
+    if (saved)
+        pos += (size_t)snprintf(out + pos, cap - pos,
+            "OCR-Text (%s) gespeichert unter %s\n"
+            "-> Fuer Detailfragen: doc_analyze mit ARG %s\n\nAuszug:\n",
+            backend_used, docpath, docpath);
+    else
+        pos += (size_t)snprintf(out + pos, cap - pos,
+            "OCR-Text (%s), Speichern fehlgeschlagen -- nur Auszug:\n\n",
+            backend_used);
+    snprintf(out + pos, cap - pos, "%s", text);
+    return 1;
+}
+
 /* ---- semantic_search ------------------------------------------------- */
 /*
  * Lokale "semantische" Suche / RAG-Kontext ueber feste Wissensquellen auf
@@ -1798,6 +2010,7 @@ int flux_tool_exec(const char *name, const char *arg,
     if (strcmp(name, "meeting_list")  == 0) return tool_meeting_list(arg, out, out_cap);
     if (strcmp(name, "meeting_read")  == 0) return tool_meeting_read(arg, out, out_cap);
     if (strcmp(name, "doc_analyze")   == 0) return tool_doc_analyze(arg, out, out_cap);
+    if (strcmp(name, "ocr_scan")      == 0) return tool_ocr_scan(arg, out, out_cap);
     if (strcmp(name, "semantic_search") == 0) return tool_semantic_search(arg, out, out_cap);
     return 0; /* unbekanntes Tool */
 }
@@ -1845,6 +2058,11 @@ const char *flux_tools_description(void) {
         "  meeting_list    -- Alle Meeting-Protokolle auflisten. ARG: (leer)\n"
         "  meeting_read    -- Ein Meeting-Protokoll lesen. ARG: YYYY-MM-DD_HHmm oder 'letztes'\n"
         "  doc_analyze     -- Dateiinhalt lesen und der KI als Kontext uebergeben. ARG: Dateipfad\n"
+        "  ocr_scan        -- Text aus einem FOTO eines Dokuments (Brief/Vertrag/Bon) per "
+        "lokalem OCR (VLM oder tesseract, kein Cloud-Scan) erkennen. ARG: Bildpfad ODER "
+        "'letztes' fuer das zuletzt aufgenommene Foto. Speichert den Text als Datei und gibt "
+        "deren Pfad + Auszug zurueck. Fuer Detailfragen danach `doc_analyze` mit dem "
+        "zurueckgegebenen Pfad aufrufen (z.B. 'Was ist die Kuendigungsfrist?').\n"
         "  mail_unread     -- Ungelesene E-Mails abrufen (Von/Betreff/Datum, fuer Zusammenfassungen). ARG: (leer)\n"
         "  mail_read       -- Text einer E-Mail lesen. ARG: UID (aus mail_unread)\n"
         "  web_search      -- Im Internet suchen (aktuelle Infos/News/Fakten). ARG: Suchbegriff\n"
