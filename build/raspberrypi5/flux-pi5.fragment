@@ -1,0 +1,40 @@
+# flux-pi5.fragment -- Flux-spezifische Ergaenzungen zu Buildroots
+# offiziellem `raspberrypi5_defconfig`. build-pi5.sh haengt diese Zeilen
+# an die Upstream-Defconfig an (statt eine komplette Defconfig von Hand
+# zu pflegen, die mit jedem Buildroot-Release veralten wuerde).
+#
+# Inhalt: genau das, was fluxaid/flux-shell zusaetzlich brauchen --
+# nichts darueber hinaus.
+
+# --- Netzwerk + TLS fuer fluxaid (libcurl + Zertifikate) ---
+BR2_PACKAGE_LIBCURL=y
+BR2_PACKAGE_LIBCURL_CURL=y
+BR2_PACKAGE_CA_CERTIFICATES=y
+BR2_PACKAGE_OPENSSL=y
+BR2_PACKAGE_LIBCURL_OPENSSL=y
+
+# --- WLAN-Setup (shell/src/wifi.c ruft wpa_supplicant/iw auf) ---
+BR2_PACKAGE_WPA_SUPPLICANT=y
+BR2_PACKAGE_WPA_SUPPLICANT_CLI=y
+BR2_PACKAGE_IW=y
+BR2_PACKAGE_DHCPCD=y
+# Firmware fuer den Pi-5-WLAN/BT-Chip (Cypress/Infineon)
+BR2_PACKAGE_RPI_WIFI_FIRMWARE=y
+BR2_PACKAGE_RPI_BT_FIRMWARE=y
+
+# --- Zeit/Datum stimmen (sonst falsche Uhr im Lockscreen) ---
+BR2_PACKAGE_NTP=y
+BR2_PACKAGE_NTP_NTPDATE=y
+BR2_SYSTEM_ENABLE_NLS=y
+
+# --- Rootfs-Overlay: unsere Binaries + eigenes inittab/hostname ---
+# (build-pi5.sh kopiert flux-shell/fluxaid nach overlay-pi5/usr/bin/)
+BR2_ROOTFS_OVERLAY="$(FLUX_OVERLAY_PI5)"
+
+# --- Eigene Pi-Firmware-Konfig (config.txt) fuer Boot-Branding ---
+# Schaltet den Regenbogen-Splash ab und aktiviert den KMS-Treiber,
+# damit /dev/fb0 da ist (flux-shell zeichnet darauf).
+BR2_PACKAGE_RPI_FIRMWARE_CONFIG_FILE="$(FLUX_CONFIG_TXT)"
+
+# --- Eigenes Kernel-Config-Fragment: Boot-Logo + fbdev-Emulation ---
+BR2_LINUX_KERNEL_CONFIG_FRAGMENT_FILES="$(FLUX_LINUX_FRAGMENT)"

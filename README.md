@@ -237,6 +237,23 @@ Start in QEMU (Grafikfenster + virtuelle Tastatur):
 ./build/run-qemu.sh
 ```
 
+### Echte Hardware: Raspberry Pi 5
+Flux laeuft auch auf einem echten **Raspberry Pi 5** (BCM2712, arm64) --
+der erste Geraete-Port jenseits von QEMU. Weil der Pi 5 dieselbe
+CPU-Architektur hat und ueber die DRM-fbdev-Emulation weiterhin ein
+`/dev/fb0` bereitstellt, mussten `flux-shell`/`fluxaid` **nicht**
+umgeschrieben werden -- nur neu uebersetzt und anders gepackt:
+```bash
+./build/build-pi5.sh            # baut /tmp/flux-build/out-pi5/images/sdcard.img
+./build/flash-pi5.sh /dev/sdX   # auf microSD schreiben (Geraet sicher pruefen!)
+```
+Vollstaendige Anleitung -- inklusive **„welches OS im Hintergrund"**,
+WLAN/NTP und **wie man die Marke beim Booten aendert** (Firmware-Splash,
+Kernel-Boot-Logo, In-OS-Branding) -- in
+[`docs/RASPBERRY-PI-5.md`](docs/RASPBERRY-PI-5.md). Einen fertigen
+Logo-Prompt fuer ChatGPT gibt es in
+[`docs/LOGO-PROMPT.md`](docs/LOGO-PROMPT.md).
+
 ### Eigenen KI-Zugang einrichten (optional)
 Ohne API-Key beantwortet `fluxaid` nur lokale Fragen (Zeit, Akku, Uptime)
 und sagt ehrlich, dass kein Cloud-Zugang konfiguriert ist.
@@ -340,7 +357,11 @@ einen produktiven SearXNG-/Such-Proxy umstellen, ohne Code-Änderung.
     15 Min, schreibt nach `/tmp/flux_notifications.txt`. Compile-Test bestanden.
 11. Portierung auf ein konkretes echtes Geraet (Geraetebaum, Touchscreen-
     Treiber, Akku/Power-Management) — das ist der Schritt, der "Telefon"
-    ernst nimmt, siehe postmarketOS-Doku zum Geraete-Porting
+    ernst nimmt, siehe postmarketOS-Doku zum Geraete-Porting.
+    **Erster echter Port: Raspberry Pi 5** (`build/build-pi5.sh`,
+    `docs/RASPBERRY-PI-5.md`) -- arm64-Kernel der Pi-Foundation,
+    Buildroot-Rootfs, `/dev/fb0` per DRM-fbdev-Emulation, echtes WLAN.
+    SMS/Anruf + Akku bleiben dort ehrliche Stubs (kein Modem/Akku-Sensor).
 12. Sicherheitsmodell fuer Drittanbieter-Apps (Sandbox/Permissions) --
     aktuell laeuft alles als root, das ist fuer einen Dev-Build okay, fuer
     ein echtes Telefon-Betriebssystem nicht

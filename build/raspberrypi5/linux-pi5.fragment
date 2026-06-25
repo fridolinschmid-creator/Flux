@@ -1,0 +1,21 @@
+# linux-pi5.fragment -- Kernel-Optionen, die Flux auf dem Pi 5 braucht.
+# Wird ueber BR2_LINUX_KERNEL_CONFIG_FRAGMENT_FILES an die Pi-Kernel-
+# Konfig angehaengt.
+
+# --- /dev/fb0 trotz modernem KMS/DRM-Stack ---
+# Der Pi 5 nutzt den vc4-KMS-Treiber (kein altes fbdev mehr). Damit
+# flux-shell weiterhin auf /dev/fb0 zeichnen kann, brauchen wir die
+# fbdev-Emulationsschicht von DRM.
+CONFIG_DRM=y
+CONFIG_DRM_VC4=y
+CONFIG_DRM_FBDEV_EMULATION=y
+CONFIG_FB=y
+CONFIG_FRAMEBUFFER_CONSOLE=y
+
+# --- Boot-Logo ("Marke beim Starten") ---
+# Zeigt ein eigenes 224-Farben-Logo statt des Tux-Pinguins, sobald der
+# Kernel den Framebuffer uebernimmt -- bevor flux-shell startet.
+# Die eigentliche Bilddatei (logo_linux_clut224.ppm) wird von
+# install-bootlogo.sh in den Kernel-Quellbaum kopiert.
+CONFIG_LOGO=y
+CONFIG_LOGO_LINUX_CLUT224=y

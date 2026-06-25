@@ -1,0 +1,26 @@
+# config.txt -- Firmware-Konfig fuer den Raspberry Pi 5 (Flux).
+# Landet auf der FAT-Boot-Partition und wird vor dem Kernel von der
+# Pi-Firmware gelesen.
+
+# --- Boot-Branding ---
+# Regenbogen-Splash der Firmware abschalten (wir wollen unser eigenes
+# Kernel-Logo, nicht den Pi-Standard).
+disable_splash=1
+
+# --- Display / Framebuffer ---
+# KMS-Treiber der VideoCore VII -- liefert /dev/fb0 (per fbdev-Emulation),
+# auf das flux-shell zeichnet.
+dtoverlay=vc4-kms-v3d-pi5
+max_framebuffers=2
+disable_overscan=1
+
+# 64-bit-Kernel (Pi 5 ist immer arm64)
+arm_64bit=1
+
+# Optional feste Aufloesung erzwingen (auskommentiert -- Standard ist
+# die native EDID-Aufloesung des angeschlossenen Displays):
+# hdmi_group=2
+# hdmi_mode=82      # 1920x1080 @ 60Hz
+
+# --- Serielle Debug-Konsole (Pi-5-Debug-UART) aktivieren ---
+enable_uart=1
