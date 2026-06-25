@@ -323,62 +323,14 @@ static int extract_text(const char *json, api_format_t fmt, char *out, size_t ou
     return 0;
 }
 
-/* Baut den Request-Body fuer das jeweilige Format und sendet ihn.
- * Gibt 1 bei Erfolg. */
-static int api_call(const flux_provider_def_t *prov, const char *api_key,
-                    const char *model, const char *sys_static,
-                    const char *sys_dynamic, const char *final_q,
-                    char *out, size_t out_cap, int use_ctx) {
-    strbuf_t b;
-    sb_init(&b);
-
-    if (prov->format == FMT_ANTHROPIC) {
-        /* Statischer Teil als cache-faehiger Block (Prompt-Caching), der
-         * dynamische Teil (Datum/Gedaechtnis) als eigener, NICHT gecachter
-         * Block -- sonst bricht der Cache jede Minute durch die Uhrzeit. */
-        sb_raw(&b, "{\"model\":\"");
-        sb_json(&b, model);
-        sb_raw(&b, "\",\"max_tokens\":600,\"system\":["
-                   "{\"type\":\"text\",\"text\":\"");
-        sb_json(&b, sys_static);
-        sb_raw(&b, "\",\"cache_control\":{\"type\":\"ephemeral\"}}");
-        if (sys_dynamic && *sys_dynamic) {
-            sb_raw(&b, ",{\"type\":\"text\",\"text\":\"");
-            sb_json(&b, sys_dynamic);
-            sb_raw(&b, "\"}");
-        }
-        sb_raw(&b, "],\"messages\":[");
-    } else {
-        /* OpenAI-kompatibel: system als erste Nachricht (kein Caching) */
-        sb_raw(&b, "{\"model\":\"");
-        sb_json(&b, model);
-        sb_raw(&b, "\",\"max_tokens\":600,\"messages\":["
-                   "{\"role\":\"system\",\"content\":\"");
-        sb_json(&b, sys_static);
-        if (sys_dynamic && *sys_dynamic) { sb_raw(&b, "\\n"); sb_json(&b, sys_dynamic); }
-        sb_raw(&b, "\"},");
-    }
-
-    /* Gespraechsverlauf + aktuelle Frage (fuer beide Formate gleich) */
-    if (use_ctx) {
-        for (int i = 0; i < ctx_n; i++) {
-            sb_raw(&b, "{\"role\":\"user\",\"content\":\"");
-            sb_json(&b, ctx_history[i].q);
-            sb_raw(&b, "\"},{\"role\":\"assistant\",\"content\":\"");
-            sb_json(&b, ctx_history[i].a);
-            sb_raw(&b, "\"},");
-        }
-    }
-    sb_raw(&b, "{\"role\":\"user\",\"content\":\"");
-    sb_json(&b, final_q);
-    sb_raw(&b, "\"}]}");
-
-    if (b.err) {
-        free(b.buf);
-        snprintf(out, out_cap, "Interner Fehler: Anfrage konnte nicht aufgebaut werden.");
-        return 0;
-    }
-    const char *body = b.buf;
+/* Sendet einen fertig aufgebauten JSON-Body an den Anbieter und liefert die
+ * rohe Antwort in *resp (vom Aufrufer mit free() freizugeben).
+ * Gibt 1 bei Erfolg (HTTP-Antwort empfangen), 0 bei Netzwerk-/internem Fehler.
+ * Bei Fehler wird eine Klartext-Meldung nach err_out geschrieben. */
+static int http_post(const flux_provider_def_t *prov, const char *api_key,
+                     const char *body, char **resp,
+                     char *err_out, size_t err_cap) {
+    *resp = NULL;
 
     struct curl_slist *headers = NULL;
     char auth_header[600];
@@ -393,19 +345,21 @@ static int api_call(const flux_provider_def_t *prov, const char *api_key,
     }
     headers = curl_slist_append(headers, "content-type: application/json");
 
-    /* Bis zu 2 Versuche bei Rate-Limit (HTTP 429), z.B. NVIDIA NIM. */
     int ok = 0;
+    /* Bis zu 2 Versuche bei Rate-Limit (HTTP 429), z.B. NVIDIA NIM. */
     for (int attempt = 0; attempt < 3; attempt++) {
         CURL *curl = curl_easy_init();
         if (!curl) {
-            snprintf(out, out_cap, "Interner Fehler: curl_easy_init() fehlgeschlagen.");
+            snprintf(err_out, err_cap, "Interner Fehler: curl_easy_init() fehlgeschlagen.");
             break;
         }
-        /* Antwortpuffer waechst bei Bedarf (curl_write_cb) -- frueher fixe
-         * 16 KB, was bei langen Antworten zu einem falschen "Netzwerkfehler"
-         * fuehrte. */
+        /* Antwortpuffer waechst bei Bedarf (curl_write_cb). */
         struct membuf mb = { .data = malloc(16384), .len = 0, .cap = 16384 };
-        if (!mb.data) { curl_easy_cleanup(curl); break; }
+        if (!mb.data) {
+            curl_easy_cleanup(curl);
+            snprintf(err_out, err_cap, "Interner Fehler: kein Speicher.");
+            break;
+        }
         mb.data[0] = '\0';
 
         curl_easy_setopt(curl, CURLOPT_URL, prov->url);
@@ -422,7 +376,7 @@ static int api_call(const flux_provider_def_t *prov, const char *api_key,
         curl_easy_cleanup(curl);
 
         if (res != CURLE_OK) {
-            snprintf(out, out_cap, "Netzwerkfehler (%s): %s",
+            snprintf(err_out, err_cap, "Netzwerkfehler (%s): %s",
                      prov->label, curl_easy_strerror(res));
             free(mb.data);
             break;
@@ -432,62 +386,244 @@ static int api_call(const flux_provider_def_t *prov, const char *api_key,
             sleep(1 + attempt); /* einfacher Backoff bei Rate-Limit */
             continue;
         }
-        if (extract_text(mb.data, prov->format, out, out_cap)) {
-            ok = 1;
-        } else if (out[0] == '\0') {
-            snprintf(out, out_cap, "Antwort konnte nicht gelesen werden (%s).",
-                     prov->label);
-        }
-        free(mb.data);
+        *resp = mb.data; /* Eigentum geht an den Aufrufer ueber */
+        ok = 1;
         break;
     }
 
     curl_slist_free_all(headers);
-    free(b.buf);
     return ok;
 }
 
-/* Prueft ob die KI-Antwort einen Tool-Aufruf enthaelt und parst ihn.
- * Erwartet eine Zeile "TOOL:<name>" gefolgt von "ARG:<arg>" -- die Zeile
- * darf auch NACH etwas Vortext stehen (manche Modelle schreiben z.B.
- * "Gespeichert.\n\nTOOL:..."). */
-static int parse_tool_call(const char *response,
-                            char *tool_name, size_t name_cap,
-                            char *tool_arg,  size_t arg_cap) {
-    /* "TOOL:" am Anfang oder an einem Zeilenanfang finden */
-    const char *p = NULL;
-    if (strncmp(response, "TOOL:", 5) == 0) {
-        p = response + 5;
-    } else {
-        const char *nl = strstr(response, "\nTOOL:");
-        if (!nl) return 0;
-        p = nl + 6;
+/* Schreibt den system-Teil eines Anthropic-Requests in den Builder:
+ * statischer (cache-faehiger) Block + dynamischer (ungecachter) Block. */
+static void build_anthropic_prefix(strbuf_t *b, const char *model,
+                                   const char *sys_static, const char *sys_dynamic) {
+    sb_raw(b, "{\"model\":\"");
+    sb_json(b, model);
+    sb_raw(b, "\",\"max_tokens\":600,\"tools\":");
+    sb_raw(b, flux_tools_json_schema());
+    sb_raw(b, ",\"system\":[{\"type\":\"text\",\"text\":\"");
+    sb_json(b, sys_static);
+    sb_raw(b, "\",\"cache_control\":{\"type\":\"ephemeral\"}}");
+    if (sys_dynamic && *sys_dynamic) {
+        sb_raw(b, ",{\"type\":\"text\",\"text\":\"");
+        sb_json(b, sys_dynamic);
+        sb_raw(b, "\"}");
     }
+    sb_raw(b, "]");
+}
 
-    const char *nl = strchr(p, '\n');
-    if (!nl) return 0;
-    size_t nlen = (size_t)(nl - p);
-    while (nlen > 0 && (p[nlen-1] == '\r' || p[nlen-1] == ' ')) nlen--;
-    if (nlen >= name_cap) nlen = name_cap - 1;
-    memcpy(tool_name, p, nlen);
-    tool_name[nlen] = '\0';
+/* Schreibt model + tools fuer OpenAI-kompatible Anbieter (DeepSeek/NVIDIA).
+ * Die system-Nachricht ist bei OpenAI Teil des messages-Arrays und wird vom
+ * Aufrufer als erste Nachricht eingefuegt -- daher hier NICHT enthalten. */
+static void build_openai_prefix(strbuf_t *b, const char *model) {
+    sb_raw(b, "{\"model\":\"");
+    sb_json(b, model);
+    sb_raw(b, "\",\"max_tokens\":600,\"tools\":");
+    sb_raw(b, flux_tools_openai_schema());
+}
 
-    p = nl + 1;
-    /* eventuelle Leerzeilen vor ARG: ueberspringen */
-    while (*p == '\n' || *p == '\r') p++;
-    if (strncmp(p, "ARG:", 4) != 0) {
-        tool_arg[0] = '\0';
-        return 1;
+/* --- Native Tool-Use: Parsen der API-Antworten ------------------------ *
+ * Beide Formate liefern strukturierte Tool-Aufrufe zurueck:
+ *   Anthropic: content[]-Block {"type":"tool_use","id","name","input":{...}}
+ *              stop_reason == "tool_use"
+ *   OpenAI:    choices[0].message.tool_calls[] mit {"id","function":{"name",
+ *              "arguments":"<JSON-String>"}}, finish_reason == "tool_calls"
+ * Wir extrahieren id/name/arg (arg == input.arg bzw. arguments.arg). */
+
+#define FLUX_MAX_TOOLS_PER_TURN 8
+typedef struct {
+    char id[80];
+    char name[64];
+    char arg[1024];
+} tool_call_t;
+
+/* Findet das naechste Vorkommen von needle ab/hinter p; gibt Zeiger dahinter
+ * oder NULL zurueck. */
+static const char *after(const char *p, const char *needle) {
+    const char *q = p ? strstr(p, needle) : NULL;
+    return q ? q + strlen(needle) : NULL;
+}
+
+/* Liest den String-Wert direkt hinter dem oeffnenden " (bei *p) bis zum
+ * schliessenden " und dekodiert ihn nach out. */
+static void read_jstr(const char *p, char *out, size_t cap) {
+    out[0] = '\0';
+    if (p && *p == '"') decode_json_string(p + 1, out, cap);
+}
+
+/* Extrahiert "arg" aus einem (eingebetteten) JSON-Objekt-String.
+ * Funktioniert sowohl fuer Anthropic input:{...} (direktes Objekt) als auch
+ * fuer OpenAI arguments:"{\"arg\":\"...\"}" (bereits dekodierter String). */
+static void extract_arg_field(const char *obj, char *out, size_t cap) {
+    out[0] = '\0';
+    const char *p = after(obj, "\"arg\":");
+    if (!p) return;
+    while (*p == ' ') p++;
+    if (*p == '"') read_jstr(p, out, cap);
+}
+
+/* Parst die Anthropic-Antwort. Schreibt:
+ *   - alle text-Bloecke konkateniert nach text_out (finaler Antworttext)
+ *   - tool_use-Bloecke nach calls[] (bis FLUX_MAX_TOOLS_PER_TURN)
+ *   - die rohe content[]-Array-JSON nach assistant_content (zum Zurueckspielen)
+ *   - stop_reason nach stop (z.B. "tool_use", "end_turn")
+ * Gibt die Anzahl gefundener Tool-Aufrufe zurueck. */
+static int parse_anthropic(const char *json, char *text_out, size_t text_cap,
+                           tool_call_t *calls, int max_calls,
+                           strbuf_t *assistant_content,
+                           char *stop, size_t stop_cap) {
+    text_out[0] = '\0';
+    stop[0] = '\0';
+    const char *sr = after(json, "\"stop_reason\":");
+    if (sr) { while (*sr == ' ' || *sr == '"') sr++; size_t i = 0;
+              while (sr[i] && sr[i] != '"' && i + 1 < stop_cap) { stop[i] = sr[i]; i++; }
+              stop[i] = '\0'; }
+
+    /* content-Array finden */
+    const char *p = after(json, "\"content\":");
+    if (!p) return 0;
+    while (*p == ' ') p++;
+    if (*p != '[') return 0;
+    p++;
+
+    sb_raw(assistant_content, "[");
+    int ncalls = 0, nblocks = 0;
+    size_t tlen = 0;
+
+    /* Bloecke iterieren -- jeder Block ist ein {...}-Objekt im Array. */
+    while (*p) {
+        while (*p == ' ' || *p == ',' || *p == '\n') p++;
+        if (*p == ']' || *p == '\0') break;
+        if (*p != '{') { p++; continue; }
+        /* Objektgrenzen string-bewusst bestimmen */
+        const char *obj = p, *q = p; int depth = 0, instr = 0;
+        for (; *q; q++) {
+            if (instr) { if (*q == '\\') { if (q[1]) q++; continue; } if (*q == '"') instr = 0; continue; }
+            if (*q == '"') instr = 1;
+            else if (*q == '{') depth++;
+            else if (*q == '}') { depth--; if (depth == 0) { q++; break; } }
+        }
+        size_t objlen = (size_t)(q - obj);
+
+        char btype[32] = {0};
+        const char *tp = after(obj, "\"type\":");
+        if (tp) { while (*tp == ' ' || *tp == '"') tp++; size_t i = 0;
+                  while (tp[i] && tp[i] != '"' && i < sizeof(btype)-1) { btype[i] = tp[i]; i++; }
+                  btype[i] = '\0'; }
+
+        if (strcmp(btype, "text") == 0) {
+            char tb[4096];
+            const char *txt = after(obj, "\"text\":");
+            if (txt) { while (*txt == ' ') txt++; read_jstr(txt, tb, sizeof(tb)); }
+            else tb[0] = '\0';
+            size_t add = strlen(tb);
+            if (tlen + add + 1 < text_cap) { memcpy(text_out + tlen, tb, add); tlen += add; text_out[tlen] = '\0'; }
+            /* text-Block originalgetreu zuruecklegen */
+            if (nblocks) sb_raw(assistant_content, ",");
+            sb_raw(assistant_content, "{\"type\":\"text\",\"text\":\"");
+            sb_json(assistant_content, tb);
+            sb_raw(assistant_content, "\"}");
+            nblocks++;
+        } else if (strcmp(btype, "tool_use") == 0 && ncalls < max_calls) {
+            char id[80] = {0}, name[64] = {0}, arg[1024] = {0};
+            const char *idp = after(obj, "\"id\":");
+            if (idp) { while (*idp == ' ') idp++; read_jstr(idp, id, sizeof(id)); }
+            const char *np = after(obj, "\"name\":");
+            if (np) { while (*np == ' ') np++; read_jstr(np, name, sizeof(name)); }
+            /* input ist ein eingebettetes Objekt -- arg direkt extrahieren */
+            const char *inp = after(obj, "\"input\":");
+            if (inp) extract_arg_field(inp, arg, sizeof(arg));
+            snprintf(calls[ncalls].id,   sizeof(calls[0].id),   "%s", id);
+            snprintf(calls[ncalls].name, sizeof(calls[0].name), "%s", name);
+            snprintf(calls[ncalls].arg,  sizeof(calls[0].arg),  "%s", arg);
+            ncalls++;
+            /* tool_use-Block exakt rekonstruieren (mit input.arg) */
+            if (nblocks) sb_raw(assistant_content, ",");
+            sb_raw(assistant_content, "{\"type\":\"tool_use\",\"id\":\"");
+            sb_json(assistant_content, id);
+            sb_raw(assistant_content, "\",\"name\":\"");
+            sb_json(assistant_content, name);
+            sb_raw(assistant_content, "\",\"input\":{\"arg\":\"");
+            sb_json(assistant_content, arg);
+            sb_raw(assistant_content, "\"}}");
+            nblocks++;
+        }
+        (void)objlen;
+        p = q;
     }
-    p += 4;
-    /* ARG geht bis Zeilenende (Tool-Argumente sind einzeilig) */
-    const char *aend = strchr(p, '\n');
-    size_t alen = aend ? (size_t)(aend - p) : strlen(p);
-    while (alen > 0 && (p[alen-1] == '\n' || p[alen-1] == '\r')) alen--;
-    if (alen >= arg_cap) alen = arg_cap - 1;
-    memcpy(tool_arg, p, alen);
-    tool_arg[alen] = '\0';
-    return 1;
+    sb_raw(assistant_content, "]");
+    return ncalls;
+}
+
+/* Parst die OpenAI-Antwort (choices[0].message). Schreibt content-Text nach
+ * text_out und tool_calls[] nach calls[]. finish_reason nach stop.
+ * assistant_tcjson erhaelt das rohe tool_calls-Array (zum Zurueckspielen);
+ * leer, wenn keine Tool-Aufrufe. Gibt Anzahl Tool-Aufrufe zurueck. */
+static int parse_openai(const char *json, char *text_out, size_t text_cap,
+                        tool_call_t *calls, int max_calls,
+                        strbuf_t *assistant_tcjson,
+                        char *stop, size_t stop_cap) {
+    text_out[0] = '\0';
+    stop[0] = '\0';
+    const char *fr = after(json, "\"finish_reason\":");
+    if (fr) { while (*fr == ' ' || *fr == '"') fr++; size_t i = 0;
+              while (fr[i] && fr[i] != '"' && i + 1 < stop_cap) { stop[i] = fr[i]; i++; }
+              stop[i] = '\0'; }
+
+    /* content-Text (kann null sein) */
+    const char *cp = after(json, "\"content\":");
+    if (cp) { while (*cp == ' ') cp++; if (*cp == '"') read_jstr(cp, text_out, text_cap); }
+
+    int ncalls = 0;
+    const char *tc = after(json, "\"tool_calls\":");
+    if (!tc) return 0;
+    while (*tc == ' ') tc++;
+    if (*tc != '[') return 0;
+    tc++;
+    sb_raw(assistant_tcjson, "[");
+    const char *p = tc;
+    int nemitted = 0;
+    while (*p && ncalls < max_calls) {
+        while (*p == ' ' || *p == ',' || *p == '\n') p++;
+        if (*p == ']' || *p == '\0') break;
+        if (*p != '{') { p++; continue; }
+        const char *obj = p, *q = p; int depth = 0, instr = 0;
+        for (; *q; q++) {
+            if (instr) { if (*q == '\\') { if (q[1]) q++; continue; } if (*q == '"') instr = 0; continue; }
+            if (*q == '"') instr = 1;
+            else if (*q == '{') depth++;
+            else if (*q == '}') { depth--; if (depth == 0) { q++; break; } }
+        }
+        char id[80] = {0}, name[64] = {0}, argsraw[1024] = {0}, arg[1024] = {0};
+        const char *idp = after(obj, "\"id\":");
+        if (idp) { while (*idp == ' ') idp++; read_jstr(idp, id, sizeof(id)); }
+        const char *np = after(obj, "\"name\":");
+        if (np) { while (*np == ' ') np++; read_jstr(np, name, sizeof(name)); }
+        /* arguments ist ein JSON-STRING (escaped); zuerst dekodieren, dann arg ziehen */
+        const char *ap = after(obj, "\"arguments\":");
+        if (ap) { while (*ap == ' ') ap++; read_jstr(ap, argsraw, sizeof(argsraw)); }
+        extract_arg_field(argsraw, arg, sizeof(arg));
+        snprintf(calls[ncalls].id,   sizeof(calls[0].id),   "%s", id);
+        snprintf(calls[ncalls].name, sizeof(calls[0].name), "%s", name);
+        snprintf(calls[ncalls].arg,  sizeof(calls[0].arg),  "%s", arg);
+        ncalls++;
+        /* tool_call exakt rekonstruieren */
+        if (nemitted) sb_raw(assistant_tcjson, ",");
+        sb_raw(assistant_tcjson, "{\"id\":\"");
+        sb_json(assistant_tcjson, id);
+        sb_raw(assistant_tcjson, "\",\"type\":\"function\",\"function\":{\"name\":\"");
+        sb_json(assistant_tcjson, name);
+        sb_raw(assistant_tcjson, "\",\"arguments\":\"");
+        /* arguments muss als JSON-STRING zurueck: {"arg":"..."} doppelt escaped */
+        sb_json(assistant_tcjson, argsraw[0] ? argsraw : "{}");
+        sb_raw(assistant_tcjson, "\"}}");
+        nemitted++;
+        p = q;
+    }
+    sb_raw(assistant_tcjson, "]");
+    return ncalls;
 }
 
 #define FLUX_SYSTEM_PROMPT_BASE \
@@ -497,7 +633,10 @@ static int parse_tool_call(const char *response,
     "(Namen, Beziehungen, Geburtstage, Praeferenzen, Preise, wichtige Fakten), " \
     "speichere diese SOFORT mit dem memory_save-Tool, bevor du antwortest. " \
     "Bestaetigung: 'Notiert.' oder 'Gespeichert.' genuegt. " \
-    "Du kannst MEHRERE Tools nacheinander aufrufen -- eines pro Antwort. " \
+    "Du hast Werkzeuge (Tools) zur Verfuegung -- nutze sie NUR wenn Echtzeit- " \
+    "oder Geraetedaten noetig sind (Wetter, Dateien, Berechnung, Kalender, " \
+    "E-Mails, Web-Suche usw.); normale Fragen beantworte ohne Tools. " \
+    "Du kannst MEHRERE Tools nacheinander aufrufen. " \
     "Enthaelt eine Anfrage mehrere Aufgaben (z.B. Wecker stellen UND eine Mail " \
     "schreiben), erledige JEDE Teilaufgabe. Fuehre eindeutige Aufgaben wie " \
     "Wecker/Erinnerungen/Notizen SOFORT aus, ohne nachzufragen. Frage hoechstens " \
@@ -541,10 +680,11 @@ static void read_file_tail(const char *path, char *out, size_t cap) {
     }
 }
 
-/* Statischer, cache-faehiger Teil: Basis-Anweisung + Tool-Beschreibungen.
- * Aendert sich zwischen Anfragen nicht -> Prompt-Cache greift. */
+/* Statischer, cache-faehiger Teil: nur die Basis-Anweisung. Die Tool-Liste
+ * kommt jetzt ueber das native tools-Feld der API (nicht mehr im Prompttext
+ * dupliziert). Aendert sich zwischen Anfragen nicht -> Prompt-Cache greift. */
 static void build_static_prompt(char *out, size_t cap) {
-    snprintf(out, cap, "%s\n\n%s", FLUX_SYSTEM_PROMPT_BASE, flux_tools_description());
+    snprintf(out, cap, "%s", FLUX_SYSTEM_PROMPT_BASE);
 }
 
 /* Dynamischer Teil: Datum/Uhrzeit + Gedaechtnis + Praeferenzen. Wird bewusst
@@ -569,6 +709,22 @@ static void build_dynamic_prompt(char *out, size_t cap) {
         snprintf(out + l, cap - l,
                  "\nNutzerpraeferenzen (beachten):\n%s\n", _prefs);
     }
+}
+
+/* Haengt die initialen Nachrichten (Gespraechsverlauf + aktuelle Frage) an den
+ * messages-Builder. Bei OpenAI steht zuvor die system-Nachricht (vom Aufrufer).
+ * Format-unabhaengig: einfache user/assistant-Strings. */
+static void append_history_and_question(strbuf_t *m, const char *question) {
+    for (int i = 0; i < ctx_n; i++) {
+        sb_raw(m, "{\"role\":\"user\",\"content\":\"");
+        sb_json(m, ctx_history[i].q);
+        sb_raw(m, "\"},{\"role\":\"assistant\",\"content\":\"");
+        sb_json(m, ctx_history[i].a);
+        sb_raw(m, "\"},");
+    }
+    sb_raw(m, "{\"role\":\"user\",\"content\":\"");
+    sb_json(m, question);
+    sb_raw(m, "\"}");
 }
 
 void flux_provider_ask(const char *question, char *out, size_t out_cap) {
@@ -596,44 +752,139 @@ void flux_provider_ask(const char *question, char *out, size_t out_cap) {
     build_static_prompt(sys_static, sizeof(sys_static));
     build_dynamic_prompt(sys_dynamic, sizeof(sys_dynamic));
 
-    /* Erster API-Aufruf -- mit Gespraechsverlauf */
-    if (!api_call(prov, api_key, model, sys_static, sys_dynamic, question, out, out_cap, 1))
-        return;
+    /* Wachsendes messages-Array (nur die Eintraege, ohne []), das ueber alle
+     * Agenten-Schritte hinweg fortgeschrieben wird: user -> assistant (mit
+     * tool_use) -> user (tool_result) -> ... */
+    strbuf_t msgs; sb_init(&msgs);
+    if (prov->format == FMT_OPENAI) {
+        /* OpenAI: system als erste Nachricht im messages-Array */
+        sb_raw(&msgs, "{\"role\":\"system\",\"content\":\"");
+        sb_json(&msgs, sys_static);
+        if (sys_dynamic[0]) { sb_raw(&msgs, "\\n"); sb_json(&msgs, sys_dynamic); }
+        sb_raw(&msgs, "\"},");
+    }
+    append_history_and_question(&msgs, question);
 
-    /* Agenten-Schleife: solange die Antwort ein Tool-Aufruf ist, das Tool
-     * ausfuehren, das Ergebnis anhaengen und erneut fragen. So koennen
-     * mehrere Tools nacheinander laufen (z.B. Kontakt suchen -> Mail) und
-     * am Ende eine normale Antwort ODER ein ACTION:-Vorschlag stehen. */
-    char log[6144] = {0};   /* laufendes Protokoll der Tool-Schritte */
-    for (int step = 0; step < FLUX_MAX_TOOL_STEPS; step++) {
-        char tool_name[64], tool_arg[1024];
-        if (!parse_tool_call(out, tool_name, sizeof(tool_name),
-                                  tool_arg, sizeof(tool_arg)))
-            break; /* normale Antwort oder ACTION: -- fertig */
+    int done = 0;
+    for (int step = 0; step <= FLUX_MAX_TOOL_STEPS && !done; step++) {
+        /* Vollen Request-Body aufbauen */
+        strbuf_t b; sb_init(&b);
+        if (prov->format == FMT_ANTHROPIC)
+            build_anthropic_prefix(&b, model, sys_static, sys_dynamic);
+        else
+            build_openai_prefix(&b, model);
+        sb_raw(&b, ",\"messages\":[");
+        sb_raw(&b, msgs.buf);
+        sb_raw(&b, "]}");
 
-        char tool_result[4096];
-        snprintf(tool_result, sizeof(tool_result),
-                 "Fehler: unbekanntes Tool '%s'", tool_name);
-        flux_tool_exec(tool_name, tool_arg, tool_result, sizeof(tool_result));
-
-        size_t ll = strlen(log);
-        snprintf(log + ll, sizeof(log) - ll,
-                 "- %s(%s) => %.400s\n", tool_name, tool_arg, tool_result);
-
-        char followup[8192];
-        snprintf(followup, sizeof(followup),
-                 "Urspruengliche Anfrage: \"%s\"\n\n"
-                 "Bereits ausgefuehrte Schritte (Tool => Ergebnis):\n%s\n"
-                 "Wenn fuer die Anfrage noch ein weiterer Schritt noetig ist, "
-                 "rufe das naechste Tool auf (NUR im Format TOOL:/ARG:). "
-                 "Wenn eine Mail/SMS/ein Anruf zu bestaetigen ist, antworte im "
-                 "ACTION:-Format. Sonst antworte final auf Deutsch, kurz und klar "
-                 "und fasse zusammen, was erledigt wurde.",
-                 question, log);
-
-        if (!api_call(prov, api_key, model, sys_static, sys_dynamic, followup, out, out_cap, 0))
+        if (b.err || msgs.err) {
+            snprintf(out, out_cap, "Interner Fehler: Anfrage zu gross.");
+            free(b.buf); free(msgs.buf);
             return;
+        }
+
+        char *resp = NULL;
+        char errbuf[256];
+        if (!http_post(prov, api_key, b.buf, &resp, errbuf, sizeof(errbuf))) {
+            snprintf(out, out_cap, "%s", errbuf);
+            free(b.buf); free(msgs.buf);
+            return;
+        }
+        free(b.buf);
+
+        /* Antwort parsen */
+        char text[6144]; char stop[32];
+        tool_call_t calls[FLUX_MAX_TOOLS_PER_TURN];
+        strbuf_t assistant; sb_init(&assistant);
+        int ncalls;
+        if (prov->format == FMT_ANTHROPIC)
+            ncalls = parse_anthropic(resp, text, sizeof(text), calls,
+                                     FLUX_MAX_TOOLS_PER_TURN, &assistant,
+                                     stop, sizeof(stop));
+        else
+            ncalls = parse_openai(resp, text, sizeof(text), calls,
+                                  FLUX_MAX_TOOLS_PER_TURN, &assistant,
+                                  stop, sizeof(stop));
+
+        /* Konnte gar nichts geparst werden -> Fehlermeldung extrahieren */
+        if (text[0] == '\0' && ncalls == 0) {
+            if (!extract_text(resp, prov->format, out, out_cap))
+                snprintf(out, out_cap, "Antwort konnte nicht gelesen werden (%s).",
+                         prov->label);
+            free(resp); free(assistant.buf); free(msgs.buf);
+            return;
+        }
+
+        /* Finaler Textblock ist immer die aktuelle Antwort (auch ACTION:-Text). */
+        snprintf(out, out_cap, "%s", text);
+
+        if (ncalls == 0 || step == FLUX_MAX_TOOL_STEPS) {
+            /* Backstop erreicht, aber Modell wollte noch Tools: kein Text da.
+             * Dann eine kurze Hinweismeldung statt leerer Antwort liefern. */
+            if (out[0] == '\0' && ncalls > 0)
+                snprintf(out, out_cap,
+                         "Die Anfrage brauchte zu viele Schritte und wurde "
+                         "abgebrochen. Bitte praezisiere sie.");
+            done = 1;
+            free(resp); free(assistant.buf);
+            break;
+        }
+
+        /* --- Assistant-Turn (verbatim) anhaengen --- */
+        sb_raw(&msgs, ",");
+        if (prov->format == FMT_ANTHROPIC) {
+            sb_raw(&msgs, "{\"role\":\"assistant\",\"content\":");
+            sb_raw(&msgs, assistant.buf);   /* content[]-Array, exakt rekonstruiert */
+            sb_raw(&msgs, "}");
+        } else {
+            /* OpenAI: content kann null sein, tool_calls traegt die Aufrufe */
+            sb_raw(&msgs, "{\"role\":\"assistant\",\"content\":");
+            if (text[0]) { sb_raw(&msgs, "\""); sb_json(&msgs, text); sb_raw(&msgs, "\""); }
+            else         { sb_raw(&msgs, "null"); }
+            sb_raw(&msgs, ",\"tool_calls\":");
+            sb_raw(&msgs, assistant.buf);
+            sb_raw(&msgs, "}");
+        }
+        free(assistant.buf);
+
+        /* --- Tools ausfuehren und Ergebnisse als user-Turn anhaengen --- */
+        if (prov->format == FMT_ANTHROPIC) {
+            sb_raw(&msgs, ",{\"role\":\"user\",\"content\":[");
+            for (int i = 0; i < ncalls; i++) {
+                char result[4096];
+                int known = flux_tool_exec(calls[i].name, calls[i].arg,
+                                           result, sizeof(result));
+                if (i) sb_raw(&msgs, ",");
+                sb_raw(&msgs, "{\"type\":\"tool_result\",\"tool_use_id\":\"");
+                sb_json(&msgs, calls[i].id);
+                sb_raw(&msgs, "\",\"content\":\"");
+                if (!known) { sb_json(&msgs, "Fehler: unbekanntes Tool '");
+                              sb_json(&msgs, calls[i].name); sb_json(&msgs, "'"); }
+                else        { sb_json(&msgs, result); }
+                sb_raw(&msgs, "\"");
+                if (!known) sb_raw(&msgs, ",\"is_error\":true");
+                sb_raw(&msgs, "}");
+            }
+            sb_raw(&msgs, "]}");
+        } else {
+            /* OpenAI: je Tool eine eigene Nachricht role:"tool" */
+            for (int i = 0; i < ncalls; i++) {
+                char result[4096];
+                int known = flux_tool_exec(calls[i].name, calls[i].arg,
+                                           result, sizeof(result));
+                sb_raw(&msgs, ",{\"role\":\"tool\",\"tool_call_id\":\"");
+                sb_json(&msgs, calls[i].id);
+                sb_raw(&msgs, "\",\"content\":\"");
+                if (!known) { sb_json(&msgs, "Fehler: unbekanntes Tool '");
+                              sb_json(&msgs, calls[i].name); sb_json(&msgs, "'"); }
+                else        { sb_json(&msgs, result); }
+                sb_raw(&msgs, "\"}");
+            }
+        }
+        free(resp);
+        (void)stop; /* stop_reason wird zur Diagnose geparst, Schleife nutzt ncalls */
     }
 
+    free(msgs.buf);
     ctx_add(question, out);
 }

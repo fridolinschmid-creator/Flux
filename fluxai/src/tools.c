@@ -1609,6 +1609,129 @@ int flux_tool_exec(const char *name, const char *arg,
     return 0; /* unbekanntes Tool */
 }
 
+/* ---- Natives Tool-Schema (JSON) -------------------------------------- */
+
+/* Eine Tooldefinition fuer das native Tool-Calling. arg_desc beschreibt das
+ * (einzige) String-Argument; arg_required gibt an, ob "arg" zwingend ist. */
+typedef struct {
+    const char *name;
+    const char *desc;       /* JSON-sicher: keine " oder \ noetig hier */
+    const char *arg_desc;   /* Beschreibung des "arg"-Strings */
+    int         arg_required;
+} flux_tool_def_t;
+
+/* Reihenfolge stabil halten -- so bleibt das erzeugte JSON deterministisch
+ * und damit Prompt-Cache-faehig (gleiche Bytes bei jeder Anfrage). */
+static const flux_tool_def_t TOOL_DEFS[] = {
+    { "date_time",       "Aktuelles Datum und Uhrzeit.", "(leer, kein Argument noetig)", 0 },
+    { "weather",         "Aktuelles Wetter.", "Stadtname (leer = automatische Ortserkennung)", 0 },
+    { "file_read",       "Dateiinhalt lesen (nur /home/user/, /tmp/, /proc/, /sys/).", "Dateipfad", 1 },
+    { "file_list",       "Verzeichnis auflisten.", "Verzeichnispfad", 1 },
+    { "file_create",     "Datei erstellen.", "Format: /pfad/datei.txt|Inhalt (\\n fuer Zeilenumbruch)", 1 },
+    { "file_delete",     "Datei loeschen (nur /home/user/).", "Dateipfad", 1 },
+    { "calculate",       "Rechenausdruck auswerten.", "z.B. '15 * 8 + 3.5'", 1 },
+    { "note_save",       "Notiz speichern.", "Notiztext", 1 },
+    { "note_list",       "Alle Notizen anzeigen.", "(leer)", 0 },
+    { "sys_info",        "Systeminformationen (Speicher, Kernel, Laufzeit).", "(leer)", 0 },
+    { "alarm_set",       "Wecker/Alarm zu einer Uhrzeit stellen. Nutze dies bei 'Wecker', 'weck mich', 'Alarm um ...'.", "HH:MM Beschreibung (z.B. '07:00 Aufstehen')", 1 },
+    { "reminder_set",    "Erinnerung ohne feste Uhrzeit setzen.", "Erinnerungstext", 1 },
+    { "contacts_search", "Kontakt suchen.", "Name oder Nummer", 1 },
+    { "brightness_get",  "Bildschirmhelligkeit lesen.", "(leer)", 0 },
+    { "brightness_set",  "Bildschirmhelligkeit setzen.", "0-100 (Prozent)", 1 },
+    { "wifi_info",       "WLAN-Signalstaerke und Interface.", "(leer)", 0 },
+    { "vibrate",         "Geraet vibrieren lassen.", "Dauer in ms (z.B. 300)", 0 },
+    { "contact_save",    "Kontakt speichern.", "Name,Telefon,Email[,Geburtstag]", 1 },
+    { "contacts_list",   "Alle Kontakte anzeigen.", "(leer)", 0 },
+    { "calendar_add",    "Termin eintragen.", "YYYY-MM-DD HH:MM Beschreibung", 1 },
+    { "calendar_list",   "Bevorstehende Termine anzeigen.", "(leer)", 0 },
+    { "search_files",    "Dateien in /home/user/ suchen.", "Suchbegriff", 1 },
+    { "prefs_set",       "Nutzerpraeferenz merken (fuer spaetere Kontextnutzung).", "Praeferenztext", 1 },
+    { "image_list",      "Fotos in /home/user/Pictures/ auflisten.", "(leer)", 0 },
+    { "image_analyze",   "Bild per KI analysieren (Was ist drauf? Wo aufgenommen?).", "Dateiname oder Pfad", 1 },
+    { "image_take",      "Neues Foto aufnehmen und speichern.", "(leer)", 0 },
+    { "memory_save",     "Persoenliche Info dauerhaft merken (Name, Geburtstag, Praeferenz usw.).", "Text", 1 },
+    { "memory_list",     "Alle gespeicherten Infos anzeigen.", "(leer)", 0 },
+    { "memory_search",   "Gespeicherte Infos durchsuchen.", "Suchbegriff", 1 },
+    { "memory_delete",   "Gespeicherte Info loeschen.", "Suchbegriff", 1 },
+    { "journal_list",    "Alle Tagesjournal-Eintraege auflisten.", "(leer)", 0 },
+    { "journal_read",    "Einen Journal-Eintrag lesen.", "YYYY-MM-DD oder 'heute' oder 'gestern'", 0 },
+    { "meeting_list",    "Alle Meeting-Protokolle auflisten.", "(leer)", 0 },
+    { "meeting_read",    "Ein Meeting-Protokoll lesen.", "YYYY-MM-DD_HHmm oder 'letztes'", 1 },
+    { "doc_analyze",     "Dateiinhalt lesen und der KI als Kontext uebergeben.", "Dateipfad", 1 },
+    { "mail_unread",     "Ungelesene E-Mails abrufen (Von/Betreff/Datum, fuer Zusammenfassungen).", "(leer)", 0 },
+    { "mail_read",       "Volltext einer E-Mail lesen.", "UID (aus mail_unread)", 1 },
+    { "web_search",      "Im Internet suchen (aktuelle Infos/News/Fakten).", "Suchbegriff", 1 },
+};
+static const int TOOL_DEFS_N = (int)(sizeof(TOOL_DEFS) / sizeof(TOOL_DEFS[0]));
+
+/* Haengt s JSON-escaped an buf an (begrenzt durch cap, *pos wird fortgeschrieben).
+ * Behandelt " und \ -- die Tool-Texte enthalten sonst nur ASCII. */
+static void json_append_escaped(char *buf, size_t cap, size_t *pos, const char *s) {
+    for (; *s && *pos + 2 < cap; s++) {
+        if (*s == '"' || *s == '\\') buf[(*pos)++] = '\\';
+        buf[(*pos)++] = *s;
+    }
+    buf[*pos] = '\0';
+}
+
+/* Haengt das JSON-Schema-Objekt fuer das Argument eines Tools an.
+ * Erzeugt: {"type":"object","properties":{"arg":{...}}[,"required":["arg"]]} */
+static void append_arg_schema(char *buf, size_t cap, size_t *pos,
+                              const flux_tool_def_t *t) {
+    *pos += (size_t)snprintf(buf + *pos, cap - *pos,
+        "{\"type\":\"object\",\"properties\":"
+        "{\"arg\":{\"type\":\"string\",\"description\":\"");
+    json_append_escaped(buf, cap, pos, t->arg_desc);
+    *pos += (size_t)snprintf(buf + *pos, cap - *pos, "\"}}");
+    if (t->arg_required)
+        *pos += (size_t)snprintf(buf + *pos, cap - *pos, ",\"required\":[\"arg\"]");
+    *pos += (size_t)snprintf(buf + *pos, cap - *pos, "}");
+}
+
+/* Gemeinsamer Aufbau. openai=1 -> OpenAI-Function-Format, sonst Anthropic.
+ * Das OpenAI-Format ist durch die zusaetzliche function-Verpackung groesser,
+ * daher reichlich Puffer. */
+#define FLUX_TOOLS_SCHEMA_CAP 12288
+static const char *build_tools_schema(int openai) {
+    static char anthropic_buf[FLUX_TOOLS_SCHEMA_CAP];
+    static char openai_buf[FLUX_TOOLS_SCHEMA_CAP];
+    static int  anthropic_built = 0, openai_built = 0;
+    char  *buf = openai ? openai_buf : anthropic_buf;
+    int   *built = openai ? &openai_built : &anthropic_built;
+    const size_t cap = FLUX_TOOLS_SCHEMA_CAP;
+    if (*built) return buf;
+
+    size_t pos = 0;
+    buf[pos++] = '[';
+    for (int i = 0; i < TOOL_DEFS_N; i++) {
+        const flux_tool_def_t *t = &TOOL_DEFS[i];
+        if (i) buf[pos++] = ',';
+        if (openai) {
+            pos += (size_t)snprintf(buf + pos, cap - pos,
+                "{\"type\":\"function\",\"function\":"
+                "{\"name\":\"%s\",\"description\":\"", t->name);
+            json_append_escaped(buf, cap, &pos, t->desc);
+            pos += (size_t)snprintf(buf + pos, cap - pos, "\",\"parameters\":");
+            append_arg_schema(buf, cap, &pos, t);
+            pos += (size_t)snprintf(buf + pos, cap - pos, "}}");
+        } else {
+            pos += (size_t)snprintf(buf + pos, cap - pos,
+                "{\"name\":\"%s\",\"description\":\"", t->name);
+            json_append_escaped(buf, cap, &pos, t->desc);
+            pos += (size_t)snprintf(buf + pos, cap - pos, "\",\"input_schema\":");
+            append_arg_schema(buf, cap, &pos, t);
+            pos += (size_t)snprintf(buf + pos, cap - pos, "}");
+        }
+    }
+    buf[pos++] = ']';
+    buf[pos] = '\0';
+    *built = 1;
+    return buf;
+}
+
+const char *flux_tools_json_schema(void)   { return build_tools_schema(0); }
+const char *flux_tools_openai_schema(void) { return build_tools_schema(1); }
+
 const char *flux_tools_description(void) {
     return
         "Du hast Zugriff auf folgende Tools. Rufe ein Tool auf, indem du "
