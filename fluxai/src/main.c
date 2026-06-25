@@ -76,8 +76,19 @@ static void handle_client(int cfd) {
     close(cfd);
 }
 
+/* Periodische Hintergrund-Checks (Cloud-Calls -> koennen Sekunden dauern). */
+static void run_periodic_checks(void) {
+    char k[512] = {0}, m[200] = {0};
+    if (flux_provider_active(k, sizeof(k), m, sizeof(m))) {
+        flux_proactive_check(k, m);
+        flux_journal_check(k, m);
+        flux_habits_morning_briefing(k, m);
+    }
+}
+
 int main(void) {
-    signal(SIGPIPE, SIG_IGN); /* Client kann jederzeit weg sein (Lockscreen-Wechsel) */
+    signal(SIGPIPE, SIG_IGN);  /* Client kann jederzeit weg sein (Lockscreen-Wechsel) */
+    signal(SIGCHLD, SIG_IGN);  /* Kindprozesse automatisch ernten -- keine Zombies */
     flux_provider_init();
 
     mkdir("/run/flux", 0755);
@@ -104,12 +115,14 @@ int main(void) {
         int ret = select(listen_fd + 1, &rfds, NULL, NULL, &tv);
 
         if (ret == 0) {
-            /* Timeout: run periodic checks */
-            char k[512] = {0}, m[200] = {0};
-            if (flux_provider_active(k, sizeof(k), m, sizeof(m))) {
-                flux_proactive_check(k, m);
-                flux_journal_check(k, m);
-                flux_habits_morning_briefing(k, m);
+            /* Timeout: periodische Checks in einem Kindprozess laufen lassen,
+             * damit die accept-Schleife waehrend der (langsamen) Cloud-Calls
+             * nicht blockiert. */
+            pid_t pid = fork();
+            if (pid == 0) {
+                close(listen_fd);
+                run_periodic_checks();
+                _exit(0);
             }
             continue;
         }
@@ -117,6 +130,24 @@ int main(void) {
 
         int cfd = accept(listen_fd, NULL, NULL);
         if (cfd < 0) continue;
-        handle_client(cfd); /* ein Request pro Verbindung reicht fuer den Prototyp */
+
+        /* Jeden Request in einem eigenen Prozess bearbeiten: ein langsamer
+         * Cloud-Call (bis zu 6 Tool-Schritte je 30 s Timeout) blockiert so
+         * weder weitere Anfragen noch die periodischen Checks. Der Kontext
+         * wird pro Anfrage frisch aus der Datei geladen (siehe provider.c),
+         * darum geht durch das Forken keine Gespraechs-Historie verloren. */
+        pid_t pid = fork();
+        if (pid < 0) {
+            /* Fork fehlgeschlagen: synchron bearbeiten, statt die Anfrage
+             * zu verwerfen (blockiert dann ausnahmsweise). */
+            handle_client(cfd);
+            continue;
+        }
+        if (pid == 0) {
+            close(listen_fd);
+            handle_client(cfd);
+            _exit(0);
+        }
+        close(cfd); /* Elternprozess braucht die Verbindung nicht mehr */
     }
 }

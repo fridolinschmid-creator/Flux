@@ -553,6 +553,12 @@ static void build_dynamic_prompt(char *out, size_t cap) {
 }
 
 void flux_provider_ask(const char *question, char *out, size_t out_cap) {
+    /* Kontext frisch aus der Datei laden: fluxaid bearbeitet jede Anfrage in
+     * einem eigenen Kindprozess (siehe main.c). Der in-memory ctx_history des
+     * Elternprozesses bleibt sonst auf dem Stand vom Start stehen -- Neuladen
+     * stellt die Gespraechs-Historie ueber Prozessgrenzen hinweg sicher. */
+    ctx_load();
+
     char api_key[512] = {0};
     char model[200]   = {0};
     const flux_provider_def_t *prov =
