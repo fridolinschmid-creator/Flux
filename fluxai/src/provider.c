@@ -36,28 +36,46 @@ typedef enum { FMT_ANTHROPIC, FMT_OPENAI } api_format_t;
 typedef struct {
     const char  *id;            /* interner Bezeichner (ai_provider-Wert) */
     const char  *label;         /* Anzeigename */
-    const char  *url;           /* API-Endpunkt */
+    const char  *url;           /* Standard-API-Endpunkt (Fallback) */
+    const char  *url_cfg;       /* Config-Key fuer einen konfigurierbaren
+                                   Endpunkt (NULL = fester Endpunkt). Wenn
+                                   gesetzt UND in der Config vorhanden, hat der
+                                   konfigurierte Wert Vorrang vor url. Wird vom
+                                   lokalen llama.cpp-Anbieter genutzt, damit der
+                                   Host/Port frei waehlbar ist. */
     api_format_t format;
     const char  *key_cfg;       /* Config-Key fuer den API-Key */
     const char  *model_cfg;     /* Config-Key fuer das Modell */
     const char  *default_model; /* Standardmodell, falls keins gesetzt */
     const char  *env_key;       /* Umgebungsvariable als Fallback fuer Key */
+    int          key_optional;  /* 1 = Anbieter ist auch ohne API-Key nutzbar
+                                   (z.B. lokaler llama-server). 0 = Key noetig. */
 } flux_provider_def_t;
 
 /* Vordefinierte Anbieter -- in den Einstellungen auswaehlbar. */
 static const flux_provider_def_t PROVIDERS[] = {
     { "anthropic", "Anthropic Claude",
-      "https://api.anthropic.com/v1/messages", FMT_ANTHROPIC,
+      "https://api.anthropic.com/v1/messages", NULL, FMT_ANTHROPIC,
       "api_key", "anthropic_model", "claude-haiku-4-5-20251001",
-      "FLUX_AI_API_KEY" },
+      "FLUX_AI_API_KEY", 0 },
     { "deepseek", "DeepSeek",
-      "https://api.deepseek.com/chat/completions", FMT_OPENAI,
+      "https://api.deepseek.com/chat/completions", NULL, FMT_OPENAI,
       "deepseek_key", "deepseek_model", "deepseek-chat",
-      "DEEPSEEK_API_KEY" },
+      "DEEPSEEK_API_KEY", 0 },
     { "nvidia", "NVIDIA NIM",
-      "https://integrate.api.nvidia.com/v1/chat/completions", FMT_OPENAI,
+      "https://integrate.api.nvidia.com/v1/chat/completions", NULL, FMT_OPENAI,
       "nvidia_key", "nvidia_model", "meta/llama-3.1-8b-instruct",
-      "NVIDIA_API_KEY" },
+      "NVIDIA_API_KEY", 0 },
+    /* Lokaler llama.cpp-Server (OpenAI-kompatibles /v1/chat/completions).
+     * Erster Schritt der hybriden Architektur: erst lokal, dann Cloud.
+     * Der Endpunkt ist ueber `local_url` konfigurierbar (Standard: lokaler
+     * llama-server auf 127.0.0.1:8080) -- so kann z.B. auf einen Mac im LAN
+     * gezeigt werden. Der Modellname ist neutral; llama-server ignoriert ihn
+     * ohnehin und bedient das geladene Modell. Kein API-Key noetig. */
+    { "local", "Lokal (llama.cpp)",
+      "http://127.0.0.1:8080/v1/chat/completions", "local_url", FMT_OPENAI,
+      "local_key", "local_model", "local-model",
+      NULL, 1 },
 };
 static const int PROVIDERS_N = (int)(sizeof(PROVIDERS) / sizeof(PROVIDERS[0]));
 
@@ -68,13 +86,31 @@ static const flux_provider_def_t *provider_by_id(const char *id) {
     return &PROVIDERS[0]; /* Standard: anthropic */
 }
 
-/* Ermittelt den aktiven Anbieter, dessen API-Key und Modell.
- * Gibt 1 zurueck, wenn ein nutzbarer Key vorliegt, sonst 0. */
+/* Ermittelt den effektiven Endpunkt eines Anbieters: konfigurierter Wert
+ * (url_cfg) falls vorhanden, sonst der fest eingebaute Standard (def->url). */
+static void resolve_url(const flux_provider_def_t *p, char *url_out, size_t url_cap) {
+    if (!url_out || !url_cap) return;
+    url_out[0] = '\0';
+    if (p->url_cfg) {
+        char buf[512] = {0};  /* deckt die max. Config-Wertlaenge ab */
+        if (flux_config_get(p->url_cfg, buf, sizeof(buf)) && buf[0]) {
+            snprintf(url_out, url_cap, "%s", buf);
+            return;
+        }
+    }
+    snprintf(url_out, url_cap, "%s", p->url ? p->url : "");
+}
+
+/* Ermittelt den aktiven Anbieter, dessen API-Key, Modell und effektiven
+ * Endpunkt. url_out darf NULL sein. */
 static const flux_provider_def_t *resolve_provider(char *key_out, size_t key_cap,
-                                                   char *model_out, size_t model_cap) {
+                                                   char *model_out, size_t model_cap,
+                                                   char *url_out, size_t url_cap) {
     char sel[64] = {0};
     flux_config_get("ai_provider", sel, sizeof(sel));
     const flux_provider_def_t *p = provider_by_id(sel);
+
+    if (url_out && url_cap) resolve_url(p, url_out, url_cap);
 
     if (key_out && key_cap) {
         key_out[0] = '\0';
@@ -96,18 +132,31 @@ static const flux_provider_def_t *resolve_provider(char *key_out, size_t key_cap
     return p;
 }
 
+/* Ist der Anbieter mit dem ermittelten Key nutzbar? Anbieter mit
+ * key_optional (lokaler llama-server) sind nutzbar, sobald ein Endpunkt
+ * bekannt ist -- auch mit leerem Key. Cloud-Anbieter brauchen einen Key. */
+static int provider_usable(const flux_provider_def_t *p, const char *key,
+                           const char *url) {
+    if (p->key_optional) return url && url[0] != '\0';
+    return key && key[0] != '\0';
+}
+
 int flux_provider_active(char *key_out, size_t key_cap,
                          char *model_out, size_t model_cap) {
     char key[512] = {0};
-    resolve_provider(key, sizeof(key), model_out, model_cap);
+    char url[512] = {0};
+    const flux_provider_def_t *p =
+        resolve_provider(key, sizeof(key), model_out, model_cap, url, sizeof(url));
     if (key_out && key_cap) snprintf(key_out, key_cap, "%s", key);
-    return key[0] != '\0';
+    return provider_usable(p, key, url);
 }
 
 int flux_provider_available(void) {
     char key[512] = {0};
-    resolve_provider(key, sizeof(key), NULL, 0);
-    return key[0] != '\0';
+    char url[512] = {0};
+    const flux_provider_def_t *p =
+        resolve_provider(key, sizeof(key), NULL, 0, url, sizeof(url));
+    return provider_usable(p, key, url);
 }
 
 int flux_provider_vision(char *key_out, size_t key_cap,
@@ -116,7 +165,7 @@ int flux_provider_vision(char *key_out, size_t key_cap,
     char key[512]   = {0};
     char model[200] = {0};
     const flux_provider_def_t *p =
-        resolve_provider(key, sizeof(key), model, sizeof(model));
+        resolve_provider(key, sizeof(key), model, sizeof(model), NULL, 0);
 
     if (label_out && label_cap) snprintf(label_out, label_cap, "%s", p->label);
 
@@ -309,8 +358,8 @@ static int extract_text(const char *json, api_format_t fmt, char *out, size_t ou
  * rohe Antwort in *resp (vom Aufrufer mit free() freizugeben).
  * Gibt 1 bei Erfolg (HTTP-Antwort empfangen), 0 bei Netzwerk-/internem Fehler.
  * Bei Fehler wird eine Klartext-Meldung nach err_out geschrieben. */
-static int http_post(const flux_provider_def_t *prov, const char *api_key,
-                     const char *body, char **resp,
+static int http_post(const flux_provider_def_t *prov, const char *url,
+                     const char *api_key, const char *body, char **resp,
                      char *err_out, size_t err_cap) {
     *resp = NULL;
 
@@ -322,8 +371,13 @@ static int http_post(const flux_provider_def_t *prov, const char *api_key,
         headers = curl_slist_append(headers, "anthropic-version: 2023-06-01");
         headers = curl_slist_append(headers, "anthropic-beta: prompt-caching-2024-07-31");
     } else {
-        snprintf(auth_header, sizeof(auth_header), "Authorization: Bearer %s", api_key);
-        headers = curl_slist_append(headers, auth_header);
+        /* OpenAI-kompatibel: Authorization nur senden, wenn ein Key vorliegt.
+         * Lokale Server (llama.cpp) brauchen keinen -- ein leerer Bearer-Header
+         * koennte sie irritieren, darum bei leerem Key ganz weglassen. */
+        if (api_key && api_key[0]) {
+            snprintf(auth_header, sizeof(auth_header), "Authorization: Bearer %s", api_key);
+            headers = curl_slist_append(headers, auth_header);
+        }
     }
     headers = curl_slist_append(headers, "content-type: application/json");
 
@@ -343,7 +397,7 @@ static int http_post(const flux_provider_def_t *prov, const char *api_key,
             break;
         }
 
-        curl_easy_setopt(curl, CURLOPT_URL, prov->url);
+        curl_easy_setopt(curl, CURLOPT_URL, url);
         curl_easy_setopt(curl, CURLOPT_POST, 1L);
         curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
         curl_easy_setopt(curl, CURLOPT_POSTFIELDS, body);
@@ -717,14 +771,21 @@ void flux_provider_ask(const char *question, char *out, size_t out_cap) {
 
     char api_key[512] = {0};
     char model[200]   = {0};
+    char url[512]     = {0};
     const flux_provider_def_t *prov =
-        resolve_provider(api_key, sizeof(api_key), model, sizeof(model));
+        resolve_provider(api_key, sizeof(api_key), model, sizeof(model),
+                         url, sizeof(url));
 
-    if (!api_key[0]) {
-        snprintf(out, out_cap,
-            "Kein Cloud-Zugang fuer %s konfiguriert. Trage in den Einstellungen "
-            "einen API-Key fuer den gewaehlten Anbieter ein (oder waehle einen "
-            "anderen Anbieter).", prov->label);
+    if (!provider_usable(prov, api_key, url)) {
+        if (prov->key_optional)
+            snprintf(out, out_cap,
+                "Kein Endpunkt fuer %s konfiguriert. Trage in den Einstellungen "
+                "die URL des lokalen Servers (local_url) ein.", prov->label);
+        else
+            snprintf(out, out_cap,
+                "Kein Cloud-Zugang fuer %s konfiguriert. Trage in den Einstellungen "
+                "einen API-Key fuer den gewaehlten Anbieter ein (oder waehle einen "
+                "anderen Anbieter).", prov->label);
         return;
     }
 
@@ -766,7 +827,7 @@ void flux_provider_ask(const char *question, char *out, size_t out_cap) {
 
         char *resp = NULL;
         char errbuf[256];
-        if (!http_post(prov, api_key, b.buf, &resp, errbuf, sizeof(errbuf))) {
+        if (!http_post(prov, url, api_key, b.buf, &resp, errbuf, sizeof(errbuf))) {
             snprintf(out, out_cap, "%s", errbuf);
             free(b.buf); free(msgs.buf);
             return;
