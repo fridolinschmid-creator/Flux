@@ -113,6 +113,46 @@ void flux_fb_blend_rect(flux_fb_t *fb, int x, int y, int w, int h, uint32_t rgb,
     }
 }
 
+void flux_fb_blit_rgba(flux_fb_t *fb, int x, int y, int w, int h, const uint8_t *rgba) {
+    for (int j = 0; j < h; j++) {
+        int py = y + j;
+        if ((unsigned)py >= (unsigned)fb->height) continue;
+        for (int i = 0; i < w; i++) {
+            int px = x + i;
+            if ((unsigned)px >= (unsigned)fb->width) continue;
+            const uint8_t *s = rgba + ((size_t)j * w + i) * 4;
+            uint8_t a = s[3];
+            if (a == 0) continue;
+            uint32_t bg = fb->back[py * fb->stride_px + px];
+            uint8_t br = (bg >> 16) & 0xFF, bgc = (bg >> 8) & 0xFF, bb = bg & 0xFF;
+            uint32_t out = (blend8(br, s[0], a) << 16) |
+                           (blend8(bgc, s[1], a) << 8) |
+                            blend8(bb, s[2], a);
+            fb->back[py * fb->stride_px + px] = out;
+        }
+    }
+}
+
+void flux_fb_blit_mask(flux_fb_t *fb, int x, int y, int w, int h, const uint8_t *rgba, uint32_t tint) {
+    uint8_t tr = (tint >> 16) & 0xFF, tg = (tint >> 8) & 0xFF, tb = tint & 0xFF;
+    for (int j = 0; j < h; j++) {
+        int py = y + j;
+        if ((unsigned)py >= (unsigned)fb->height) continue;
+        for (int i = 0; i < w; i++) {
+            int px = x + i;
+            if ((unsigned)px >= (unsigned)fb->width) continue;
+            uint8_t a = rgba[(((size_t)j * w + i) * 4) + 3];
+            if (a == 0) continue;
+            uint32_t bg = fb->back[py * fb->stride_px + px];
+            uint8_t br = (bg >> 16) & 0xFF, bgc = (bg >> 8) & 0xFF, bb = bg & 0xFF;
+            uint32_t out = (blend8(br, tr, a) << 16) |
+                           (blend8(bgc, tg, a) << 8) |
+                            blend8(bb, tb, a);
+            fb->back[py * fb->stride_px + px] = out;
+        }
+    }
+}
+
 /* stb_easy_font liefert pro Buchstabenstrich ein Quad (4 Vertices a
  * 16 Byte: float x, float y, float z, uint8 color[4]). Wir rastern
  * jedes Quad als gefuelltes Rechteck in den Backbuffer.

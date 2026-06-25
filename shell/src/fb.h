@@ -60,4 +60,16 @@ void flux_fb_vline(flux_fb_t *fb, int x, int y, int h, uint32_t col);
 /* Text mit Schatten (+2px Versatz in dunklerem Ton). */
 void flux_fb_text_shadow(flux_fb_t *fb, int x, int y, const char *s, uint32_t col, int scale);
 
+/* ---- RGBA-Blitting (Andockpunkt fuer Icon-/Animations-Bibliotheken) --- */
+
+/* Blittet einen RGBA-Puffer (4 Byte/Pixel: R,G,B,A, gerade Alpha) mit
+ * Per-Pixel-Alpha in den Backbuffer. w/h = Groesse des Quell-Puffers.
+ * Fuer voll eingefaerbte Icons/Animationen (NanoSVG-Farbicons, Lottie). */
+void flux_fb_blit_rgba(flux_fb_t *fb, int x, int y, int w, int h, const uint8_t *rgba);
+
+/* Wie oben, aber der Quell-Puffer wird als EINFARBIGE Maske behandelt:
+ * nur sein Alpha-Kanal liefert die Deckung, die Farbe kommt aus `tint`.
+ * Genau richtig fuer monochrome Strich-Icons (z.B. Lucide). */
+void flux_fb_blit_mask(flux_fb_t *fb, int x, int y, int w, int h, const uint8_t *rgba, uint32_t tint);
+
 #endif

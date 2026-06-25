@@ -1,0 +1,44 @@
+/* icons.h -- vektorbasierte UI-Icons fuer Flux.
+ *
+ * Hintergrund: Die Icons waren bisher von Hand in C gezeichnet (Kreise,
+ * Striche). Stattdessen rendern wir jetzt echte SVG-Icons aus dem
+ * Open-Source-Set "Lucide" (MIT) mit dem Single-Header-Rasterizer
+ * NanoSVG (zlib). Das passt zur framebufferbasierten Architektur:
+ * jedes Icon wird einmal pro (Symbol, Groesse) in einen RGBA-Puffer
+ * gerastert, gecacht und dann als eingefaerbte Maske geblittet --
+ * keine GPU, kein Compositor noetig.
+ *
+ * Neue Icons hinzufuegen: SVG-Pfad-Inhalt aus dem Lucide-Repo in die
+ * ICON_BODY-Tabelle in icons.c eintragen und hier ein Enum ergaenzen.
+ */
+#ifndef FLUX_ICONS_H
+#define FLUX_ICONS_H
+
+#include "fb.h"
+
+typedef enum {
+    FLUX_ICON_SETTINGS = 0,  /* Zahnrad        (Lucide: settings)        */
+    FLUX_ICON_FOLDER,        /* Ordner         (Lucide: folder)          */
+    FLUX_ICON_CALENDAR,      /* Kalender       (Lucide: calendar)        */
+    FLUX_ICON_USER,          /* Person         (Lucide: user)            */
+    FLUX_ICON_MIC,           /* Mikrofon       (Lucide: mic)             */
+    FLUX_ICON_COPY,          /* Kopieren       (Lucide: copy)            */
+    FLUX_ICON_CLIPBOARD,     /* Einfuegen      (Lucide: clipboard)       */
+    FLUX_ICON_CHECK,         /* Haken          (Lucide: check)           */
+    FLUX_ICON_SEND,          /* Senden         (Lucide: send-horizontal) */
+    FLUX_ICON_SEARCH,        /* Lupe           (Lucide: search)          */
+    FLUX_ICON_WIFI,          /* WLAN           (Lucide: wifi)            */
+    FLUX_ICON_BATTERY,       /* Akku           (Lucide: battery)         */
+    FLUX_ICON_COUNT
+} flux_icon_t;
+
+/* Zeichnet das Icon zentriert auf (cx,cy), Kantenlaenge `size` Pixel,
+ * eingefaerbt mit `rgb`. Rasterisiert beim ersten Aufruf pro
+ * (Icon,Groesse) und cached das Ergebnis (LRU). Bei Fehlern (z.B. kein
+ * Speicher) zeichnet es nichts -- der Aufrufer muss nichts pruefen. */
+void flux_icon_draw(flux_fb_t *fb, flux_icon_t id, int cx, int cy, int size, uint32_t rgb);
+
+/* Gibt den Raster-Cache und den Rasterizer frei (optional, beim Beenden). */
+void flux_icon_cleanup(void);
+
+#endif

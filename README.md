@@ -188,8 +188,11 @@ unnoetige Arbeit, die spaeter wieder rausoptimiert werden muesste.
 Flux/
 ├── shell/              flux-shell -- Framebuffer-UI
 │   └── src/
-│       ├── fb.c/.h          Framebuffer + Double-Buffering
+│       ├── fb.c/.h          Framebuffer + Double-Buffering (+ RGBA-Blit)
 │       ├── stb_easy_font.h  Public-Domain-Bitmapfont (nothings/stb)
+│       ├── icons.c/.h       Vektor-Icons (Lucide-SVGs via NanoSVG)
+│       ├── nanosvg*.h       SVG-Parser + -Rasterizer (memononen, zlib)
+│       ├── anim.h           Easing-/Animationshilfen (header-only)
 │       ├── input.c/.h       Tastatur/Touch ueber Linux evdev
 │       ├── ipc.c/.h         Client fuer fluxaid (Q:/X:-Anfragen)
 │       ├── action.c/.h      Parst ACTION:-Vorschlaege, baut X:-Anfragen
@@ -209,10 +212,18 @@ Flux/
 │   ├── flux_config.c/.h     Gemeinsame Konfigdatei (/etc/flux/flux.conf)
 │   └── flux_sha256.c/.h     SHA-256 fuer den PIN-Hash
 ├── build/
-│   ├── overlay/              Rootfs-Overlay (eigenes /etc/inittab, Binaries)
-│   └── build.sh              Buildroot-Build + Cross-Compile in einem Schritt
+│   ├── overlay/              Rootfs-Overlay (QEMU: /etc/inittab, Binaries)
+│   ├── overlay-pi5/          Rootfs-Overlay fuer den Raspberry Pi 5
+│   ├── raspberrypi5/         Pi-5-Konfig (Defconfig-Fragment, config.txt,
+│   │                         Kernel-Fragment, Boot-Logo)
+│   ├── build.sh              Buildroot-Build + Cross-Compile (QEMU)
+│   ├── build-pi5.sh          dasselbe fuer echten Raspberry Pi 5
+│   └── flash-pi5.sh          fertiges Image auf SD-Karte schreiben
 └── docs/
-    └── ARCHITECTURE.md
+    ├── ARCHITECTURE.md
+    ├── ICONS.md              Vektor-Icons (Lucide/NanoSVG) + Animationen
+    ├── RASPBERRY-PI-5.md     Installation + Boot-Branding auf dem Pi 5
+    └── LOGO-PROMPT.md        ChatGPT-Prompt fuer das Flux-Logo
 ```
 
 ---

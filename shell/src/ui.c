@@ -1,4 +1,6 @@
 #include "ui.h"
+#include "icons.h"
+#include "anim.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -676,35 +678,15 @@ typedef enum { NAV_GEAR, NAV_FOLDER, NAV_CALENDAR, NAV_PERSON } nav_icon_t;
 static void draw_nav_icon(flux_fb_t *fb, nav_icon_t kind, int cx, int cy, int s,
                           uint32_t col) {
     if (s < 6) return;
+    /* Echte Lucide-Vektor-Icons statt der frueheren Strich-Zeichnung. */
+    flux_icon_t id = FLUX_ICON_SETTINGS;
     switch (kind) {
-        case NAV_GEAR: {
-            draw_ring(fb, cx, cy, s*2/5, 3, col);
-            fill_circle(fb, cx, cy, s/8, col);
-            for (int a = 0; a < 8; a++) {                 /* Zaehne */
-                int dx = (a==0||a==4)?0 : (a<4?1:-1);
-                int dy = (a==2||a==6)?0 : (a<2||a>6?-1:1);
-                flux_fb_fill_rect(fb, cx + dx*s/2 - 1, cy + dy*s/2 - 1, 3, 3, col);
-            }
-            break; }
-        case NAV_FOLDER: {
-            int w = s*4/5, h = s*3/5;
-            flux_fb_fill_rect(fb, cx-w/2, cy-h/2, w/2, 4, col);          /* Reiter */
-            fill_round_rect(fb, cx-w/2, cy-h/2+3, w, h, 3, col);
-            flux_fb_fill_rect(fb, cx-w/2+3, cy-h/2+8, w-6, h-11, COL_KEY);/* Innen */
-            break; }
-        case NAV_CALENDAR: {
-            int w = s*4/5, h = s*3/4;
-            fill_round_rect(fb, cx-w/2, cy-h/2, w, h, 3, col);
-            flux_fb_fill_rect(fb, cx-w/2+3, cy-h/2+7, w-6, h-10, COL_KEY);
-            flux_fb_fill_rect(fb, cx-w/4, cy-h/2-3, 3, 6, col);          /* Ringe */
-            flux_fb_fill_rect(fb, cx+w/4, cy-h/2-3, 3, 6, col);
-            break; }
-        case NAV_PERSON: {
-            fill_circle(fb, cx, cy-s/5, s/5, col);                       /* Kopf */
-            int w = s*3/5;
-            fill_round_rect(fb, cx-w/2, cy+s/8, w, s/3, 6, col);         /* Schultern */
-            break; }
+        case NAV_GEAR:     id = FLUX_ICON_SETTINGS; break;
+        case NAV_FOLDER:   id = FLUX_ICON_FOLDER;   break;
+        case NAV_CALENDAR: id = FLUX_ICON_CALENDAR; break;
+        case NAV_PERSON:   id = FLUX_ICON_USER;     break;
     }
+    flux_icon_draw(fb, id, cx, cy, s, col);
 }
 
 static void draw_quickrow(flux_fb_t *fb) {
@@ -1015,33 +997,15 @@ typedef enum { INICON_COPY, INICON_PASTE, INICON_MIC, INICON_CHECK } input_icon_
 
 static void draw_input_icon(flux_fb_t *fb, input_icon_t icon, int cx, int cy,
                             int s, uint32_t col, uint32_t bg) {
+    (void)bg;   /* Lucide-Icons sind transparente Masken -- kein Hintergrund noetig */
+    flux_icon_t id = FLUX_ICON_CHECK;
     switch (icon) {
-        case INICON_COPY: {                       /* zwei Seiten uebereinander */
-            int w = s*9/16, h = s*11/16;
-            fill_round_rect(fb, cx-w/2-3, cy-h/2-3, w, h, 2, col);
-            fill_round_rect(fb, cx-w/2-1, cy-h/2-1, w-4, h-4, 2, bg);
-            fill_round_rect(fb, cx-w/2+3, cy-h/2+3, w, h, 2, col);
-            fill_round_rect(fb, cx-w/2+5, cy-h/2+5, w-4, h-4, 2, bg);
-            break; }
-        case INICON_PASTE: {                      /* Klemmbrett mit Clip */
-            int w = s*5/8, h = s*3/4;
-            fill_round_rect(fb, cx-w/2, cy-h/2, w, h, 2, col);
-            fill_round_rect(fb, cx-w/2+3, cy-h/2+5, w-6, h-8, 1, bg);
-            flux_fb_fill_rect(fb, cx-4, cy-h/2-2, 8, 5, col);   /* Clip oben */
-            break; }
-        case INICON_MIC: {                        /* Kapsel + Buegel + Fuss */
-            int bw = 2*s/5;
-            fill_round_rect(fb, cx-bw/2, cy-s/2, bw, s*3/5, bw/2, col); /* Koerper */
-            draw_ring(fb, cx, cy - s/12, s*7/20, 2, col);              /* Buegel */
-            flux_fb_fill_rect(fb, cx, cy - s/12, 1, 0, col);
-            flux_fb_fill_rect(fb, cx-1, cy+s/4, 2, s/6, col);          /* Stiel */
-            flux_fb_fill_rect(fb, cx-s/5, cy+s*2/5, 2*s/5, 2, col);    /* Fuss */
-            break; }
-        case INICON_CHECK: {                      /* Haken */
-            draw_thick_line(fb, cx-s/3, cy, cx-s/12, cy+s/4, 4, col);
-            draw_thick_line(fb, cx-s/12, cy+s/4, cx+s/3, cy-s/4, 4, col);
-            break; }
+        case INICON_COPY:  id = FLUX_ICON_COPY;      break;
+        case INICON_PASTE: id = FLUX_ICON_CLIPBOARD; break;
+        case INICON_MIC:   id = FLUX_ICON_MIC;       break;
+        case INICON_CHECK: id = FLUX_ICON_CHECK;     break;
     }
+    flux_icon_draw(fb, id, cx, cy, s, col);
 }
 
 static void draw_input_bar(flux_fb_t *fb, int input_y, const char *prompt_text,

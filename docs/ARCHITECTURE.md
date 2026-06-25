@@ -52,6 +52,12 @@ Vektor-Quads erzeugt und dann in den Backbuffer gerastert
 (`flux_fb_text`). Keine eigene Bitmap-Font-Tabelle, kein TTF-Renderer --
 fuer Systemtexte reicht das, fuer spaeteres App-Rendering nicht.
 
+Icons sind echte **Vektor-Grafiken**: Lucide-SVGs (MIT) werden mit dem
+Single-Header-Rasterizer NanoSVG (zlib) einmal pro Groesse in einen
+RGBA-Puffer gerastert, gecacht und als eingefaerbte Maske ueber
+`flux_fb_blit_mask` gezeichnet (`shell/src/icons.c`). Dieselbe GPU-lose
+Software-Raster-Logik wie beim Text -- Details in `docs/ICONS.md`.
+
 Eingaben kommen ueber `/dev/input/eventN` (`shell/src/input.c`),
 generisch ueber `EVIOCGBIT` erkannt, nicht hart auf eine PS/2-Tastatur
 verdrahtet. Tastatur- und Touch/Pointer-Geraet werden parallel offen
