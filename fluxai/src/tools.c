@@ -22,6 +22,7 @@
  */
 #include "tools.h"
 #include "vision.h"
+#include "specialists.h"
 #include "imap.h"
 #include "../../common/flux_config.h"
 #include "../../common/flux_util.h"
@@ -1188,6 +1189,33 @@ static int tool_image_analyze(const char *arg, char *out, size_t cap) {
     return flux_vision_analyze(full, out, cap, NULL);
 }
 
+/* ---- plant_identify (Pl@ntNet) --------------------------------------- */
+static int tool_plant_identify(const char *arg, char *out, size_t cap) {
+    if (!arg || !*arg) {
+        snprintf(out, cap, "Fehler: kein Bildpfad angegeben.");
+        return 1;
+    }
+    /* Relativen Pfad in /home/user/Pictures/ aufloesen (wie image_analyze). */
+    char full[512];
+    if (arg[0] == '/') snprintf(full, sizeof(full), "%s", arg);
+    else               snprintf(full, sizeof(full), "/home/user/Pictures/%s", arg);
+    flux_plant_identify(full, out, cap);  /* setzt out immer (auch im Fehlerfall) */
+    return 1;
+}
+
+/* ---- logo_detect (Google Cloud Vision) ------------------------------- */
+static int tool_logo_detect(const char *arg, char *out, size_t cap) {
+    if (!arg || !*arg) {
+        snprintf(out, cap, "Fehler: kein Bildpfad angegeben.");
+        return 1;
+    }
+    char full[512];
+    if (arg[0] == '/') snprintf(full, sizeof(full), "%s", arg);
+    else               snprintf(full, sizeof(full), "/home/user/Pictures/%s", arg);
+    flux_logo_detect(full, out, cap);  /* setzt out immer (auch im Fehlerfall) */
+    return 1;
+}
+
 /* ---- image_take ------------------------------------------------------- */
 static int tool_image_take(const char *arg, char *out, size_t cap) {
     (void)arg;
@@ -1587,6 +1615,8 @@ int flux_tool_exec(const char *name, const char *arg,
     if (strcmp(name, "prefs_set")      == 0) return tool_prefs_set(arg, out, out_cap);
     if (strcmp(name, "image_list")    == 0) return tool_image_list(arg, out, out_cap);
     if (strcmp(name, "image_analyze") == 0) return tool_image_analyze(arg, out, out_cap);
+    if (strcmp(name, "plant_identify")== 0) return tool_plant_identify(arg, out, out_cap);
+    if (strcmp(name, "logo_detect")   == 0) return tool_logo_detect(arg, out, out_cap);
     if (strcmp(name, "image_take")    == 0) return tool_image_take(arg, out, out_cap);
     if (strcmp(name, "memory_save")   == 0) return tool_memory_save(arg, out, out_cap);
     if (strcmp(name, "memory_list")   == 0) return tool_memory_list(arg, out, out_cap);
@@ -1639,6 +1669,8 @@ static const flux_tool_def_t TOOL_DEFS[] = {
     { "prefs_set",       "Nutzerpraeferenz merken (fuer spaetere Kontextnutzung).", "Praeferenztext", 1 },
     { "image_list",      "Fotos in /home/user/Pictures/ auflisten.", "(leer)", 0 },
     { "image_analyze",   "Bild per KI analysieren (Was ist drauf? Wo aufgenommen?).", "Dateiname oder Pfad", 1 },
+    { "plant_identify",  "Exakte Pflanzenart eines Fotos bestimmen (Pl@ntNet-Spezialist).", "Dateiname oder Pfad (in /home/user/Pictures)", 1 },
+    { "logo_detect",     "Logos/Marken und Text auf einem Foto erkennen (Google-Vision-Spezialist).", "Dateiname oder Pfad (in /home/user/Pictures)", 1 },
     { "image_take",      "Neues Foto aufnehmen und speichern.", "(leer)", 0 },
     { "memory_save",     "Persoenliche Info dauerhaft merken (Name, Geburtstag, Praeferenz usw.).", "Text", 1 },
     { "memory_list",     "Alle gespeicherten Infos anzeigen.", "(leer)", 0 },
@@ -1756,6 +1788,8 @@ const char *flux_tools_description(void) {
         "  prefs_set       -- Nutzerpraeferenz merken (fuer spaetere Kontextnutzung). ARG: Praeferenztext\n"
         "  image_list      -- Fotos in /home/user/Pictures/ auflisten. ARG: (leer)\n"
         "  image_analyze   -- Bild per KI analysieren (Was ist drauf? Wo wurde es aufgenommen?). ARG: Dateiname oder Pfad\n"
+        "  plant_identify  -- Exakte Pflanzenart eines Fotos bestimmen (Pl@ntNet). ARG: Dateiname oder Pfad\n"
+        "  logo_detect     -- Logos/Marken und Text auf einem Foto erkennen (Google Vision). ARG: Dateiname oder Pfad\n"
         "  image_take      -- Neues Foto aufnehmen und speichern. ARG: (leer)\n"
         "  memory_save     -- Persoenliche Info dauerhaft merken (Name, Geburtstag, Praeferenz usw.). ARG: Text\n"
         "  memory_list     -- Alle gespeicherten Infos anzeigen. ARG: (leer)\n"

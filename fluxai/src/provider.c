@@ -672,6 +672,10 @@ static int parse_openai(const char *json, char *text_out, size_t text_cap,
     "oder Geraetedaten noetig sind (Wetter, Dateien, Berechnung, Kalender, " \
     "E-Mails, Web-Suche usw.); normale Fragen beantworte ohne Tools. " \
     "Du kannst MEHRERE Tools nacheinander aufrufen. " \
+    "Bei Bildern gilt: image_analyze liefert nur eine GROBE Beschreibung; fuer " \
+    "die EXAKTE Identitaet rufe den passenden Spezialisten auf (plant_identify " \
+    "fuer Pflanzenarten, logo_detect fuer Marken/Logos/Text) und web_search fuer " \
+    "weitere Fakten, dann fasse die Ergebnisse zusammen. " \
     "Enthaelt eine Anfrage mehrere Aufgaben (z.B. Wecker stellen UND eine Mail " \
     "schreiben), erledige JEDE Teilaufgabe. Fuehre eindeutige Aufgaben wie " \
     "Wecker/Erinnerungen/Notizen SOFORT aus, ohne nachzufragen. Frage hoechstens " \
