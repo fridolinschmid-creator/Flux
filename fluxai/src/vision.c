@@ -3,6 +3,7 @@
  * Benoetigt: libcurl, ImageMagick (convert-Befehl).
  */
 #include "vision.h"
+#include "provider.h"
 #include "../../common/flux_config.h"
 
 #include <curl/curl.h>
@@ -13,7 +14,10 @@
 #include <fcntl.h>
 #include <sys/wait.h>
 
-#define VISION_MODEL   "claude-haiku-4-5-20251001"
+/* Vision laeuft ausschliesslich gegen die Anthropic Messages API: nur dieser
+ * Anbieter unterstuetzt das unten gebaute Image-Content-Block-Format. Das
+ * konkrete Modell wird zur Laufzeit vom aktiven Anbieter aufgeloest
+ * (flux_provider_vision), der Endpunkt bleibt fest. */
 #define VISION_API_URL "https://api.anthropic.com/v1/messages"
 
 /* ---- Base64-Encoder ------------------------------------------------- */
@@ -90,25 +94,73 @@ static int extract_text(const char *json, char *out, size_t cap) {
 
 int flux_vision_analyze(const char *ppm_path, char *out, size_t out_cap,
                         const char *api_key_hint) {
-    /* API-Key bestimmen */
-    char key_buf[256] = {0};
-    const char *api_key = api_key_hint;
-    if (!api_key || !*api_key) {
-        if (flux_config_get("api_key", key_buf, sizeof(key_buf)) && key_buf[0])
-            api_key = key_buf;
+    /* API-Key und Modell bestimmen.
+     *
+     * Bildanalyse braucht einen Vision-faehigen Anbieter; im Multi-Provider-
+     * System ist das aktuell nur Anthropic (FMT_ANTHROPIC). Ist ein expliziter
+     * api_key_hint gegeben, wird dieser als Override genutzt (immer mit dem
+     * Anthropic-Vision-Modell). Andernfalls fragen wir den aktiven Anbieter
+     * ab -- ist dieser NICHT Anthropic, brechen wir mit einer klaren Meldung
+     * ab, statt ein Anthropic-Format an einen fremden Endpunkt zu schicken. */
+    char key_buf[512]   = {0};
+    char model_buf[200] = {0};
+    char label_buf[128] = {0};
+    const char *api_key = NULL;
+    const char *model   = NULL;
+
+    if (api_key_hint && *api_key_hint) {
+        api_key = api_key_hint;
+        /* Modell des aktiven Anbieters mitnehmen, sofern Anthropic; sonst
+         * Standard-Vision-Modell. label_buf wird hier nicht benoetigt. */
+        if (flux_provider_vision(NULL, 0, model_buf, sizeof(model_buf),
+                                 NULL, 0) && model_buf[0])
+            model = model_buf;
         else
-            api_key = getenv("FLUX_AI_API_KEY");
+            model = "claude-haiku-4-5-20251001";
+    } else if (flux_provider_vision(key_buf, sizeof(key_buf),
+                                    model_buf, sizeof(model_buf),
+                                    label_buf, sizeof(label_buf))) {
+        api_key = key_buf;
+        model   = model_buf;
+    } else {
+        /* Aktiver Anbieter ist nicht Vision-faehig oder hat keinen Key. */
+        if (label_buf[0])
+            snprintf(out, out_cap,
+                     "Bildanalyse benoetigt einen Vision-faehigen Anbieter "
+                     "(derzeit Anthropic). Aktiver Anbieter: %s.", label_buf);
+        else
+            snprintf(out, out_cap, "Kein API-Key konfiguriert.");
+        return 0;
     }
     if (!api_key || !*api_key) {
         snprintf(out, out_cap, "Kein API-Key konfiguriert.");
         return 0;
     }
 
-    /* PPM → JPEG per ImageMagick ohne system()-Shell-Injection */
-    const char *tmp_jpg = "/tmp/flux_vision_img.jpg";
+    /* PPM → JPEG per ImageMagick ohne system()-Shell-Injection.
+     *
+     * Pro Aufruf eine eindeutige Tempdatei via mkstemp() statt eines festen
+     * Pfads: Ein vorhersagbarer Name in einem geteilten /tmp ist anfaellig fuer
+     * Symlink-Angriffe und nicht nebenlaeufig sicher (der Daemon forkt pro
+     * Anfrage). mkstemp legt die Datei sicher (O_EXCL, 0600) an; wir schliessen
+     * den Deskriptor und lassen ImageMagick exakt diesen Pfad ueberschreiben.
+     * Format wird via "jpg:"-Praefix erzwungen, unabhaengig von der Endung. */
+    char tmpl[] = "/tmp/flux_vision_XXXXXX";
+    int tfd = mkstemp(tmpl);
+    if (tfd < 0) {
+        snprintf(out, out_cap, "Temporaere Datei konnte nicht angelegt werden.");
+        return 0;
+    }
+    close(tfd);
+    const char *tmp_jpg = tmpl;
+
     {
+        char jpg_target[64];
+        snprintf(jpg_target, sizeof(jpg_target), "jpg:%s", tmp_jpg);
+
         pid_t pid = fork();
         if (pid < 0) {
+            unlink(tmp_jpg);
             snprintf(out, out_cap, "fork() fehlgeschlagen.");
             return 0;
         }
@@ -118,13 +170,14 @@ int flux_vision_analyze(const char *ppm_path, char *out, size_t out_cap,
             if (devnull >= 0) { dup2(devnull, STDERR_FILENO); close(devnull); }
             char quality[] = "80";
             char *argv[] = { "convert", (char *)ppm_path, "-quality", quality,
-                             (char *)tmp_jpg, NULL };
+                             jpg_target, NULL };
             execvp("convert", argv);
             _exit(127);
         }
         int wstatus = 0;
         waitpid(pid, &wstatus, 0);
         if (!WIFEXITED(wstatus) || WEXITSTATUS(wstatus) != 0) {
+            unlink(tmp_jpg);
             snprintf(out, out_cap,
                      "Bildkonvertierung fehlgeschlagen (convert nicht installiert?).");
             return 0;
@@ -133,19 +186,24 @@ int flux_vision_analyze(const char *ppm_path, char *out, size_t out_cap,
 
     /* JPEG-Datei einlesen */
     FILE *jf = fopen(tmp_jpg, "rb");
-    if (!jf) { snprintf(out, out_cap, "Bilddatei nicht lesbar."); return 0; }
+    if (!jf) {
+        unlink(tmp_jpg);
+        snprintf(out, out_cap, "Bilddatei nicht lesbar.");
+        return 0;
+    }
     fseek(jf, 0, SEEK_END);
     long fsize = ftell(jf);
     fseek(jf, 0, SEEK_SET);
     if (fsize <= 0 || fsize > 10 * 1024 * 1024) {
         fclose(jf);
+        unlink(tmp_jpg);
         snprintf(out, out_cap, "Bild zu gross oder leer.");
         return 0;
     }
     unsigned char *jpeg_data = malloc((size_t)fsize);
-    if (!jpeg_data) { fclose(jf); return 0; }
+    if (!jpeg_data) { fclose(jf); unlink(tmp_jpg); return 0; }
     if ((long)fread(jpeg_data, 1, (size_t)fsize, jf) != fsize) {
-        fclose(jf); free(jpeg_data);
+        fclose(jf); free(jpeg_data); unlink(tmp_jpg);
         snprintf(out, out_cap, "Lesefehler beim Bild.");
         return 0;
     }
@@ -177,7 +235,7 @@ int flux_vision_analyze(const char *ppm_path, char *out, size_t out_cap,
             "Nenne Motive, Stimmung und -- falls erkennbar -- den Ort oder Kontext. "
             "Antworte auf Deutsch, maximal 3 Saetze.\"}"
         "]}]}",
-        VISION_MODEL, b64);
+        model, b64);
     free(b64);
 
     if (blen <= 0 || (size_t)blen >= body_cap) {

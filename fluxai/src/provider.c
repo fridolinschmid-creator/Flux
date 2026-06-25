@@ -109,6 +109,25 @@ int flux_provider_available(void) {
     return key[0] != '\0';
 }
 
+int flux_provider_vision(char *key_out, size_t key_cap,
+                         char *model_out, size_t model_cap,
+                         char *label_out, size_t label_cap) {
+    char key[512]   = {0};
+    char model[200] = {0};
+    const flux_provider_def_t *p =
+        resolve_provider(key, sizeof(key), model, sizeof(model));
+
+    if (label_out && label_cap) snprintf(label_out, label_cap, "%s", p->label);
+
+    /* Nur Anthropic unterstuetzt das von vision.c gebaute Image-Format. */
+    if (p->format != FMT_ANTHROPIC || key[0] == '\0')
+        return 0;
+
+    if (key_out && key_cap)     snprintf(key_out, key_cap, "%s", key);
+    if (model_out && model_cap) snprintf(model_out, model_cap, "%s", model);
+    return 1;
+}
+
 /* --- Conversation context (last CTX_MAX turns) --- */
 #define CTX_MAX 12
 #define CTX_LOG "/etc/flux/conv_log.txt"
