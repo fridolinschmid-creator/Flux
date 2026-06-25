@@ -5,6 +5,7 @@
 #include "vision.h"
 #include "provider.h"
 #include "../../common/flux_config.h"
+#include "../../common/flux_util.h"
 
 #include <curl/curl.h>
 #include <stdio.h>
@@ -20,76 +21,13 @@
  * (flux_provider_vision), der Endpunkt bleibt fest. */
 #define VISION_API_URL "https://api.anthropic.com/v1/messages"
 
-/* ---- Base64-Encoder ------------------------------------------------- */
+/* ---- JSON-Antwort ---------------------------------------------------- *
+ * Base64-Kodierung, der wachsende HTTP-Antwortpuffer und der
+ * libcurl-Write-Callback liegen jetzt in common/flux_util. */
 
-static const char b64_chars[] =
-    "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-
-static size_t base64_encode(const unsigned char *in, size_t in_len,
-                              char *out, size_t out_cap) {
-    size_t o = 0;
-    for (size_t i = 0; i < in_len; i += 3) {
-        unsigned int n  = (unsigned int)in[i] << 16;
-        if (i + 1 < in_len) n |= (unsigned int)in[i + 1] << 8;
-        if (i + 2 < in_len) n |= (unsigned int)in[i + 2];
-        if (o + 5 >= out_cap) break;
-        out[o++] = b64_chars[(n >> 18) & 0x3F];
-        out[o++] = b64_chars[(n >> 12) & 0x3F];
-        out[o++] = (i + 1 < in_len) ? b64_chars[(n >>  6) & 0x3F] : '=';
-        out[o++] = (i + 2 < in_len) ? b64_chars[ n        & 0x3F] : '=';
-    }
-    out[o] = '\0';
-    return o;
-}
-
-/* ---- Curl-Hilfsfunktionen ------------------------------------------- */
-
-struct dyn_buf {
-    char  *data;
-    size_t len;
-    size_t cap;
-};
-
-static size_t curl_write_cb(void *ptr, size_t size, size_t nmemb, void *ud) {
-    struct dyn_buf *mb = ud;
-    size_t add = size * nmemb;
-    if (mb->len + add + 1 > mb->cap) {
-        size_t nc = mb->cap * 2 + add + 1024;
-        char *nd = realloc(mb->data, nc);
-        if (!nd) return 0;
-        mb->data = nd;
-        mb->cap  = nc;
-    }
-    memcpy(mb->data + mb->len, ptr, add);
-    mb->len += add;
-    mb->data[mb->len] = '\0';
-    return add;
-}
-
-/* Sucht "text":"..." in JSON-Antwort und dekodiert Escapes. */
+/* Sucht "text":"..." in der JSON-Antwort und dekodiert die Escapes. */
 static int extract_text(const char *json, char *out, size_t cap) {
-    const char *key = "\"text\":\"";
-    const char *p   = strstr(json, key);
-    if (!p) return 0;
-    p += strlen(key);
-    size_t o = 0;
-    while (*p && *p != '"' && o + 1 < cap) {
-        if (*p == '\\' && *(p + 1)) {
-            p++;
-            switch (*p) {
-                case 'n':  out[o++] = '\n'; break;
-                case 't':  out[o++] = '\t'; break;
-                case '"':  out[o++] = '"';  break;
-                case '\\': out[o++] = '\\'; break;
-                default:   out[o++] = *p;   break;
-            }
-        } else {
-            out[o++] = *p;
-        }
-        p++;
-    }
-    out[o] = '\0';
-    return o > 0;
+    return flux_json_get_string(json, "text", out, cap) && out[0] != '\0';
 }
 
 int flux_vision_analyze(const char *ppm_path, char *out, size_t out_cap,
@@ -214,7 +152,7 @@ int flux_vision_analyze(const char *ppm_path, char *out, size_t out_cap,
     size_t b64_cap = (size_t)fsize * 4 / 3 + 8;
     char *b64 = malloc(b64_cap);
     if (!b64) { free(jpeg_data); return 0; }
-    base64_encode(jpeg_data, (size_t)fsize, b64, b64_cap);
+    flux_base64_encode(jpeg_data, (size_t)fsize, b64, b64_cap);
     free(jpeg_data);
 
     /* JSON-Body aufbauen:
@@ -248,9 +186,10 @@ int flux_vision_analyze(const char *ppm_path, char *out, size_t out_cap,
     CURL *curl = curl_easy_init();
     if (!curl) { free(body); return 0; }
 
-    struct dyn_buf resp = { .data = malloc(4096), .len = 0, .cap = 4096 };
-    if (!resp.data) { curl_easy_cleanup(curl); free(body); return 0; }
-    resp.data[0] = '\0';
+    flux_http_buf resp;
+    if (flux_http_buf_init(&resp, 4096) != 0) {
+        curl_easy_cleanup(curl); free(body); return 0;
+    }
 
     char auth_hdr[300];
     snprintf(auth_hdr, sizeof(auth_hdr), "x-api-key: %s", api_key);
@@ -265,7 +204,7 @@ int flux_vision_analyze(const char *ppm_path, char *out, size_t out_cap,
     curl_easy_setopt(curl, CURLOPT_HTTPHEADER, hdrs);
     curl_easy_setopt(curl, CURLOPT_POSTFIELDS, body);
     curl_easy_setopt(curl, CURLOPT_POSTFIELDSIZE, (long)blen);
-    curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, curl_write_cb);
+    curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, flux_http_write_cb);
     curl_easy_setopt(curl, CURLOPT_WRITEDATA, &resp);
     curl_easy_setopt(curl, CURLOPT_TIMEOUT, 30L);
 
@@ -281,7 +220,7 @@ int flux_vision_analyze(const char *ppm_path, char *out, size_t out_cap,
 
     curl_slist_free_all(hdrs);
     curl_easy_cleanup(curl);
-    free(resp.data);
+    flux_http_buf_free(&resp);
     free(body);
     return ok;
 }

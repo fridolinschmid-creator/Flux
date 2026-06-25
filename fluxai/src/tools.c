@@ -24,6 +24,7 @@
 #include "vision.h"
 #include "imap.h"
 #include "../../common/flux_config.h"
+#include "../../common/flux_util.h"
 
 #include <curl/curl.h>
 #include <stdio.h>
@@ -42,19 +43,10 @@
 #define FILE_READ_MAX   8192
 #define NOTE_TEXT_MAX   512
 
-/* ---- Curl-Hilfspuffer ------------------------------------------------ */
-
-struct membuf { char *data; size_t len, cap; };
-
-static size_t curl_write_cb(void *ptr, size_t size, size_t nmemb, void *ud) {
-    struct membuf *mb = ud;
-    size_t add = size * nmemb;
-    if (mb->len + add + 1 > mb->cap) return 0;
-    memcpy(mb->data + mb->len, ptr, add);
-    mb->len += add;
-    mb->data[mb->len] = '\0';
-    return add;
-}
+/* Der HTTP-Antwortpuffer und der libcurl-Write-Callback liegen jetzt in
+ * common/flux_util (flux_http_buf / flux_http_write_cb). Die fruehere lokale
+ * membuf-Variante war fix-kapazitaet auf Stack-Puffern; die gemeinsame Version
+ * waechst per realloc und braucht daher heap-allozierte Puffer. */
 
 /* ---- date_time -------------------------------------------------------- */
 
@@ -81,20 +73,26 @@ static int tool_weather(const char *arg, char *out, size_t cap) {
              "https://wttr.in/%s?format=%%l:+%%C,+%%t,+%%h+Feuchte,+Wind+%%w",
              city);
 
-    char respbuf[1024];
-    respbuf[0] = '\0';
-    struct membuf mb = { .data = respbuf, .len = 0, .cap = sizeof(respbuf) };
-
     CURL *curl = curl_easy_init();
     if (!curl) {
         snprintf(out, cap, "Fehler: curl nicht verfuegbar");
         return 1;
     }
+
+    /* Wachsender Heap-Antwortpuffer (gemeinsame flux_http_buf-Hilfe).
+     * Nicht auf einen Stack-Array zeigen lassen -- der Callback realloc't. */
+    flux_http_buf mb;
+    if (flux_http_buf_init(&mb, 1024) != 0) {
+        curl_easy_cleanup(curl);
+        snprintf(out, cap, "Fehler: kein Speicher");
+        return 1;
+    }
+
     struct curl_slist *hdrs = NULL;
     hdrs = curl_slist_append(hdrs, "Accept-Language: de");
     curl_easy_setopt(curl, CURLOPT_URL, url);
     curl_easy_setopt(curl, CURLOPT_HTTPHEADER, hdrs);
-    curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, curl_write_cb);
+    curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, flux_http_write_cb);
     curl_easy_setopt(curl, CURLOPT_WRITEDATA, &mb);
     curl_easy_setopt(curl, CURLOPT_TIMEOUT, 8L);
     curl_easy_setopt(curl, CURLOPT_USERAGENT, "curl/7.x (flux-os)");
@@ -104,9 +102,12 @@ static int tool_weather(const char *arg, char *out, size_t cap) {
     curl_easy_cleanup(curl);
 
     if (res != CURLE_OK) {
+        flux_http_buf_free(&mb);
         snprintf(out, cap, "Wetterdaten nicht verfuegbar: %s", curl_easy_strerror(res));
         return 1;
     }
+
+    const char *respbuf = mb.data;
 
     /* Steuerzeichen (Emoji, ANSI) aus Antwort entfernen -- das Terminal-Format
      * von wttr.in enthaelt manchmal Escape-Sequenzen. */
@@ -130,6 +131,7 @@ static int tool_weather(const char *arg, char *out, size_t cap) {
         }
     }
     clean[ci] = '\0';
+    flux_http_buf_free(&mb);
 
     /* Newlines durch Leerzeichen ersetzen */
     for (size_t i = 0; clean[i]; i++)
@@ -601,14 +603,10 @@ static int tool_contacts_search(const char *arg, char *out, size_t cap) {
     char line[256];
     int found = 0;
     while (fgets(line, sizeof(line), f) && pos + 2 < sizeof(tmp)) {
-        /* Gross-Klein-unabhaengige Suche durch manuellen Vergleich */
+        /* Gross-Klein-unabhaengige Suche (ASCII) */
         char lower_line[256], lower_arg[128];
-        for (int i = 0; line[i] && i < 255; i++)
-            lower_line[i] = (line[i] >= 'A' && line[i] <= 'Z') ? line[i] + 32 : line[i];
-        lower_line[255] = '\0';
-        for (int i = 0; arg[i] && i < 127; i++)
-            lower_arg[i] = (arg[i] >= 'A' && arg[i] <= 'Z') ? arg[i] + 32 : arg[i];
-        lower_arg[127] = '\0';
+        flux_str_tolower_ascii(lower_line, sizeof(lower_line), line);
+        flux_str_tolower_ascii(lower_arg, sizeof(lower_arg), arg);
         if (strstr(lower_line, lower_arg)) {
             size_t ll = strlen(line);
             if (pos + ll + 1 < sizeof(tmp)) {
@@ -839,10 +837,8 @@ static int tool_memory_save(const char *arg, char *out, size_t cap) {
     fprintf(f, "[%s] %s\n", ts, entry);
     fclose(f);
     /* If birthday mentioned: auto-add a yearly calendar reminder */
-    char lower[512]; size_t li = 0;
-    for (const char *p = entry; *p && li < sizeof(lower)-1; p++, li++)
-        lower[li] = (*p >= 'A' && *p <= 'Z') ? *p + 32 : *p;
-    lower[li] = '\0';
+    char lower[512];
+    flux_str_tolower_ascii(lower, sizeof(lower), entry);
     if (strstr(lower, "geburtstag") || strstr(lower, "birthday")) {
         FILE *cf = fopen("/etc/flux/calendar.txt", "a");
         if (cf) {
@@ -884,16 +880,12 @@ static int tool_memory_search(const char *arg, char *out, size_t cap) {
     FILE *f = fopen(MEMORY_PATH, "r");
     if (!f) { snprintf(out, cap, "Keine Erinnerungen vorhanden."); return 1; }
     char tmp[4096]; size_t pos = snprintf(tmp, sizeof(tmp), "Erinnerungen zu \"%s\":\n", arg);
-    char lower_arg[128]; size_t ai = 0;
-    for (const char *p = arg; *p && ai < sizeof(lower_arg)-1; p++, ai++)
-        lower_arg[ai] = (*p >= 'A' && *p <= 'Z') ? *p + 32 : *p;
-    lower_arg[ai] = '\0';
+    char lower_arg[128];
+    flux_str_tolower_ascii(lower_arg, sizeof(lower_arg), arg);
     char line[256]; int found = 0;
     while (fgets(line, sizeof(line), f)) {
-        char lower_line[256]; size_t li = 0;
-        for (const char *p = line; *p && li < sizeof(lower_line)-1; p++, li++)
-            lower_line[li] = (*p >= 'A' && *p <= 'Z') ? *p + 32 : *p;
-        lower_line[li] = '\0';
+        char lower_line[256];
+        flux_str_tolower_ascii(lower_line, sizeof(lower_line), line);
         if (strstr(lower_line, lower_arg)) {
             size_t ll = strlen(line);
             if (pos + ll + 1 < sizeof(tmp)) { memcpy(tmp + pos, line, ll); pos += ll; tmp[pos] = '\0'; }
@@ -918,18 +910,14 @@ static int tool_memory_delete(const char *arg, char *out, size_t cap) {
         lines[n-1][sizeof(lines[0])-1] = '\0';
     }
     fclose(f);
-    char lower_arg[128]; size_t ai = 0;
-    for (const char *p = arg; *p && ai < sizeof(lower_arg)-1; p++, ai++)
-        lower_arg[ai] = (*p >= 'A' && *p <= 'Z') ? *p + 32 : *p;
-    lower_arg[ai] = '\0';
+    char lower_arg[128];
+    flux_str_tolower_ascii(lower_arg, sizeof(lower_arg), arg);
     f = fopen(MEMORY_PATH, "w");
     if (!f) { snprintf(out, cap, "Fehler: Datei nicht schreibbar"); return 1; }
     int deleted = 0;
     for (int i = 0; i < n; i++) {
-        char lower_line[256]; size_t li = 0;
-        for (const char *p = lines[i]; *p && li < sizeof(lower_line)-1; p++, li++)
-            lower_line[li] = (*p >= 'A' && *p <= 'Z') ? *p + 32 : *p;
-        lower_line[li] = '\0';
+        char lower_line[256];
+        flux_str_tolower_ascii(lower_line, sizeof(lower_line), lines[i]);
         if (strstr(lower_line, lower_arg)) { deleted++; }
         else { fputs(lines[i], f); }
     }
@@ -1101,16 +1089,10 @@ static void search_files_walk(const char *base, const char *pattern,
         snprintf(full, sizeof(full), "%s/%s", base, e->d_name);
         struct stat st;
         if (stat(full, &st) != 0) continue;
-        /* Case-insensitive name match */
+        /* Case-insensitive name match (ASCII) */
         char lower_name[256], lower_pat[128];
-        for (int i = 0; e->d_name[i] && i < 255; i++)
-            lower_name[i] = (e->d_name[i] >= 'A' && e->d_name[i] <= 'Z')
-                           ? e->d_name[i] + 32 : e->d_name[i];
-        lower_name[strlen(e->d_name)] = '\0';
-        for (int i = 0; pattern[i] && i < 127; i++)
-            lower_pat[i] = (pattern[i] >= 'A' && pattern[i] <= 'Z')
-                          ? pattern[i] + 32 : pattern[i];
-        lower_pat[strlen(pattern)] = '\0';
+        flux_str_tolower_ascii(lower_name, sizeof(lower_name), e->d_name);
+        flux_str_tolower_ascii(lower_pat, sizeof(lower_pat), pattern);
         if (strstr(lower_name, lower_pat)) {
             size_t ol = strlen(out);
             snprintf(out + ol, cap - ol, "  %s\n", full);
@@ -1373,11 +1355,17 @@ static int tool_web_search(const char *arg, char *out, size_t cap) {
              base, q ? q : "");
     if (q) curl_free(q);
 
-    char respbuf[16384]; respbuf[0] = '\0';
-    struct membuf mb = { .data = respbuf, .len = 0, .cap = sizeof(respbuf) };
+    /* Wachsender Heap-Antwortpuffer (gemeinsame flux_http_buf-Hilfe).
+     * Nicht auf einen Stack-Array zeigen lassen -- der Callback realloc't. */
+    flux_http_buf mb;
+    if (flux_http_buf_init(&mb, 16384) != 0) {
+        curl_easy_cleanup(curl);
+        snprintf(out, cap, "Fehler: kein Speicher");
+        return 1;
+    }
 
     curl_easy_setopt(curl, CURLOPT_URL, url);
-    curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, curl_write_cb);
+    curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, flux_http_write_cb);
     curl_easy_setopt(curl, CURLOPT_WRITEDATA, &mb);
     curl_easy_setopt(curl, CURLOPT_TIMEOUT, 12L);
     curl_easy_setopt(curl, CURLOPT_USERAGENT, "flux-os/1.0");
@@ -1389,13 +1377,15 @@ static int tool_web_search(const char *arg, char *out, size_t cap) {
     curl_easy_cleanup(curl);
 
     if (res != CURLE_OK) {
+        flux_http_buf_free(&mb);
         snprintf(out, cap,
                  "SearXNG nicht erreichbar (%s). Laeuft die Instanz auf dem "
                  "MacBook und ist das Geraet im selben Netz?",
                  curl_easy_strerror(res));
         return 1;
     }
-    if (http == 403 || strstr(respbuf, "\"results\"") == NULL) {
+    if (http == 403 || strstr(mb.data, "\"results\"") == NULL) {
+        flux_http_buf_free(&mb);
         snprintf(out, cap,
                  "Keine Treffer oder JSON-Format nicht aktiviert. Erlaube in der "
                  "SearXNG-settings.yml 'formats: [html, json]' und starte neu.");
@@ -1405,7 +1395,8 @@ static int tool_web_search(const char *arg, char *out, size_t cap) {
     char header[300];
     snprintf(header, sizeof(header), "Web-Suchergebnisse fuer \"%s\":\n", arg);
     snprintf(out, cap, "%s", header);
-    int n = parse_searxng(respbuf, out, cap, 5);
+    int n = parse_searxng(mb.data, out, cap, 5);
+    flux_http_buf_free(&mb);
     if (n == 0) snprintf(out, cap, "Keine Treffer fuer \"%s\".", arg);
     return 1;
 }

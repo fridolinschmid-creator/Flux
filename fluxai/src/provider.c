@@ -1,6 +1,7 @@
 #include "provider.h"
 #include "tools.h"
 #include "../../common/flux_config.h"
+#include "../../common/flux_util.h"
 
 #include <curl/curl.h>
 #include <time.h>
@@ -181,28 +182,9 @@ static void ctx_add(const char *q, const char *a) {
     ctx_persist();
 }
 
-struct membuf {
-    char  *data;
-    size_t len;
-    size_t cap;
-};
-
-static size_t curl_write_cb(void *ptr, size_t size, size_t nmemb, void *userdata) {
-    struct membuf *mb = userdata;
-    size_t add = size * nmemb;
-    if (mb->len + add + 1 > mb->cap) {
-        size_t nc = mb->cap ? mb->cap * 2 : 16384;
-        while (nc < mb->len + add + 1) nc *= 2;
-        char *nd = realloc(mb->data, nc);
-        if (!nd) return 0; /* OOM -> curl bricht ab */
-        mb->data = nd;
-        mb->cap  = nc;
-    }
-    memcpy(mb->data + mb->len, ptr, add);
-    mb->len += add;
-    mb->data[mb->len] = '\0';
-    return add;
-}
+/* HTTP-Antwortpuffer und der zugehoerige libcurl-Write-Callback liegen jetzt
+ * in common/flux_util (flux_http_buf / flux_http_write_cb) -- verhaltensgleich
+ * zur frueheren lokalen membuf-Variante (wachsend per realloc). */
 
 void flux_provider_init(void) {
     curl_global_init(CURL_GLOBAL_DEFAULT);
@@ -353,20 +335,19 @@ static int http_post(const flux_provider_def_t *prov, const char *api_key,
             snprintf(err_out, err_cap, "Interner Fehler: curl_easy_init() fehlgeschlagen.");
             break;
         }
-        /* Antwortpuffer waechst bei Bedarf (curl_write_cb). */
-        struct membuf mb = { .data = malloc(16384), .len = 0, .cap = 16384 };
-        if (!mb.data) {
+        /* Antwortpuffer waechst bei Bedarf (flux_http_write_cb). */
+        flux_http_buf mb;
+        if (flux_http_buf_init(&mb, 16384) != 0) {
             curl_easy_cleanup(curl);
             snprintf(err_out, err_cap, "Interner Fehler: kein Speicher.");
             break;
         }
-        mb.data[0] = '\0';
 
         curl_easy_setopt(curl, CURLOPT_URL, prov->url);
         curl_easy_setopt(curl, CURLOPT_POST, 1L);
         curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
         curl_easy_setopt(curl, CURLOPT_POSTFIELDS, body);
-        curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, curl_write_cb);
+        curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, flux_http_write_cb);
         curl_easy_setopt(curl, CURLOPT_WRITEDATA, &mb);
         curl_easy_setopt(curl, CURLOPT_TIMEOUT, 30L);
 
