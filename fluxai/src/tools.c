@@ -152,11 +152,20 @@ static int tool_weather(const char *arg, char *out, size_t cap) {
 static int path_read_allowed(const char *path) {
     /* Pfad-Traversal mit ".." grundsaetzlich ablehnen */
     if (strstr(path, "..")) return 0;
+    /* /proc/<pid>/environ und /proc/<pid>/mem leaken Umgebungsvariablen
+     * (u.a. FLUX_AI_API_KEY) bzw. den gesamten Prozessspeicher -- explizit
+     * verbieten, damit die KI ueber file_read keine Zugangsdaten abgreifen
+     * kann. */
+    if (strstr(path, "environ") || strstr(path, "/mem")) return 0;
+    /* Kanonisch aufloesen, damit Symlinks (z.B. /home/user/x -> flux.conf)
+     * nicht aus den erlaubten Verzeichnissen ausbrechen koennen. */
+    char resolved[PATH_MAX];
+    if (!realpath(path, resolved)) return 0;
     static const char *ok_prefixes[] = {
         "/home/user/", "/tmp/", "/proc/", "/sys/", NULL
     };
     for (int i = 0; ok_prefixes[i]; i++)
-        if (strncmp(path, ok_prefixes[i], strlen(ok_prefixes[i])) == 0) return 1;
+        if (strncmp(resolved, ok_prefixes[i], strlen(ok_prefixes[i])) == 0) return 1;
     return 0;
 }
 

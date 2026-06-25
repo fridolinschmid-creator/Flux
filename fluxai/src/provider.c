@@ -171,8 +171,14 @@ struct membuf {
 static size_t curl_write_cb(void *ptr, size_t size, size_t nmemb, void *userdata) {
     struct membuf *mb = userdata;
     size_t add = size * nmemb;
-    if (mb->len + add + 1 > mb->cap)
-        return 0;
+    if (mb->len + add + 1 > mb->cap) {
+        size_t nc = mb->cap ? mb->cap * 2 : 16384;
+        while (nc < mb->len + add + 1) nc *= 2;
+        char *nd = realloc(mb->data, nc);
+        if (!nd) return 0; /* OOM -> curl bricht ab */
+        mb->data = nd;
+        mb->cap  = nc;
+    }
     memcpy(mb->data + mb->len, ptr, add);
     mb->len += add;
     mb->data[mb->len] = '\0';
@@ -184,23 +190,49 @@ void flux_provider_init(void) {
     ctx_load();
 }
 
-static void json_escape_append(char *out, size_t cap, const char *s) {
-    size_t len = strlen(out);
-    for (; *s && len + 2 < cap; s++) {
-        char c = *s;
-        if (c == '"' || c == '\\') {
-            out[len++] = '\\';
-            out[len++] = c;
-        } else if (c == '\n') {
-            out[len++] = '\\';
-            out[len++] = 'n';
-        } else if ((unsigned char)c < 0x20) {
-            continue;
-        } else {
-            out[len++] = c;
-        }
+/* --- Wachsender String-Builder fuer den JSON-Request-Body ---
+ * Ersetzt das fruehere feste body[24576] mit strncat: dort wurde der
+ * Body bei vielen Kontext-Turns + grossem System-Prompt still abgeschnitten
+ * -> ungueltiges JSON an die API. Hier waechst der Puffer stattdessen und
+ * setzt bei OOM ein Fehler-Flag, das der Aufrufer prueft. */
+typedef struct { char *buf; size_t len, cap; int err; } strbuf_t;
+
+static void sb_init(strbuf_t *b) {
+    b->cap = 8192; b->len = 0; b->err = 0;
+    b->buf = malloc(b->cap);
+    if (!b->buf) b->err = 1; else b->buf[0] = '\0';
+}
+static void sb_ensure(strbuf_t *b, size_t extra) {
+    if (b->err) return;
+    if (b->len + extra + 1 > b->cap) {
+        size_t nc = b->cap * 2;
+        while (nc < b->len + extra + 1) nc *= 2;
+        char *nb = realloc(b->buf, nc);
+        if (!nb) { b->err = 1; return; }
+        b->buf = nb; b->cap = nc;
     }
-    out[len] = '\0';
+}
+/* Rohtext (bereits JSON-sicher) anhaengen. */
+static void sb_raw(strbuf_t *b, const char *s) {
+    size_t l = strlen(s);
+    sb_ensure(b, l);
+    if (b->err) return;
+    memcpy(b->buf + b->len, s, l);
+    b->len += l;
+    b->buf[b->len] = '\0';
+}
+/* String JSON-escaped anhaengen. */
+static void sb_json(strbuf_t *b, const char *s) {
+    for (; *s; s++) {
+        char c = *s;
+        if ((unsigned char)c < 0x20 && c != '\n') continue;
+        sb_ensure(b, 2);
+        if (b->err) return;
+        if (c == '"' || c == '\\') { b->buf[b->len++] = '\\'; b->buf[b->len++] = c; }
+        else if (c == '\n')        { b->buf[b->len++] = '\\'; b->buf[b->len++] = 'n'; }
+        else                       { b->buf[b->len++] = c; }
+        b->buf[b->len] = '\0';
+    }
 }
 
 /* Dekodiert einen JSON-String ab *p (direkt hinter dem oeffnenden ")
@@ -275,60 +307,60 @@ static int extract_text(const char *json, api_format_t fmt, char *out, size_t ou
 /* Baut den Request-Body fuer das jeweilige Format und sendet ihn.
  * Gibt 1 bei Erfolg. */
 static int api_call(const flux_provider_def_t *prov, const char *api_key,
-                    const char *model, const char *system_prompt,
-                    const char *final_q, char *out, size_t out_cap, int use_ctx) {
-    char body[24576];
+                    const char *model, const char *sys_static,
+                    const char *sys_dynamic, const char *final_q,
+                    char *out, size_t out_cap, int use_ctx) {
+    strbuf_t b;
+    sb_init(&b);
 
     if (prov->format == FMT_ANTHROPIC) {
-        /* system als Cache-faehiger Block (Prompt-Caching spart Kosten/Latenz) */
-        snprintf(body, sizeof(body),
-                 "{\"model\":\"%s\",\"max_tokens\":600,"
-                 "\"system\":[{\"type\":\"text\",\"text\":\"", model);
-        json_escape_append(body, sizeof(body), system_prompt);
-        strncat(body, "\",\"cache_control\":{\"type\":\"ephemeral\"}}],"
-                      "\"messages\":[", sizeof(body) - strlen(body) - 1);
-
-        if (use_ctx) {
-            for (int i = 0; i < ctx_n; i++) {
-                strncat(body, "{\"role\":\"user\",\"content\":\"",
-                        sizeof(body) - strlen(body) - 1);
-                json_escape_append(body, sizeof(body), ctx_history[i].q);
-                strncat(body, "\"},{\"role\":\"assistant\",\"content\":\"",
-                        sizeof(body) - strlen(body) - 1);
-                json_escape_append(body, sizeof(body), ctx_history[i].a);
-                strncat(body, "\"},", sizeof(body) - strlen(body) - 1);
-            }
+        /* Statischer Teil als cache-faehiger Block (Prompt-Caching), der
+         * dynamische Teil (Datum/Gedaechtnis) als eigener, NICHT gecachter
+         * Block -- sonst bricht der Cache jede Minute durch die Uhrzeit. */
+        sb_raw(&b, "{\"model\":\"");
+        sb_json(&b, model);
+        sb_raw(&b, "\",\"max_tokens\":600,\"system\":["
+                   "{\"type\":\"text\",\"text\":\"");
+        sb_json(&b, sys_static);
+        sb_raw(&b, "\",\"cache_control\":{\"type\":\"ephemeral\"}}");
+        if (sys_dynamic && *sys_dynamic) {
+            sb_raw(&b, ",{\"type\":\"text\",\"text\":\"");
+            sb_json(&b, sys_dynamic);
+            sb_raw(&b, "\"}");
         }
-        strncat(body, "{\"role\":\"user\",\"content\":\"",
-                sizeof(body) - strlen(body) - 1);
-        json_escape_append(body, sizeof(body), final_q);
-        strncat(body, "\"}]}", sizeof(body) - strlen(body) - 1);
+        sb_raw(&b, "],\"messages\":[");
     } else {
-        /* OpenAI-kompatibel: system als erste Nachricht */
-        snprintf(body, sizeof(body),
-                 "{\"model\":\"%s\",\"max_tokens\":600,\"messages\":["
-                 "{\"role\":\"system\",\"content\":\"", model);
-        json_escape_append(body, sizeof(body), system_prompt);
-        strncat(body, "\"},", sizeof(body) - strlen(body) - 1);
-
-        if (use_ctx) {
-            for (int i = 0; i < ctx_n; i++) {
-                strncat(body, "{\"role\":\"user\",\"content\":\"",
-                        sizeof(body) - strlen(body) - 1);
-                json_escape_append(body, sizeof(body), ctx_history[i].q);
-                strncat(body, "\"},{\"role\":\"assistant\",\"content\":\"",
-                        sizeof(body) - strlen(body) - 1);
-                json_escape_append(body, sizeof(body), ctx_history[i].a);
-                strncat(body, "\"},", sizeof(body) - strlen(body) - 1);
-            }
-        }
-        strncat(body, "{\"role\":\"user\",\"content\":\"",
-                sizeof(body) - strlen(body) - 1);
-        json_escape_append(body, sizeof(body), final_q);
-        strncat(body, "\"}]}", sizeof(body) - strlen(body) - 1);
+        /* OpenAI-kompatibel: system als erste Nachricht (kein Caching) */
+        sb_raw(&b, "{\"model\":\"");
+        sb_json(&b, model);
+        sb_raw(&b, "\",\"max_tokens\":600,\"messages\":["
+                   "{\"role\":\"system\",\"content\":\"");
+        sb_json(&b, sys_static);
+        if (sys_dynamic && *sys_dynamic) { sb_raw(&b, "\\n"); sb_json(&b, sys_dynamic); }
+        sb_raw(&b, "\"},");
     }
 
-    char respbuf[16384];
+    /* Gespraechsverlauf + aktuelle Frage (fuer beide Formate gleich) */
+    if (use_ctx) {
+        for (int i = 0; i < ctx_n; i++) {
+            sb_raw(&b, "{\"role\":\"user\",\"content\":\"");
+            sb_json(&b, ctx_history[i].q);
+            sb_raw(&b, "\"},{\"role\":\"assistant\",\"content\":\"");
+            sb_json(&b, ctx_history[i].a);
+            sb_raw(&b, "\"},");
+        }
+    }
+    sb_raw(&b, "{\"role\":\"user\",\"content\":\"");
+    sb_json(&b, final_q);
+    sb_raw(&b, "\"}]}");
+
+    if (b.err) {
+        free(b.buf);
+        snprintf(out, out_cap, "Interner Fehler: Anfrage konnte nicht aufgebaut werden.");
+        return 0;
+    }
+    const char *body = b.buf;
+
     struct curl_slist *headers = NULL;
     char auth_header[600];
     if (prov->format == FMT_ANTHROPIC) {
@@ -348,11 +380,14 @@ static int api_call(const flux_provider_def_t *prov, const char *api_key,
         CURL *curl = curl_easy_init();
         if (!curl) {
             snprintf(out, out_cap, "Interner Fehler: curl_easy_init() fehlgeschlagen.");
-            curl_slist_free_all(headers);
-            return 0;
+            break;
         }
-        respbuf[0] = '\0';
-        struct membuf mb = { .data = respbuf, .len = 0, .cap = sizeof(respbuf) };
+        /* Antwortpuffer waechst bei Bedarf (curl_write_cb) -- frueher fixe
+         * 16 KB, was bei langen Antworten zu einem falschen "Netzwerkfehler"
+         * fuehrte. */
+        struct membuf mb = { .data = malloc(16384), .len = 0, .cap = 16384 };
+        if (!mb.data) { curl_easy_cleanup(curl); break; }
+        mb.data[0] = '\0';
 
         curl_easy_setopt(curl, CURLOPT_URL, prov->url);
         curl_easy_setopt(curl, CURLOPT_POST, 1L);
@@ -370,22 +405,26 @@ static int api_call(const flux_provider_def_t *prov, const char *api_key,
         if (res != CURLE_OK) {
             snprintf(out, out_cap, "Netzwerkfehler (%s): %s",
                      prov->label, curl_easy_strerror(res));
+            free(mb.data);
             break;
         }
         if (http == 429 && attempt < 2) {
+            free(mb.data);
             sleep(1 + attempt); /* einfacher Backoff bei Rate-Limit */
             continue;
         }
-        if (extract_text(respbuf, prov->format, out, out_cap)) {
+        if (extract_text(mb.data, prov->format, out, out_cap)) {
             ok = 1;
         } else if (out[0] == '\0') {
             snprintf(out, out_cap, "Antwort konnte nicht gelesen werden (%s).",
                      prov->label);
         }
+        free(mb.data);
         break;
     }
 
     curl_slist_free_all(headers);
+    free(b.buf);
     return ok;
 }
 
@@ -457,33 +496,59 @@ static int parse_tool_call(const char *response,
     "<Text>\n" \
     "Falls Empfaenger oder Inhalt wirklich unklar sind, frage nach. "
 
-static void build_system_prompt(char *system_prompt, size_t cap) {
+/* Liest die letzten (cap-1) Bytes einer Datei nach out. Bei append-basierten
+ * Dateien wie memory.txt sind das die NEUESTEN Eintraege -- der frueher
+ * genutzte fread-vom-Anfang las stattdessen die aeltesten und liess neue
+ * Erinnerungen, sobald die Datei > 2 KB war, gar nicht erst beim Modell
+ * ankommen. */
+static void read_file_tail(const char *path, char *out, size_t cap) {
+    out[0] = '\0';
+    FILE *f = fopen(path, "rb");
+    if (!f) return;
+    if (fseek(f, 0, SEEK_END) != 0) { fclose(f); return; }
+    long sz = ftell(f);
+    if (sz < 0) { fclose(f); return; }
+    long want = (long)cap - 1;
+    long off = (sz > want) ? sz - want : 0;
+    fseek(f, off, SEEK_SET);
+    size_t n = fread(out, 1, cap - 1, f);
+    out[n] = '\0';
+    fclose(f);
+    /* Wurde mitten in einer Zeile abgeschnitten, bis zum naechsten \n
+     * vorruecken, damit kein halber Eintrag im Prompt landet. */
+    if (off > 0) {
+        char *nl = strchr(out, '\n');
+        if (nl && nl[1]) memmove(out, nl + 1, strlen(nl + 1) + 1);
+    }
+}
+
+/* Statischer, cache-faehiger Teil: Basis-Anweisung + Tool-Beschreibungen.
+ * Aendert sich zwischen Anfragen nicht -> Prompt-Cache greift. */
+static void build_static_prompt(char *out, size_t cap) {
+    snprintf(out, cap, "%s\n\n%s", FLUX_SYSTEM_PROMPT_BASE, flux_tools_description());
+}
+
+/* Dynamischer Teil: Datum/Uhrzeit + Gedaechtnis + Praeferenzen. Wird bewusst
+ * NICHT gecacht, weil er sich (Uhrzeit!) staendig aendert. */
+static void build_dynamic_prompt(char *out, size_t cap) {
     time_t _t = time(NULL); struct tm _tm; localtime_r(&_t, &_tm);
     char _dt[64]; strftime(_dt, sizeof(_dt), "%A, %d. %B %Y, %H:%M Uhr", &_tm);
 
-    char _prefs[512] = {0};
-    FILE *_pf = fopen("/etc/flux/prefs.txt", "r");
-    if (_pf) { size_t _n = fread(_prefs, 1, sizeof(_prefs)-1, _pf); _prefs[_n] = '\0'; fclose(_pf); }
-
     char _mem[2048] = {0};
-    FILE *_mf = fopen("/etc/flux/memory.txt", "r");
-    if (_mf) { size_t _n = fread(_mem, 1, sizeof(_mem)-1, _mf); _mem[_n] = '\0'; fclose(_mf); }
+    read_file_tail("/etc/flux/memory.txt", _mem, sizeof(_mem));
+    char _prefs[512] = {0};
+    read_file_tail("/etc/flux/prefs.txt", _prefs, sizeof(_prefs));
 
-    snprintf(system_prompt, cap, "%s\n\nAktuelles Datum/Uhrzeit: %s\n",
-             FLUX_SYSTEM_PROMPT_BASE, _dt);
+    snprintf(out, cap, "Aktuelles Datum/Uhrzeit: %s\n", _dt);
     if (_mem[0]) {
-        size_t l = strlen(system_prompt);
-        snprintf(system_prompt + l, cap - l,
+        size_t l = strlen(out);
+        snprintf(out + l, cap - l,
                  "\nKI-Gedaechtnis (persoenliche Infos des Nutzers -- immer beachten):\n%s\n", _mem);
     }
     if (_prefs[0]) {
-        size_t l = strlen(system_prompt);
-        snprintf(system_prompt + l, cap - l,
+        size_t l = strlen(out);
+        snprintf(out + l, cap - l,
                  "\nNutzerpraeferenzen (beachten):\n%s\n", _prefs);
-    }
-    {
-        size_t l = strlen(system_prompt);
-        snprintf(system_prompt + l, cap - l, "\n%s", flux_tools_description());
     }
 }
 
@@ -501,11 +566,13 @@ void flux_provider_ask(const char *question, char *out, size_t out_cap) {
         return;
     }
 
-    char system_prompt[8192];
-    build_system_prompt(system_prompt, sizeof(system_prompt));
+    char sys_static[8192];
+    char sys_dynamic[4096];
+    build_static_prompt(sys_static, sizeof(sys_static));
+    build_dynamic_prompt(sys_dynamic, sizeof(sys_dynamic));
 
     /* Erster API-Aufruf -- mit Gespraechsverlauf */
-    if (!api_call(prov, api_key, model, system_prompt, question, out, out_cap, 1))
+    if (!api_call(prov, api_key, model, sys_static, sys_dynamic, question, out, out_cap, 1))
         return;
 
     /* Agenten-Schleife: solange die Antwort ein Tool-Aufruf ist, das Tool
@@ -539,7 +606,7 @@ void flux_provider_ask(const char *question, char *out, size_t out_cap) {
                  "und fasse zusammen, was erledigt wurde.",
                  question, log);
 
-        if (!api_call(prov, api_key, model, system_prompt, followup, out, out_cap, 0))
+        if (!api_call(prov, api_key, model, sys_static, sys_dynamic, followup, out, out_cap, 0))
             return;
     }
 
