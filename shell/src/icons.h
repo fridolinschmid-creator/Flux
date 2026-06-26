@@ -38,6 +38,9 @@ typedef enum {
     FLUX_ICON_CLOCK,         /* Uhr/Auto-Sperre(Lucide: clock)           */
     FLUX_ICON_VOLUME,        /* Lautsprecher   (Lucide: volume-2)        */
     FLUX_ICON_BELL_RING,     /* Wecker klingelt(Lucide: bell-ring)       */
+    FLUX_ICON_PHONE,         /* Hoerer (annehmen)(Lucide: phone)         */
+    FLUX_ICON_PHONE_OFF,     /* Auflegen       (Lucide: phone-off)       */
+    FLUX_ICON_PHONE_CALL,    /* Anruf laeuft   (Lucide: phone-call)      */
     FLUX_ICON_COUNT
 } flux_icon_t;
 

@@ -35,6 +35,7 @@ typedef enum {
     FLUX_SCREEN_VOICE_ENROLL,  /* Stimme einlernen fuer zweiten Faktor */
     FLUX_SCREEN_VOICE_VERIFY,  /* Stimm-Verifizierung nach PIN (zweiter Faktor) */
     FLUX_SCREEN_ALARM,         /* Vollbild-Alarm (Wecker klingelt) */
+    FLUX_SCREEN_CALL,          /* Vollbild-Anruf (annehmen/auflegen) */
     FLUX_SCREEN_HABITS,        /* Nutzungsgewohnheiten (habits.txt) */
 } flux_screen_t;
 
@@ -346,6 +347,23 @@ void flux_ui_set_accent(uint32_t rgb);
 
 /* Vollbild-Alarm. label: z.B. "07:00 Aufstehen". */
 void flux_ui_draw_alarm(flux_fb_t *fb, const char *label);
+
+/* ---- Anruf-Screen (Vollbild, wie der Alarm) ------------------------ */
+
+/* Vollbild-Anruf im selben Stil wie der Wecker: grosses Telefon-Symbol,
+ * Name + Nummer, unten zwei runde Knoepfe -- gruen "Annehmen" (Hoerer),
+ * rot "Auflegen" (durchgestrichener Hoerer).
+ * connected=0: klingelt/ruft an (beide Knoepfe). connected=1: Gespraech
+ * laeuft (nur der rote Auflegen-Knopf). */
+void flux_ui_draw_call(flux_fb_t *fb, const char *name, const char *number,
+                       int connected);
+
+/* Hit-Test fuer den Anruf-Screen:
+ *   FLUX_CALL_ACCEPT (1) = gruener Annehmen-Knopf
+ *   FLUX_CALL_HANGUP (2) = roter Auflegen-Knopf
+ *   0 = daneben getippt */
+typedef enum { FLUX_CALL_NONE = 0, FLUX_CALL_ACCEPT, FLUX_CALL_HANGUP } flux_call_hit_t;
+flux_call_hit_t flux_ui_call_hit(const flux_fb_t *fb, int x, int y, int connected);
 
 /* ---- Gewohnheiten/Habits ------------------------------------------- */
 

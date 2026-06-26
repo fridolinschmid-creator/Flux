@@ -46,6 +46,19 @@ in jeder Akzentfarbe einfaerbbar. Details: [`docs/ICONS.md`](docs/ICONS.md).
 |---|---|---|---|
 | ![Einstellungen](docs/screenshots/13_einstellungen.png) | ![Kontakte](docs/screenshots/20_kontakte.png) | ![Kalender](docs/screenshots/19_kalender.png) | ![WLAN](docs/screenshots/31_wlan.png) |
 
+### Vollbild-Anruf (annehmen / auflegen)
+
+Im selben Stil wie der Wecker: grosses Telefon-Symbol, Name + Nummer und
+zwei runde Knoepfe -- **gruen "Annehmen"** (Hoerer) und **rot "Auflegen"**
+(durchgestrichener Hoerer), beides echte Lucide-Icons. Erscheint nach der
+Bestaetigung eines Anrufs (`FLUX_SCREEN_CALL`). Erst ein Tipp auf
+"Annehmen" schickt die `X:`-Anfrage an `fluxaid` -- ohne Modem kommt die
+ehrliche "kein Modem"-Meldung statt eines erfundenen Gespraechs.
+
+| Eingehender Anruf | Verbunden |
+|---|---|
+| ![Anruf](docs/screenshots/38b_anruf.png) | ![Verbunden](docs/screenshots/38c_anruf_verbunden.png) |
+
 ### Neue Features (Batch 5)
 
 | Lockscreen: Badge + Alarm-Chip | Lockscreen: Kalender-Chip | Vollbild-Wecker | Nutzungsgewohnheiten |

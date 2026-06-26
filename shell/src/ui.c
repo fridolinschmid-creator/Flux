@@ -3182,6 +3182,78 @@ void flux_ui_draw_alarm(flux_fb_t *fb, const char *label) {
     flux_fb_present(fb);
 }
 
+/* ---- Anruf-Screen (Vollbild, wie der Alarm) ------------------------- */
+
+/* Gemeinsame Geometrie der runden Anruf-Knoepfe -- von Zeichnen UND
+ * Hit-Test genutzt, damit beide nie auseinanderdriften. gx<0 = kein
+ * gruener Knopf (Gespraech laeuft, nur Auflegen). */
+static void call_btn_geom(const flux_fb_t *fb, int connected,
+                          int *gx, int *rx, int *by, int *r) {
+    *r  = 42;
+    *by = fb->height * 80 / 100;
+    if (connected) { *gx = -1;                   *rx = fb->width / 2; }
+    else           { *gx = fb->width * 30 / 100; *rx = fb->width * 70 / 100; }
+}
+
+void flux_ui_draw_call(flux_fb_t *fb, const char *name, const char *number,
+                       int connected) {
+    flux_fb_fill_gradient_v(fb, 0, 0, fb->width, fb->height, 0x0C1A16, 0x06100D);
+
+    int cx = fb->width / 2;
+    int icon_cy = fb->height * 24 / 100;
+
+    /* Telefon-Symbol in einem dezenten Kreis (Lucide phone-call) */
+    fill_circle(fb, cx, icon_cy, 56, 0x143026);
+    flux_icon_draw(fb, FLUX_ICON_PHONE_CALL, cx, icon_cy, 64, 0x34D399);
+
+    /* Name gross */
+    const char *nm = (name && *name) ? name : "Unbekannt";
+    char dispn[48]; snprintf(dispn, sizeof(dispn), "%.44s", nm);
+    int nscale = (flux_fb_text_width(dispn, 4) > fb->width - 40) ? 3 : 4;
+    int nw = flux_fb_text_width(dispn, nscale);
+    flux_fb_text(fb, (fb->width - nw) / 2, fb->height * 44 / 100, dispn, 0xFFFFFF, nscale);
+
+    /* Nummer darunter */
+    if (number && *number) {
+        char dn[48]; snprintf(dn, sizeof(dn), "%.44s", number);
+        int w = flux_fb_text_width(dn, 2);
+        flux_fb_text(fb, (fb->width - w) / 2, fb->height * 52 / 100, dn, 0x9CA3AF, 2);
+    }
+
+    /* Status-Zeile */
+    const char *st = connected ? "Verbunden" : "Eingehender Anruf...";
+    int sw = flux_fb_text_width(st, 2);
+    flux_fb_text(fb, (fb->width - sw) / 2, fb->height * 58 / 100, st,
+                 connected ? 0x34D399 : 0x9CA3AF, 2);
+
+    /* Runde Aktions-Knoepfe */
+    int gx, rx, by, r; call_btn_geom(fb, connected, &gx, &rx, &by, &r);
+    if (gx >= 0) {
+        fill_circle(fb, gx, by, r, 0x22C55E);                 /* gruen: annehmen */
+        flux_icon_draw(fb, FLUX_ICON_PHONE, gx, by, r + 4, 0xFFFFFF);
+        const char *la = "Annehmen"; int lw = flux_fb_text_width(la, 2);
+        flux_fb_text(fb, gx - lw / 2, by + r + 14, la, 0xCCCCCC, 2);
+    }
+    fill_circle(fb, rx, by, r, 0xEF4444);                     /* rot: auflegen */
+    flux_icon_draw(fb, FLUX_ICON_PHONE_OFF, rx, by, r + 4, 0xFFFFFF);
+    const char *lh = "Auflegen"; int lw2 = flux_fb_text_width(lh, 2);
+    flux_fb_text(fb, rx - lw2 / 2, by + r + 14, lh, 0xCCCCCC, 2);
+
+    flux_fb_present(fb);
+}
+
+flux_call_hit_t flux_ui_call_hit(const flux_fb_t *fb, int x, int y, int connected) {
+    int gx, rx, by, r; call_btn_geom(fb, connected, &gx, &rx, &by, &r);
+    int hr = r + 14;   /* etwas grosszuegiger Tap-Bereich */
+    if (gx >= 0) {
+        int dx = x - gx, dy = y - by;
+        if (dx * dx + dy * dy <= hr * hr) return FLUX_CALL_ACCEPT;
+    }
+    int dx = x - rx, dy = y - by;
+    if (dx * dx + dy * dy <= hr * hr) return FLUX_CALL_HANGUP;
+    return FLUX_CALL_NONE;
+}
+
 /* ---- Nutzungsgewohnheiten ------------------------------------------- */
 
 #define HABITS_ROW_H 52

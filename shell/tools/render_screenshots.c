@@ -439,6 +439,14 @@ int main(int argc, char *argv[]) {
     flux_ui_draw_alarm(&fb, "09:00 Team-Meeting mit Max, Anna und Stefan");
     save_png(&fb, outdir, "38_alarm_lang");
 
+    /* 38b -- Vollbild-Anruf: annehmen (gruen) / auflegen (rot) */
+    flux_ui_draw_call(&fb, "Stefan Schmied", "+49 151 12345678", 0);
+    save_png(&fb, outdir, "38b_anruf");
+
+    /* 38c -- Anruf verbunden (nur Auflegen) */
+    flux_ui_draw_call(&fb, "Stefan Schmied", "+49 151 12345678", 1);
+    save_png(&fb, outdir, "38c_anruf_verbunden");
+
     /* 39 -- Nutzungsgewohnheiten (mehrere Eintraege, reales Format aus habits.c) */
     {
         const char *habits[] = {

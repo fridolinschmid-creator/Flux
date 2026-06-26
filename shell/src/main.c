@@ -688,6 +688,11 @@ static char voice_verify_msg[256] = {0};
 /* Alarm */
 static char alarm_label[256] = {0};
 
+/* Anruf-Vollbildschirm */
+static char call_name[96]   = {0};
+static char call_number[96] = {0};
+static int  call_connected  = 0;
+
 /* Nutzungsgewohnheiten */
 #define HABITS_MAX 200
 static char        habits_buf[HABITS_MAX][128];
@@ -1002,6 +1007,8 @@ static void redraw_current_screen(flux_fb_t *fb, flux_screen_t screen,
             flux_ui_draw_voice_verify(fb, voice_verify_phase, voice_verify_msg); break;
         case FLUX_SCREEN_ALARM:
             flux_ui_draw_alarm(fb, alarm_label); break;
+        case FLUX_SCREEN_CALL:
+            flux_ui_draw_call(fb, call_name, call_number, call_connected); break;
         case FLUX_SCREEN_HABITS:
             flux_ui_draw_habits(fb, habits_p, habits_n, habits_scroll); break;
         default: break;
@@ -1547,16 +1554,25 @@ int main(void) {
                 animate_slide_in(&fb, old);
                 free(old);
             } else if (hit == FLUX_CONFIRM_SEND) {
-                /* Animiertes Symbol statt Textmeldung: Papierflieger (Mail),
-                 * Sprechblase (SMS) bzw. pulsierende Ringe (Anruf). */
+                /* Anruf: Vollbild-Anruf-Screen (annehmen/auflegen) statt
+                 * Textmeldung. Der eigentliche X:-Request geht erst beim
+                 * Tippen auf "Annehmen" raus (siehe FLUX_SCREEN_CALL). */
+                if (pending_action.type == FLUX_ACTION_CALL) {
+                    snprintf(call_name, sizeof(call_name), "%.90s",
+                             pending_action.to[0] ? pending_action.to : "Unbekannt");
+                    call_number[0] = '\0';
+                    call_connected = 0;
+                    screen = FLUX_SCREEN_CALL;
+                    flux_ui_draw_call(&fb, call_name, call_number, call_connected);
+                    continue;
+                }
+                /* Mail/SMS: animiertes Symbol (Papierflieger / Sprechblase). */
                 flux_anim_kind_t ak =
-                    pending_action.type == FLUX_ACTION_CALL ? FLUX_ANIM_CALL :
                     pending_action.type == FLUX_ACTION_SMS  ? FLUX_ANIM_SMS  :
                                                               FLUX_ANIM_MAIL;
                 char cap[80];
                 snprintf(cap, sizeof(cap), "%.60s", pending_action.to);
-                animate_action(&fb, ak, cap,
-                               ak == FLUX_ANIM_CALL ? 30 : 18, 60000);
+                animate_action(&fb, ak, cap, 18, 60000);
 
                 char req[FLUX_MAX_LINE];
                 flux_action_build_request(&pending_action, req, sizeof(req));
@@ -2400,6 +2416,33 @@ int main(void) {
                 alarm_label[0] = '\0';
                 screen = FLUX_SCREEN_LOCK;
                 flux_ui_draw_lock(&fb);
+            }
+            continue;
+        }
+
+        /* ---- FLUX_SCREEN_CALL ------------------------------------------ */
+        if (screen == FLUX_SCREEN_CALL) {
+            if (ev.type == FLUX_EV_TAP) {
+                flux_call_hit_t h = flux_ui_call_hit(&fb, ev.x, ev.y, call_connected);
+                if (h == FLUX_CALL_ACCEPT && !call_connected) {
+                    /* Jetzt erst den Anruf wirklich aufbauen (Telefonie-Stub). */
+                    char req[FLUX_MAX_LINE];
+                    flux_action_build_request(&pending_action, req, sizeof(req));
+                    flux_ipc_send_raw(req, answer_buf, sizeof(answer_buf));
+                    if (strstr(answer_buf, "Verbunden")) {
+                        call_connected = 1;
+                        flux_ui_draw_call(&fb, call_name, call_number, call_connected);
+                    } else {
+                        /* Ehrliche Meldung (z.B. kein Modem) -> Assistent */
+                        screen = FLUX_SCREEN_ASSISTANT;
+                        flux_ui_draw_assistant(&fb, last_q, input_buf, answer_buf, 0);
+                    }
+                } else if (h == FLUX_CALL_HANGUP) {
+                    snprintf(answer_buf, sizeof(answer_buf), "Anruf beendet.");
+                    call_connected = 0;
+                    screen = FLUX_SCREEN_ASSISTANT;
+                    flux_ui_draw_assistant(&fb, last_q, input_buf, answer_buf, 0);
+                }
             }
             continue;
         }
