@@ -2429,70 +2429,354 @@ int flux_ui_notify_hit(const flux_fb_t *fb, int x, int y) {
     return 1; /* beliebiger Tap schliesst den Overlay */
 }
 
-/* ---- Fotogalerie ----------------------------------------------------- */
+/* ---- Fotogalerie (iOS-"Mediathek"-Stil) ------------------------------ *
+ * Drei-Spalten-Raster, randlos (nur 1px Fuge), echte center-gecroppte
+ * Thumbnails. Fixer Header oben, fixe schwebende Segment-Leiste unten,
+ * dazwischen scrollt das Raster. Draw und Hit-Test teilen sich exakt
+ * dieselben Geometrie-Helfer (gal_*), damit Taps nie danebenliegen. */
 
-#define GALLERY_CAM_BTN_W 120
-#define GALLERY_CAM_BTN_H  48
+#define GAL_HEADER_H   72                          /* fixer Header (unter Statusbar) */
+#define GAL_GRID_TOP   (STATUSBAR_H + GAL_HEADER_H)
+#define GAL_COLS       3
+#define GAL_GAP        1                           /* Fuge zwischen Kacheln */
+#define GAL_TILE       FLUX_GALLERY_TILE           /* 159px Kantenlaenge */
+#define GAL_HDR_LINE_H 22                          /* Hoehe einer Datums-Trennueberschrift */
+#define GAL_BOTTOM_H   72                          /* fixer Bereich fuer schwebende Leiste */
 
-/* Kamera-Knopf: rechts im Header. */
-static void draw_gallery_cam_btn(flux_fb_t *fb) {
-    int bx = fb->width - GALLERY_CAM_BTN_W - 10;
-    int by = STATUSBAR_H + 8;
-    flux_fb_fill_gradient_v_rounded(fb, bx, by, GALLERY_CAM_BTN_W, GALLERY_CAM_BTN_H,
-                                    10, COL_ACCENT, COL_ACCENT2);
-    int tw = flux_fb_text_width("Kamera", 2);
-    flux_fb_text(fb, bx + (GALLERY_CAM_BTN_W - tw) / 2,
-                 by + (GALLERY_CAM_BTN_H - 14) / 2, "Kamera", 0xFFFFFF, 2);
+/* Sichtbare Rasterhoehe (zwischen Header und schwebender Leiste). */
+static int gal_grid_h(const flux_fb_t *fb) {
+    return fb->height - GAL_GRID_TOP - GAL_BOTTOM_H;
+}
+
+/* Zerlegt ein Datum "TT.MM.JJJJ" in y/m. Gibt 1 bei Erfolg. */
+static int gal_parse_date(const char *d, int *y, int *m) {
+    if (!d || strlen(d) < 10) return 0;
+    if (d[2] != '.' || d[5] != '.') return 0;
+    *m = (d[3]-'0')*10 + (d[4]-'0');
+    *y = (d[6]-'0')*1000 + (d[7]-'0')*100 + (d[8]-'0')*10 + (d[9]-'0');
+    if (*m < 1 || *m > 12) return 0;
+    return 1;
+}
+
+/* Ueberschrift fuer Foto i unter dem aktuellen Filter, oder NULL wenn
+ * keine neue Gruppe beginnt. Schreibt nach buf. filter: FLUX_GAL_*. */
+static const char *gal_group_label(const char **dates, int i, int filter,
+                                   char *buf, size_t cap) {
+    if (filter == FLUX_GAL_ALLE) return NULL;        /* keine Gruppen */
+    int y, m;
+    if (!dates || !gal_parse_date(dates[i], &y, &m)) {
+        /* Foto ohne erkennbares Datum: eigene "Ohne Datum"-Gruppe nur
+         * dann als Ueberschrift, wenn der Vorgaenger ein Datum hatte. */
+        int py, pm;
+        if (i == 0) { snprintf(buf, cap, "Ohne Datum"); return buf; }
+        if (dates && gal_parse_date(dates[i-1], &py, &pm)) {
+            snprintf(buf, cap, "Ohne Datum"); return buf;
+        }
+        return NULL;
+    }
+    int py = 0, pm = 0;
+    int prev_ok = (i > 0 && dates && gal_parse_date(dates[i-1], &py, &pm));
+    if (filter == FLUX_GAL_JAHRE) {
+        if (!prev_ok || py != y) { snprintf(buf, cap, "%d", y); return buf; }
+    } else { /* MONATE */
+        if (!prev_ok || py != y || pm != m) {
+            snprintf(buf, cap, "%s %d", month_name(m), y); return buf;
+        }
+    }
+    return NULL;
+}
+
+/* Geometrie eines Items (Foto oder Ueberschrift) im UNGESCROLLTEN Raster:
+ * liefert die absolute Y-Position (relativ zum Rasteranfang) und ob es
+ * sich um eine Kachel handelt. Wir laufen alle Items einmal durch, weil
+ * Ueberschriften eine variable Hoehe einschieben. */
+typedef struct {
+    int kind;   /* 0 = Kachel, 1 = Ueberschrift */
+    int idx;    /* bei Kachel: Foto-Index; bei Ueberschrift: -1 */
+    int x, y;   /* Position relativ zum Rasteranfang (y vor Scroll) */
+    int w, h;
+    char label[40];
+} gal_item_t;
+
+/* Baut die komplette Item-Liste (Ueberschriften + Kacheln) im Flow-Layout.
+ * Gibt die Anzahl der Items und die Gesamthoehe (*total_h) zurueck.
+ * out muss Platz fuer (n + n + 1) Items bieten. */
+static int gal_layout(const flux_fb_t *fb, const char **dates, int n,
+                      int filter, gal_item_t *out, int *total_h) {
+    int tile = GAL_TILE;
+    int gap = GAL_GAP;
+    /* horizontale Zentrierung des Rasters (3*tile + 2*gap) */
+    int grid_w = GAL_COLS * tile + (GAL_COLS - 1) * gap;
+    int x0 = (fb->width - grid_w) / 2;
+    if (x0 < 0) x0 = 0;
+
+    int cnt = 0;
+    int y = 0;
+    int col = 0;
+    char buf[40];
+    for (int i = 0; i < n; i++) {
+        const char *lbl = gal_group_label(dates, i, filter, buf, sizeof(buf));
+        if (lbl) {
+            /* offene Zeile abschliessen */
+            if (col != 0) { y += tile + gap; col = 0; }
+            if (cnt > 0) y += 6;                  /* etwas Luft vor Ueberschrift */
+            gal_item_t *it = &out[cnt++];
+            it->kind = 1; it->idx = -1;
+            it->x = x0; it->y = y; it->w = grid_w; it->h = GAL_HDR_LINE_H;
+            snprintf(it->label, sizeof(it->label), "%s", lbl);
+            y += GAL_HDR_LINE_H + 4;
+        }
+        gal_item_t *it = &out[cnt++];
+        it->kind = 0; it->idx = i;
+        it->x = x0 + col * (tile + gap); it->y = y;
+        it->w = tile; it->h = tile;
+        it->label[0] = '\0';
+        col++;
+        if (col >= GAL_COLS) { col = 0; y += tile + gap; }
+    }
+    if (col != 0) y += tile + gap;
+    if (total_h) *total_h = y;
+    return cnt;
+}
+
+int flux_ui_gallery_max_scroll(const flux_fb_t *fb, const char **dates,
+                               int n, int filter) {
+    if (n <= 0) return 0;
+    gal_item_t *items = malloc(sizeof(gal_item_t) * (size_t)(2 * n + 1));
+    if (!items) return 0;
+    int total_h = 0;
+    gal_layout(fb, dates, n, filter, items, &total_h);
+    free(items);
+    int vis = gal_grid_h(fb);
+    int extra = total_h - vis;
+    if (extra <= 0) return 0;
+    int step = GAL_TILE + GAL_GAP;
+    return (extra + step - 1) / step;            /* in Rasterzeilen */
+}
+
+/* --- Header-Geometrie: Kamera (links), Filter + Auswaehlen (rechts) --- */
+static void gal_header_geom(const flux_fb_t *fb, cal_rect *cam,
+                            cal_rect *filter, cal_rect *select) {
+    int W = fb->width;
+    int bs = 38;                                  /* runde Knopfgroesse */
+    int by = STATUSBAR_H + (GAL_HEADER_H - bs) / 2;
+    /* "Auswaehlen"-Pille ganz rechts */
+    int pw = flux_fb_text_width("Auswaehlen", 2) + 22;
+    select->w = pw; select->h = bs; select->x = W - 12 - pw; select->y = by;
+    /* Filter-Knopf links daneben */
+    filter->w = filter->h = bs; filter->x = select->x - 8 - bs; filter->y = by;
+    /* Kamera-Knopf am rechten Rand der Filter -- nein: links unten im Titel.
+     * Kamera klein rechts neben dem Titel links. */
+    cam->w = cam->h = bs;
+    cam->x = 12; cam->y = by;                     /* (nicht genutzt fuer Titel) */
+}
+
+/* --- Schwebende Segment-Leiste + Such-Knopf unten -------------------- */
+static void gal_bottom_geom(const flux_fb_t *fb, cal_rect *pill,
+                            cal_rect seg[3], cal_rect *search) {
+    int W = fb->width;
+    int ph = 40;
+    int py = fb->height - GAL_BOTTOM_H + (GAL_BOTTOM_H - ph) / 2;
+    /* Such-Knopf rechts (rund) */
+    search->w = search->h = ph; search->x = W - 12 - ph; search->y = py;
+    /* Pille mittig, links vom Such-Knopf */
+    int pill_w = 222;
+    int pill_x = (W - pill_w) / 2 - 18;
+    if (pill_x + pill_w > search->x - 8) pill_x = search->x - 8 - pill_w;
+    if (pill_x < 12) pill_x = 12;
+    pill->w = pill_w; pill->h = ph; pill->x = pill_x; pill->y = py;
+    int seg_w = pill_w / 3;
+    for (int i = 0; i < 3; i++) {
+        seg[i].x = pill_x + i * seg_w; seg[i].y = py;
+        seg[i].w = (i == 2) ? (pill_w - 2 * seg_w) : seg_w; seg[i].h = ph;
+    }
+}
+
+/* Zeichnet eine echte Thumbnail-Kachel: center-gecroppter Puffer (vom
+ * Aufrufer geliefert, genau TILE*TILE) oder ehrliche Platzhalter-Kachel. */
+static void gal_draw_tile(flux_fb_t *fb, const cal_rect *r,
+                          const uint32_t *thumb, int sel, int select_mode) {
+    if (thumb) {
+        for (int j = 0; j < r->h; j++)
+            for (int i = 0; i < r->w; i++)
+                flux_fb_set_px(fb, r->x + i, r->y + j, thumb[j * r->w + i]);
+    } else {
+        /* Ehrliche Platzhalter-Kachel: dezente Oberflaeche + Bild-Icon. */
+        flux_fb_fill_rect(fb, r->x, r->y, r->w, r->h, COL_SURFACE2);
+        flux_icon_draw(fb, FLUX_ICON_IMAGE, r->x + r->w / 2, r->y + r->h / 2,
+                       40, COL_DIM);
+    }
+    if (select_mode) {
+        /* Auswahl-Stub: Markierungskreis oben rechts */
+        int cx = r->x + r->w - 16, cy = r->y + 16;
+        draw_ring(fb, cx, cy, 9, 2, sel ? COL_ACCENT : 0xFFFFFF);
+        if (sel) fill_circle(fb, cx, cy, 6, COL_ACCENT);
+    }
 }
 
 void flux_ui_draw_gallery(flux_fb_t *fb, const char **names, const char **dates,
-                           int n, int selected_idx) {
+                           int n, int selected_idx, int scroll,
+                           int filter, int select_mode,
+                           flux_gallery_thumb_fn thumb_fn, void *user) {
+    (void)selected_idx;
     flux_fb_clear(fb, COL_BG);
     draw_statusbar(fb);
 
-    flux_fb_text(fb, 16, STATUSBAR_H + 10, "Fotos", COL_TEXT, 3);
-    flux_fb_fill_gradient_h(fb, 16, STATUSBAR_H + 40, 60, 2, COL_ACCENT, COL_ACCENT2);
-    draw_gallery_cam_btn(fb);
+    cal_rect cam, fbtn, sbtn;
+    gal_header_geom(fb, &cam, &fbtn, &sbtn);
 
     if (n == 0) {
-        int ey = STATUSBAR_H + TITLE_AREA_H + 20;
-        fill_round_rect(fb, 12, ey, fb->width - 24, 80, 10, COL_SURFACE);
-        flux_fb_text(fb, 24, ey + 12, "Noch keine Fotos aufgenommen.", COL_TEXT_MUTED, 2);
-        flux_fb_text(fb, 24, ey + 38, "Tippe \"Kamera\" oben rechts.", COL_DIM, 2);
+        int ey = GAL_GRID_TOP + 30;
+        fill_round_rect(fb, 16, ey, fb->width - 32, 96, 12, COL_SURFACE);
+        flux_icon_draw(fb, FLUX_ICON_IMAGE, fb->width / 2, ey + 34, 36, COL_DIM);
+        const char *m1 = "Noch keine Fotos.";
+        const char *m2 = "Tippe das Kamera-Symbol unten.";
+        flux_fb_text(fb, (fb->width - flux_fb_text_width(m1, 2)) / 2, ey + 56, m1,
+                     COL_TEXT_MUTED, 2);
+        flux_fb_text(fb, (fb->width - flux_fb_text_width(m2, 2)) / 2, ey + 74, m2,
+                     COL_DIM, 2);
     } else {
-        list_row_geom_t rows[LIST_MAX_ROWS];
-        int rn = build_list_rows(fb, n, rows);
-        for (int i = 0; i < rn; i++) {
-            int sel = (i == selected_idx);
-            fill_round_rect(fb, rows[i].x + 6, rows[i].y + 2,
-                            rows[i].w - 12, rows[i].h - 4, 8, sel ? COL_SURFACE3 : COL_SURFACE);
-            if (sel)
-                flux_fb_fill_rect(fb, rows[i].x + 6, rows[i].y + 2,
-                                  3, rows[i].h - 4, COL_ACCENT);
+        /* --- Scrollbares Raster mit Clipping an [GAL_GRID_TOP, grid_bot) -- */
+        int grid_top = GAL_GRID_TOP;
+        int grid_bot = grid_top + gal_grid_h(fb);
+        int scroll_px = scroll * (GAL_TILE + GAL_GAP);
 
-            /* Photo thumbnail placeholder (rounded rect) */
-            int tx = rows[i].x + 14, ty = rows[i].y + 8;
-            fill_round_rect(fb, tx, ty, 36, 28, 4, COL_SURFACE3);
-            fill_round_rect(fb, tx + 7, ty + 5, 22, 18, 3, COL_SURFACE2);
-            /* Lens circle */
-            fill_circle(fb, tx + 18, ty + 14, 5, COL_ACCENT);
-
-            flux_fb_text(fb, rows[i].x + 58, rows[i].y + 10, names[i], COL_TEXT, 2);
-            if (dates && dates[i])
-                flux_fb_text(fb, rows[i].x + 58, rows[i].y + rows[i].h - 22,
-                             dates[i], COL_DIM, 2);
+        gal_item_t *items = malloc(sizeof(gal_item_t) * (size_t)(2 * n + 1));
+        if (items) {
+            int total_h = 0;
+            int cnt = gal_layout(fb, dates, n, filter, items, &total_h);
+            for (int k = 0; k < cnt; k++) {
+                gal_item_t *it = &items[k];
+                int sy = grid_top + it->y - scroll_px;   /* Bildschirm-Y */
+                if (sy + it->h <= grid_top || sy >= grid_bot) continue; /* unsichtbar */
+                if (it->kind == 1) {
+                    /* Datums-Trennueberschrift */
+                    if (sy >= grid_top && sy + GAL_HDR_LINE_H <= grid_bot)
+                        flux_fb_text(fb, it->x + 2, sy + 4, it->label, COL_TEXT, 2);
+                } else {
+                    /* Kachel -- nur zeichnen wenn vollstaendig im Sichtbereich
+                     * vertikal liegt (sonst saubere Kante am Header). */
+                    if (sy < grid_top || sy + it->h > grid_bot) {
+                        /* teilweise sichtbar: per-Pixel clippen */
+                        cal_rect r = { it->x, sy, it->w, it->h };
+                        const uint32_t *thumb = thumb_fn ? thumb_fn(names[it->idx], user) : NULL;
+                        for (int j = 0; j < r.h; j++) {
+                            int py = r.y + j;
+                            if (py < grid_top || py >= grid_bot) continue;
+                            for (int i = 0; i < r.w; i++) {
+                                uint32_t c = thumb ? thumb[j * r.w + i] : COL_SURFACE2;
+                                flux_fb_set_px(fb, r.x + i, py, c);
+                            }
+                        }
+                        if (!thumb && sy + it->h/2 >= grid_top && sy + it->h/2 < grid_bot)
+                            flux_icon_draw(fb, FLUX_ICON_IMAGE, r.x + r.w/2, sy + r.h/2, 40, COL_DIM);
+                    } else {
+                        cal_rect r = { it->x, sy, it->w, it->h };
+                        const uint32_t *thumb = thumb_fn ? thumb_fn(names[it->idx], user) : NULL;
+                        int sel = (it->idx == selected_idx);
+                        gal_draw_tile(fb, &r, thumb, sel, select_mode);
+                    }
+                }
+            }
+            free(items);
         }
     }
 
-    draw_back_bar(fb, "Zurück");
+    /* --- Fixer Header (zuletzt, deckt drunterscrollende Kacheln ab) ---- */
+    flux_fb_fill_rect(fb, 0, STATUSBAR_H, fb->width, GAL_HEADER_H, COL_BG);
+    flux_fb_text(fb, 16, STATUSBAR_H + 14, "Fotos", COL_TEXT, 4);
+    fill_round_rect(fb, sbtn.x, sbtn.y, sbtn.w, sbtn.h, sbtn.h / 2,
+                    select_mode ? COL_ACCENT : COL_SURFACE2);
+    {
+        int tw = flux_fb_text_width("Auswaehlen", 2);
+        flux_fb_text(fb, sbtn.x + (sbtn.w - tw) / 2, sbtn.y + (sbtn.h - 14) / 2,
+                     "Auswaehlen", select_mode ? 0xFFFFFF : COL_TEXT, 2);
+    }
+    fill_round_rect(fb, fbtn.x, fbtn.y, fbtn.w, fbtn.h, fbtn.h / 2, COL_SURFACE2);
+    flux_icon_draw(fb, FLUX_ICON_SLIDERS, fbtn.x + fbtn.w / 2,
+                   fbtn.y + fbtn.h / 2, 20, COL_TEXT);
+
+    /* --- Schwebende Segment-Leiste + Such-/Kamera-Knopf --------------- */
+    flux_fb_fill_rect(fb, 0, fb->height - GAL_BOTTOM_H, fb->width, GAL_BOTTOM_H, COL_BG);
+    cal_rect pill, seg[3], search;
+    gal_bottom_geom(fb, &pill, seg, &search);
+    fill_round_rect(fb, pill.x, pill.y, pill.w, pill.h, pill.h / 2, COL_SURFACE2);
+    static const char *seg_labels[3] = { "Jahre", "Monate", "Alle" };
+    for (int i = 0; i < 3; i++) {
+        int active = (i == filter);
+        if (active)
+            flux_fb_fill_gradient_v_rounded(fb, seg[i].x + 3, seg[i].y + 4,
+                                            seg[i].w - 6, seg[i].h - 8,
+                                            (seg[i].h - 8) / 2, COL_ACCENT, COL_ACCENT2);
+        int tw = flux_fb_text_width(seg_labels[i], 2);
+        flux_fb_text(fb, seg[i].x + (seg[i].w - tw) / 2,
+                     seg[i].y + (seg[i].h - 14) / 2, seg_labels[i],
+                     active ? 0xFFFFFF : COL_TEXT_MUTED, 2);
+    }
+    /* Such-Knopf rechts (rund) */
+    fill_round_rect(fb, search.x, search.y, search.w, search.h, search.h / 2, COL_SURFACE2);
+    flux_icon_draw(fb, FLUX_ICON_SEARCH, search.x + search.w / 2,
+                   search.y + search.h / 2, 20, COL_TEXT);
+    /* Kamera-Knopf links (rund, Akzent-Gradient) */
+    {
+        int ch = pill.h;
+        int cx = 12, cy = pill.y;
+        flux_fb_fill_gradient_v_rounded(fb, cx, cy, ch, ch, ch / 2, COL_ACCENT, COL_ACCENT2);
+        flux_icon_draw(fb, FLUX_ICON_CAMERA, cx + ch / 2, cy + ch / 2, 20, 0xFFFFFF);
+    }
+
     flux_fb_present(fb);
 }
 
-int flux_ui_gallery_camera_hit(const flux_fb_t *fb, int x, int y) {
-    int bx = fb->width - GALLERY_CAM_BTN_W - 8;
-    int by = STATUSBAR_H + (TITLE_AREA_H - GALLERY_CAM_BTN_H) / 2;
-    return (x >= bx && x < bx + GALLERY_CAM_BTN_W &&
-            y >= by && y < by + GALLERY_CAM_BTN_H);
+/* Kamera-Knopf-Geometrie (unten links) -- gemeinsam fuer Draw & Hit. */
+static void gal_camera_geom(const flux_fb_t *fb, cal_rect *cam) {
+    cal_rect pill, seg[3], search;
+    gal_bottom_geom(fb, &pill, seg, &search);
+    cam->w = cam->h = pill.h; cam->x = 12; cam->y = pill.y;
+}
+
+int flux_ui_gallery_hit(const flux_fb_t *fb, int x, int y, const char **dates,
+                        int n, int scroll, int filter, flux_gallery_hit_t *out) {
+    out->tile = -1; out->filter = 0; out->select = 0;
+    out->segment = -1; out->search = 0; out->camera = 0;
+
+    /* Header-Knoepfe */
+    cal_rect cam, fbtn, sbtn;
+    gal_header_geom(fb, &cam, &fbtn, &sbtn);
+    if (cal_pt_in(x, y, sbtn)) { out->select = 1; return 1; }
+    if (cal_pt_in(x, y, fbtn)) { out->filter = 1; return 1; }
+
+    /* Untere Leiste: Kamera, Segmente, Suche */
+    cal_rect kam; gal_camera_geom(fb, &kam);
+    if (cal_pt_in(x, y, kam)) { out->camera = 1; return 1; }
+    cal_rect pill, seg[3], search;
+    gal_bottom_geom(fb, &pill, seg, &search);
+    if (cal_pt_in(x, y, search)) { out->search = 1; return 1; }
+    for (int i = 0; i < 3; i++)
+        if (cal_pt_in(x, y, seg[i])) { out->segment = i; return 1; }
+
+    /* Raster -- nur im sichtbaren Bereich, mit gleicher Layout-Berechnung */
+    int grid_top = GAL_GRID_TOP;
+    int grid_bot = grid_top + gal_grid_h(fb);
+    if (y < grid_top || y >= grid_bot) return 0;
+    if (n <= 0) return 0;
+    int scroll_px = scroll * (GAL_TILE + GAL_GAP);
+    gal_item_t *items = malloc(sizeof(gal_item_t) * (size_t)(2 * n + 1));
+    if (!items) return 0;
+    int total_h = 0;
+    int cnt = gal_layout(fb, dates, n, filter, items, &total_h);
+    int hit = 0;
+    for (int k = 0; k < cnt; k++) {
+        gal_item_t *it = &items[k];
+        if (it->kind != 0) continue;
+        int sy = grid_top + it->y - scroll_px;
+        cal_rect r = { it->x, sy, it->w, it->h };
+        /* nur antippbar, wenn der Treffer im Sichtfenster liegt */
+        if (y < grid_top || y >= grid_bot) continue;
+        if (cal_pt_in(x, y, r)) { out->tile = it->idx; hit = 1; break; }
+    }
+    free(items);
+    return hit;
 }
 
 /* ---- Bild-Betrachter ------------------------------------------------- */

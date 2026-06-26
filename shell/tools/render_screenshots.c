@@ -14,6 +14,7 @@
 #include <stdlib.h>
 #include <time.h>
 #include <sys/stat.h>
+#include <unistd.h>
 #include <png.h>
 
 static void save_png(const flux_fb_t *fb, const char *dir, const char *name) {
@@ -47,6 +48,85 @@ static void save_png(const flux_fb_t *fb, const char *dir, const char *name) {
     png_destroy_write_struct(&png, &info);
     fclose(f);
     printf("  %s\n", path);
+}
+
+/* ---- Galerie-Thumbnails fuer das Demo-Raster ------------------------- *
+ * Schreibt kleine synthetische P6-.ppm-Testbilder und dekodiert sie als
+ * quadratische, center-gecroppte TILE-Kacheln -- exakt dieselbe Fuell-/
+ * Crop-Logik wie load_ppm_thumb() in main.c, damit der Screenshot das
+ * echte Raster zeigt. */
+#define GAL_DEMO_DIR "/tmp/flux_gal_demo"
+
+static uint32_t *demo_load_ppm_thumb(const char *path, int tile) {
+    FILE *f = fopen(path, "rb");
+    if (!f) return NULL;
+    char magic[4]; int W, H, maxval;
+    if (fscanf(f, "%3s %d %d %d", magic, &W, &H, &maxval) != 4 ||
+        strcmp(magic, "P6") != 0 || W <= 0 || H <= 0) { fclose(f); return NULL; }
+    fgetc(f);
+    size_t npx = (size_t)W * H;
+    unsigned char *rgb = malloc(npx * 3);
+    if (!rgb) { fclose(f); return NULL; }
+    if (fread(rgb, 3, npx, f) != npx) { free(rgb); fclose(f); return NULL; }
+    fclose(f);
+    uint32_t *out = malloc((size_t)tile * tile * sizeof(uint32_t));
+    if (!out) { free(rgb); return NULL; }
+    float scale = (W < H) ? (float)tile / W : (float)tile / H;
+    int crop = (int)(tile / scale);
+    int cw = crop > W ? W : crop, ch = crop > H ? H : crop;
+    int sx0 = (W - cw) / 2, sy0 = (H - ch) / 2;
+    for (int ty = 0; ty < tile; ty++) {
+        int sy = sy0 + (int)(ty / scale); if (sy >= H) sy = H - 1;
+        for (int tx = 0; tx < tile; tx++) {
+            int sx = sx0 + (int)(tx / scale); if (sx >= W) sx = W - 1;
+            int idx = (sy * W + sx) * 3;
+            out[ty * tile + tx] = ((uint32_t)rgb[idx] << 16)
+                                 | ((uint32_t)rgb[idx+1] << 8) | (uint32_t)rgb[idx+2];
+        }
+    }
+    free(rgb);
+    return out;
+}
+
+/* Mini-Cache fuer den Demo-Provider (Name -> Kachel). */
+static struct { char name[128]; uint32_t *tile; } g_demo_cache[32];
+static int g_demo_cache_n = 0;
+
+static const uint32_t *demo_thumb_provider(const char *name, void *user) {
+    (void)user;
+    for (int i = 0; i < g_demo_cache_n; i++)
+        if (strcmp(g_demo_cache[i].name, name) == 0) return g_demo_cache[i].tile;
+    char path[512];
+    snprintf(path, sizeof(path), "%s/%s", GAL_DEMO_DIR, name);
+    uint32_t *t = demo_load_ppm_thumb(path, FLUX_GALLERY_TILE);
+    if (g_demo_cache_n < 32) {
+        snprintf(g_demo_cache[g_demo_cache_n].name, 128, "%s", name);
+        g_demo_cache[g_demo_cache_n].tile = t;
+        g_demo_cache_n++;
+    } else free(t);
+    return t;
+}
+
+/* Schreibt ein synthetisches P6-Testbild mit Farbverlauf/Muster. */
+static void demo_write_ppm(const char *path, int W, int H, int variant) {
+    FILE *f = fopen(path, "wb");
+    if (!f) return;
+    fprintf(f, "P6\n%d %d\n255\n", W, H);
+    for (int y = 0; y < H; y++) {
+        for (int x = 0; x < W; x++) {
+            unsigned char r, g, b;
+            switch (variant % 6) {
+                case 0: r = 60 + 180*x/W; g = 120; b = 200 - 120*y/H; break;       /* blau/violett */
+                case 1: r = 220 - 120*y/H; g = 60 + 160*x/W; b = 70; break;        /* gruen */
+                case 2: r = 230; g = 120 + 100*y/H; b = 40 + 120*x/W; break;       /* orange/gelb */
+                case 3: r = 40 + 80*((x/16+y/16)&1); g = 50; b = 120 + 120*y/H; break; /* schachbrett */
+                case 4: r = 200 - 100*x/W; g = 40 + 180*y/H; b = 180 - 80*x/W; break;  /* magenta/cyan */
+                default: r = 80 + 120*y/H; g = 200 - 100*x/W; b = 120 + 100*x/W; break; /* tuerkis */
+            }
+            fputc(r, f); fputc(g, f); fputc(b, f);
+        }
+    }
+    fclose(f);
 }
 
 int main(int argc, char *argv[]) {
@@ -247,13 +327,49 @@ int main(int argc, char *argv[]) {
     save_png(&fb, outdir, "20_kontakte");
     flux_ui_set_accent(0x6366F1);  /* #8: Akzent zurücksetzen */
 
-    /* 21 -- Fotogalerie (#11: .jpg statt .ppm) */
+    /* 21 -- Fotogalerie: echtes 3-Spalten-Raster mit Thumbnails.
+     * Wir erzeugen synthetische P6-.ppm-Testbilder in einem Temp-Ordner,
+     * fuettern die Galerie damit und lassen sie ueber den Demo-Provider
+     * dekodieren -> der Screenshot zeigt das ECHTE Raster. Eine .jpg-Datei
+     * bleibt als ehrliche Platzhalter-Kachel (nicht dekodierbar) drin. */
     {
-        const char *gnames[] = { "IMG_20260618_143022.jpg", "IMG_20260617_091530.jpg", "IMG_20260615_180240.jpg" };
-        const char *gdates[] = { "18.06.2026", "17.06.2026", "15.06.2026" };
-        flux_ui_draw_gallery(&fb, gnames, gdates, 3, 0);
+        mkdir(GAL_DEMO_DIR, 0755);
+        /* Namen mit Aufnahmedatum im Dateinamen (IMG_YYYYMMDD_HHMMSS). */
+        const char *gnames[] = {
+            "IMG_20260618_143022.ppm", "IMG_20260617_091530.ppm",
+            "IMG_20260615_180240.ppm", "IMG_20260612_120000.ppm",
+            "IMG_20260610_084500.ppm", "IMG_20260605_201500.ppm",
+            "IMG_20260528_110000.ppm", "IMG_20260520_154500.ppm",
+            "IMG_20260514_093000.ppm", "IMG_20260509_171500.ppm",
+            "IMG_20260427_134500.ppm", "IMG_20260612_223000.jpg", /* .jpg -> Platzhalter */
+        };
+        const char *gdates[] = {
+            "18.06.2026", "17.06.2026", "15.06.2026", "12.06.2026",
+            "10.06.2026", "05.06.2026", "28.05.2026", "20.05.2026",
+            "14.05.2026", "09.05.2026", "27.04.2026", "12.06.2026",
+        };
+        int gn = (int)(sizeof(gnames) / sizeof(gnames[0]));
+        for (int i = 0; i < gn; i++) {
+            size_t L = strlen(gnames[i]);
+            if (L > 4 && strcmp(gnames[i] + L - 4, ".ppm") == 0) {
+                char p[512]; snprintf(p, sizeof(p), "%s/%s", GAL_DEMO_DIR, gnames[i]);
+                demo_write_ppm(p, 200 + (i % 3) * 40, 160 + (i % 2) * 60, i);
+            }
+        }
+        /* Filter "Alle": volles randloses Raster mit echten Thumbnails. */
+        flux_ui_draw_gallery(&fb, gnames, gdates, gn, -1, 0,
+                             FLUX_GAL_ALLE, 0, demo_thumb_provider, NULL);
+        save_png(&fb, outdir, "21_fotogalerie");
+
+        /* Temp-Dateien + Cache aufraeumen, damit nichts liegenbleibt. */
+        for (int i = 0; i < g_demo_cache_n; i++) free(g_demo_cache[i].tile);
+        g_demo_cache_n = 0;
+        for (int i = 0; i < gn; i++) {
+            char p[512]; snprintf(p, sizeof(p), "%s/%s", GAL_DEMO_DIR, gnames[i]);
+            unlink(p);
+        }
+        rmdir(GAL_DEMO_DIR);
     }
-    save_png(&fb, outdir, "21_fotogalerie");
 
     /* 22 -- Bild-Betrachter mit KI-Analyse (#11: .jpg) */
     {

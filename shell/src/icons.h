@@ -44,6 +44,9 @@ typedef enum {
     FLUX_ICON_CHEVRON_LEFT,  /* Pfeil links    (Lucide: chevron-left)    */
     FLUX_ICON_CHEVRON_RIGHT, /* Pfeil rechts   (Lucide: chevron-right)   */
     FLUX_ICON_PLUS,          /* Plus/Hinzufuegen(Lucide: plus)           */
+    FLUX_ICON_SLIDERS,       /* Filter/Regler  (Lucide: sliders-horizontal)*/
+    FLUX_ICON_IMAGE,         /* Bild-Platzhalter(Lucide: image)          */
+    FLUX_ICON_CAMERA,        /* Kamera         (Lucide: camera)          */
     FLUX_ICON_COUNT
 } flux_icon_t;
 

@@ -193,15 +193,60 @@ int flux_ui_calendar_hit(const flux_fb_t *fb, int x, int y,
 void flux_ui_draw_contacts(flux_fb_t *fb, const char **names,
                             const char **details, int n, int selected_idx);
 
-/* ---- Fotogalerie ---------------------------------------------------- */
+/* ---- Fotogalerie (iOS-"Mediathek"-Stil) ----------------------------- *
+ * Randloses 3-Spalten-Raster mit echten, center-gecroppten Thumbnails,
+ * fixem Header (grosser Titel + Filter/Auswaehlen) und schwebender
+ * Segment-Leiste "Jahre|Monate|Alle" + Such-Knopf unten. Das Raster
+ * scrollt vertikal (gallery_scroll), Header/Bottom-Leiste sind fix.
+ *
+ * Kantenlaenge einer Thumbnail-Kachel in Pixeln. main.c dekodiert die
+ * .ppm einmalig auf genau diese Groesse (center-crop) und cached sie. */
+#define FLUX_GALLERY_TILE 159   /* (480 - 2*1px Fugen) / 3 = 159 */
 
-/* Zeigt eine Liste von Fotonamen mit Datumsangaben.
- * names/dates parallel. selected_idx: -1 = kein. */
+/* Filter-Segmente. Nur "Alle" zeigt real alle Fotos; "Monate"/"Jahre"
+ * gruppieren nach echten Aufnahmedaten via Datums-Trennueberschriften. */
+typedef enum {
+    FLUX_GAL_JAHRE = 0,
+    FLUX_GAL_MONATE = 1,
+    FLUX_GAL_ALLE   = 2,
+} flux_gallery_filter_t;
+
+/* Liefert den fertigen, TILE*TILE grossen RGB32-Kachelpuffer fuer das
+ * Foto `name` oder NULL, falls (noch) nicht dekodierbar (z.B. .jpg) ->
+ * dann zeichnet die UI eine ehrliche Platzhalter-Kachel. Der Aufrufer
+ * (main.c) besitzt und cached den Puffer; die UI liest ihn nur. */
+typedef const uint32_t *(*flux_gallery_thumb_fn)(const char *name, void *user);
+
+/* Zeichnet das Foto-Raster. names/dates parallel (dates: "TT.MM.JJJJ"
+ * oder ""). selected_idx: -1 = keiner (Auswahlmodus). scroll: Anzahl
+ * gescrollter Rasterzeilen (>=0). filter: siehe oben. select_mode: 1 =
+ * Auswahl-Stub aktiv. thumb_fn/user: Thumbnail-Provider. */
 void flux_ui_draw_gallery(flux_fb_t *fb, const char **names, const char **dates,
-                           int n, int selected_idx);
+                           int n, int selected_idx, int scroll,
+                           int filter, int select_mode,
+                           flux_gallery_thumb_fn thumb_fn, void *user);
 
-/* Gibt 1 wenn der Kamera-Aufnahme-Knopf getroffen. */
-int flux_ui_gallery_camera_hit(const flux_fb_t *fb, int x, int y);
+/* Anzahl scrollbarer Rasterzeilen (>= 0) fuer den gegebenen Zustand --
+ * zum Clampen des Scroll-Offsets in main.c. */
+int flux_ui_gallery_max_scroll(const flux_fb_t *fb, const char **dates,
+                               int n, int filter);
+
+/* Ergebnis eines Galerie-Taps. Genau ein Feld wird gesetzt. */
+typedef struct {
+    int tile;     /* >=0: Index der getroffenen Kachel, sonst -1 */
+    int filter;   /* 1: Filter/Menue-Knopf (Header rechts)        */
+    int select;   /* 1: "Auswaehlen"-Pille (Header rechts)        */
+    int segment;  /* 0/1/2: Segment Jahre/Monate/Alle, sonst -1   */
+    int search;   /* 1: Such-Knopf                                */
+    int camera;   /* 1: Kamera-Knopf (Header links)               */
+} flux_gallery_hit_t;
+
+/* Hit-Test, exakt spiegelbildlich zu flux_ui_draw_gallery (gleiche
+ * Geometrie-Helfer). Gibt 1 zurueck, wenn irgendetwas getroffen wurde;
+ * *out beschreibt was. scroll/filter muessen mit dem Zeichenzustand
+ * uebereinstimmen. */
+int flux_ui_gallery_hit(const flux_fb_t *fb, int x, int y, const char **dates,
+                        int n, int scroll, int filter, flux_gallery_hit_t *out);
 
 /* ---- Bild-Betrachter ------------------------------------------------ */
 

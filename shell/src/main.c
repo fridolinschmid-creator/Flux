@@ -678,6 +678,21 @@ static const char *gallery_names[GALLERY_MAX];
 static const char *gallery_dates[GALLERY_MAX];
 static int gallery_n = 0;
 static int gallery_selected = -1;
+static int gallery_scroll = 0;          /* gescrollte Rasterzeilen */
+static int gallery_filter = FLUX_GAL_ALLE;
+static int gallery_select_mode = 0;     /* Auswahl-Stub */
+
+/* Thumbnail-Cache: pro Dateiname genau eine fertige TILE*TILE Kachel
+ * (center-gecroppt). Wird beim Neuladen der Galerie geleert, damit kein
+ * Speicher pro Frame leckt (Muster wie der Icon-Cache in icons.c). */
+typedef struct { char name[128]; uint32_t *tile; } thumb_entry_t;
+static thumb_entry_t thumb_cache[GALLERY_MAX];
+static int thumb_cache_n = 0;
+
+static void thumb_cache_clear(void) {
+    for (int i = 0; i < thumb_cache_n; i++) free(thumb_cache[i].tile);
+    thumb_cache_n = 0;
+}
 
 /* KI-Kontext-Overlay (Wisch nach rechts von ueberall) */
 static int  ai_ovl_active  = 0;
@@ -862,6 +877,7 @@ static void load_memory(void) {
 
 static void load_gallery(void) {
     gallery_n = 0;
+    thumb_cache_clear();        /* Thumbnails neu aufbauen lassen (kein Leak) */
     DIR *d = opendir(FLUX_PICTURES_DIR);
     if (!d) { mkdir(FLUX_PICTURES_DIR, 0755); return; }
     struct dirent *e;
@@ -897,6 +913,38 @@ static void load_gallery(void) {
         gallery_n++;
     }
     closedir(d);
+
+    /* Nach Aufnahmedatum absteigend sortieren (neueste zuerst), damit
+     * Monats-/Jahres-Gruppen im Raster zusammenhaengend liegen. Sortier-
+     * schluessel "JJJJMMTT" aus dem Datum "TT.MM.JJJJ"; Fotos ohne Datum
+     * ans Ende. Einfaches Insertion-Sort ueber die Index-Reihenfolge. */
+    for (int i = 1; i < gallery_n; i++) {
+        char ndate[32], nname[128];
+        snprintf(ndate, sizeof(ndate), "%s", gallery_dates_buf[i]);
+        snprintf(nname, sizeof(nname), "%s", gallery_names_buf[i]);
+        char keyi[9];
+        if (strlen(ndate) >= 10)
+            snprintf(keyi, sizeof(keyi), "%.4s%.2s%.2s", ndate+6, ndate+3, ndate);
+        else snprintf(keyi, sizeof(keyi), "00000000");
+        int j = i - 1;
+        while (j >= 0) {
+            char keyj[9];
+            if (strlen(gallery_dates_buf[j]) >= 10)
+                snprintf(keyj, sizeof(keyj), "%.4s%.2s%.2s",
+                         gallery_dates_buf[j]+6, gallery_dates_buf[j]+3, gallery_dates_buf[j]);
+            else snprintf(keyj, sizeof(keyj), "00000000");
+            if (strcmp(keyj, keyi) >= 0) break;     /* j ist neuer/gleich -> bleibt vor i */
+            snprintf(gallery_dates_buf[j+1], sizeof(gallery_dates_buf[0]), "%s", gallery_dates_buf[j]);
+            snprintf(gallery_names_buf[j+1], sizeof(gallery_names_buf[0]), "%s", gallery_names_buf[j]);
+            j--;
+        }
+        snprintf(gallery_dates_buf[j+1], sizeof(gallery_dates_buf[0]), "%s", ndate);
+        snprintf(gallery_names_buf[j+1], sizeof(gallery_names_buf[0]), "%s", nname);
+    }
+    for (int i = 0; i < gallery_n; i++) {
+        gallery_names[i] = gallery_names_buf[i];
+        gallery_dates[i] = gallery_dates_buf[i];
+    }
 }
 
 /* Laedt eine PPM-Datei und skaliert sie per Nearest-Neighbor auf max target_w x target_h.
@@ -947,6 +995,74 @@ static uint32_t *load_ppm_scaled(const char *path, int target_w, int target_h,
     *out_w = sw;
     *out_h = sh;
     return out;
+}
+
+/* Dekodiert eine P6-.ppm und erzeugt eine quadratische, center-gecroppte
+ * Thumbnail-Kachel von genau `tile`x`tile` Pixeln (RGB32). Im Gegensatz zu
+ * load_ppm_scaled wird hier auf FUELLEN skaliert (kurze Seite passt) und
+ * mittig zugeschnitten -- so wie iOS-Foto-Kacheln. Gibt malloc'd Puffer
+ * oder NULL (z.B. .jpg/.png -> ehrliche Platzhalter-Kachel in der UI). */
+static uint32_t *load_ppm_thumb(const char *path, int tile) {
+    FILE *f = fopen(path, "rb");
+    if (!f) return NULL;
+    char magic[4]; int W, H, maxval;
+    if (fscanf(f, "%3s %d %d %d", magic, &W, &H, &maxval) != 4 ||
+        strcmp(magic, "P6") != 0 || W <= 0 || H <= 0 || maxval <= 0) {
+        fclose(f); return NULL;
+    }
+    fgetc(f);
+    size_t npx = (size_t)W * H;
+    unsigned char *rgb = malloc(npx * 3);
+    if (!rgb) { fclose(f); return NULL; }
+    if (fread(rgb, 3, npx, f) != npx) { free(rgb); fclose(f); return NULL; }
+    fclose(f);
+
+    uint32_t *out = malloc((size_t)tile * tile * sizeof(uint32_t));
+    if (!out) { free(rgb); return NULL; }
+
+    /* Fuell-Skalierung: scale = tile / min(W,H); center-crop. */
+    float scale = (W < H) ? (float)tile / W : (float)tile / H;
+    int crop_w = (int)(tile / scale);   /* Quellbreite, die abgebildet wird */
+    int crop_h = (int)(tile / scale);
+    if (crop_w > W) crop_w = W;
+    if (crop_h > H) crop_h = H;
+    int src_x0 = (W - crop_w) / 2;
+    int src_y0 = (H - crop_h) / 2;
+    for (int ty = 0; ty < tile; ty++) {
+        int sy = src_y0 + (int)(ty / scale);
+        if (sy >= H) sy = H - 1;
+        for (int tx = 0; tx < tile; tx++) {
+            int sx = src_x0 + (int)(tx / scale);
+            if (sx >= W) sx = W - 1;
+            int idx = (sy * W + sx) * 3;
+            out[ty * tile + tx] = ((uint32_t)rgb[idx] << 16)
+                                 | ((uint32_t)rgb[idx+1] << 8)
+                                 |  (uint32_t)rgb[idx+2];
+        }
+    }
+    free(rgb);
+    return out;
+}
+
+/* Thumbnail-Provider fuer flux_ui_draw_gallery: liefert die gecachte
+ * TILE-Kachel fuer `name` oder dekodiert sie einmalig. Gibt NULL bei
+ * nicht dekodierbaren Formaten -> UI zeichnet Platzhalter. */
+static const uint32_t *gallery_thumb_provider(const char *name, void *user) {
+    (void)user;
+    for (int i = 0; i < thumb_cache_n; i++)
+        if (strcmp(thumb_cache[i].name, name) == 0)
+            return thumb_cache[i].tile;            /* kann NULL sein (Platzhalter gemerkt) */
+    char path[640];
+    snprintf(path, sizeof(path), "%s/%s", FLUX_PICTURES_DIR, name);
+    uint32_t *tile = load_ppm_thumb(path, FLUX_GALLERY_TILE);
+    if (thumb_cache_n < GALLERY_MAX) {
+        snprintf(thumb_cache[thumb_cache_n].name, sizeof(thumb_cache[0].name), "%s", name);
+        thumb_cache[thumb_cache_n].tile = tile;    /* NULL -> Platzhalter, ebenfalls gecacht */
+        thumb_cache_n++;
+    } else {
+        free(tile);                                /* Cache voll: nicht behalten */
+    }
+    return tile;
 }
 
 /* Sammelt suchbaren Geraete-Inhalt fuer die semantische KI-Suche. */
@@ -1055,7 +1171,9 @@ static void redraw_current_screen(flux_fb_t *fb, flux_screen_t screen,
                                    contact_n, contact_selected); break;
         case FLUX_SCREEN_GALLERY:
             flux_ui_draw_gallery(fb, gallery_names, gallery_dates,
-                                  gallery_n, gallery_selected); break;
+                                  gallery_n, gallery_selected, gallery_scroll,
+                                  gallery_filter, gallery_select_mode,
+                                  gallery_thumb_provider, NULL); break;
         case FLUX_SCREEN_IMAGE_VIEWER:
             flux_ui_draw_image_viewer(fb, image_path, image_pixels,
                                        image_w, image_h, image_caption, 0); break;
@@ -1947,7 +2065,9 @@ int main(void) {
                                           contact_n, contact_selected);
                 else if (screen == FLUX_SCREEN_GALLERY)
                     flux_ui_draw_gallery(&fb, gallery_names, gallery_dates,
-                                         gallery_n, gallery_selected);
+                                         gallery_n, gallery_selected, gallery_scroll,
+                                         gallery_filter, gallery_select_mode,
+                                         gallery_thumb_provider, NULL);
                 animate_slide_in(&fb, old);
                 free(old);
             }
@@ -2201,10 +2321,29 @@ int main(void) {
                 free(old);
                 continue;
             }
+            /* Vertikales Scrollen des Rasters (Header/Bottom-Leiste fix). */
+            if (ev.type == FLUX_EV_SWIPE_UP || ev.type == FLUX_EV_SWIPE_DOWN) {
+                int maxs = flux_ui_gallery_max_scroll(&fb, gallery_dates,
+                                                      gallery_n, gallery_filter);
+                if (ev.type == FLUX_EV_SWIPE_UP) gallery_scroll += 2;
+                else gallery_scroll -= 2;
+                if (gallery_scroll < 0) gallery_scroll = 0;
+                if (gallery_scroll > maxs) gallery_scroll = maxs;
+                flux_ui_draw_gallery(&fb, gallery_names, gallery_dates,
+                                     gallery_n, gallery_selected, gallery_scroll,
+                                     gallery_filter, gallery_select_mode,
+                                     gallery_thumb_provider, NULL);
+                continue;
+            }
             if (ev.type != FLUX_EV_TAP) continue;
 
-            /* Kamera-Knopf */
-            if (flux_ui_gallery_camera_hit(&fb, ev.x, ev.y)) {
+            flux_gallery_hit_t gh;
+            if (!flux_ui_gallery_hit(&fb, ev.x, ev.y, gallery_dates, gallery_n,
+                                     gallery_scroll, gallery_filter, &gh))
+                continue;
+
+            if (gh.camera) {
+                /* Kamera-Auslöser (kleines Kamera-Icon unten links). */
                 animate_ripple(&fb, ev.x, ev.y);
                 char photo_path[256];
                 time_t _t = time(NULL); struct tm _tm; localtime_r(&_t, &_tm);
@@ -2212,28 +2351,55 @@ int main(void) {
                          FLUX_PICTURES_DIR "/IMG_%Y%m%d_%H%M%S.ppm", &_tm);
                 flux_camera_capture(photo_path);
                 load_gallery();
+                gallery_scroll = 0;
                 flux_ui_draw_gallery(&fb, gallery_names, gallery_dates,
-                                     gallery_n, gallery_selected);
-                continue;
-            }
-
-            int idx, back;
-            if (!flux_ui_list_hit(&fb, ev.x, ev.y, gallery_n, &idx, &back)) continue;
-            if (back) {
-                uint32_t *old = capture_frame(&fb);
-                screen = FLUX_SCREEN_ASSISTANT;
-                flux_ui_draw_assistant(&fb, last_q, input_buf, answer_buf, 0);
-                animate_slide_from_left(&fb, old);
-                free(old);
-            } else if (idx < gallery_n) {
+                                     gallery_n, gallery_selected, gallery_scroll,
+                                     gallery_filter, gallery_select_mode,
+                                     gallery_thumb_provider, NULL);
+            } else if (gh.segment >= 0) {
+                /* Segment "Jahre|Monate|Alle" umschalten (Gruppierung real). */
                 animate_ripple(&fb, ev.x, ev.y);
-                open_image(&fb, gallery_names[idx]);
-                uint32_t *old = capture_frame(&fb);
-                screen = FLUX_SCREEN_IMAGE_VIEWER;
-                flux_ui_draw_image_viewer(&fb, gallery_names[idx],
-                    image_pixels, image_w, image_h, "", 0);
-                animate_slide_in(&fb, old);
-                free(old);
+                gallery_filter = gh.segment;
+                gallery_scroll = 0;
+                flux_ui_draw_gallery(&fb, gallery_names, gallery_dates,
+                                     gallery_n, gallery_selected, gallery_scroll,
+                                     gallery_filter, gallery_select_mode,
+                                     gallery_thumb_provider, NULL);
+            } else if (gh.select) {
+                /* Auswahl-Stub: schaltet den Auswahlmodus sichtbar um. */
+                animate_ripple(&fb, ev.x, ev.y);
+                gallery_select_mode = !gallery_select_mode;
+                if (!gallery_select_mode) gallery_selected = -1;
+                flux_ui_draw_gallery(&fb, gallery_names, gallery_dates,
+                                     gallery_n, gallery_selected, gallery_scroll,
+                                     gallery_filter, gallery_select_mode,
+                                     gallery_thumb_provider, NULL);
+            } else if (gh.filter) {
+                /* Filter-Knopf: ehrlicher Stub -- Tipp-Feedback (Ripple). */
+                animate_ripple(&fb, ev.x, ev.y);
+            } else if (gh.search) {
+                /* Such-Knopf: ehrlicher Stub -- Tipp-Feedback (Ripple). */
+                animate_ripple(&fb, ev.x, ev.y);
+            } else if (gh.tile >= 0 && gh.tile < gallery_n) {
+                if (gallery_select_mode) {
+                    /* Auswahl-Stub: Kachel markieren/abwaehlen. */
+                    animate_ripple(&fb, ev.x, ev.y);
+                    gallery_selected = (gallery_selected == gh.tile) ? -1 : gh.tile;
+                    flux_ui_draw_gallery(&fb, gallery_names, gallery_dates,
+                                         gallery_n, gallery_selected, gallery_scroll,
+                                         gallery_filter, gallery_select_mode,
+                                         gallery_thumb_provider, NULL);
+                } else {
+                    /* Foto oeffnen (bestehender Bild-Betrachter). */
+                    animate_ripple(&fb, ev.x, ev.y);
+                    open_image(&fb, gallery_names[gh.tile]);
+                    uint32_t *old = capture_frame(&fb);
+                    screen = FLUX_SCREEN_IMAGE_VIEWER;
+                    flux_ui_draw_image_viewer(&fb, gallery_names[gh.tile],
+                        image_pixels, image_w, image_h, "", 0);
+                    animate_slide_in(&fb, old);
+                    free(old);
+                }
             }
             continue;
         }
@@ -2243,7 +2409,9 @@ int main(void) {
                 uint32_t *old = capture_frame(&fb);
                 screen = FLUX_SCREEN_GALLERY;
                 flux_ui_draw_gallery(&fb, gallery_names, gallery_dates,
-                                     gallery_n, gallery_selected);
+                                     gallery_n, gallery_selected, gallery_scroll,
+                                     gallery_filter, gallery_select_mode,
+                                     gallery_thumb_provider, NULL);
                 animate_slide_from_left(&fb, old);
                 free(old);
                 continue;
@@ -2258,7 +2426,9 @@ int main(void) {
                 uint32_t *old = capture_frame(&fb);
                 screen = FLUX_SCREEN_GALLERY;
                 flux_ui_draw_gallery(&fb, gallery_names, gallery_dates,
-                                     gallery_n, gallery_selected);
+                                     gallery_n, gallery_selected, gallery_scroll,
+                                     gallery_filter, gallery_select_mode,
+                                     gallery_thumb_provider, NULL);
                 animate_slide_from_left(&fb, old);
                 free(old);
             } else if (iv_analyze) {
@@ -2294,7 +2464,9 @@ int main(void) {
                 uint32_t *old = capture_frame(&fb);
                 screen = FLUX_SCREEN_GALLERY;
                 flux_ui_draw_gallery(&fb, gallery_names, gallery_dates,
-                                     gallery_n, gallery_selected);
+                                     gallery_n, gallery_selected, gallery_scroll,
+                                     gallery_filter, gallery_select_mode,
+                                     gallery_thumb_provider, NULL);
                 animate_slide_from_left(&fb, old);
                 free(old);
             }
@@ -2865,10 +3037,14 @@ int main(void) {
                 input_buf[0] = '\0';
                 load_gallery();
                 gallery_selected = -1;
+                gallery_scroll = 0;
+                gallery_select_mode = 0;
                 uint32_t *old = capture_frame(&fb);
                 screen = FLUX_SCREEN_GALLERY;
                 flux_ui_draw_gallery(&fb, gallery_names, gallery_dates,
-                                     gallery_n, gallery_selected);
+                                     gallery_n, gallery_selected, gallery_scroll,
+                                     gallery_filter, gallery_select_mode,
+                                     gallery_thumb_provider, NULL);
                 animate_slide_in(&fb, old);
                 free(old);
                 continue;
@@ -3030,6 +3206,7 @@ int main(void) {
 
     flux_input_close(&in);
     free(image_pixels);
+    thumb_cache_clear();
     flux_fb_close(&fb);
     return 0;
 }
