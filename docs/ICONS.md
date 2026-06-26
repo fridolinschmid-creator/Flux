@@ -44,6 +44,12 @@ Schon angebunden: die Schnellzugriff-Leiste (Einstellungen/Dateien/
 Kalender/Kontakte) und die Eingabeleisten-Knoepfe (Mikrofon/Haken/
 Kopieren/Einfuegen) in `shell/src/ui.c`.
 
+Fuer das Redesign neu hinzugekommen (siehe `docs/DESIGN.md`):
+`FLUX_ICON_X` (Abbrechen/Schliessen), `FLUX_ICON_PENCIL` (Bearbeiten),
+`FLUX_ICON_MESSAGE_CIRCLE` (Nachricht/SMS) und `FLUX_ICON_GLOBE` (Web/Suche).
+Sie tragen die Icon-first-Knoepfe des Bestaetigungs-Dialogs (✕ / ✎ / ✓) und
+die Agent-Pillen.
+
 ## Ein neues Icon hinzufuegen
 
 1. SVG bei [lucide.dev](https://lucide.dev) suchen, den **Inhalt** (die

@@ -47,6 +47,10 @@ typedef enum {
     FLUX_ICON_SLIDERS,       /* Filter/Regler  (Lucide: sliders-horizontal)*/
     FLUX_ICON_IMAGE,         /* Bild-Platzhalter(Lucide: image)          */
     FLUX_ICON_CAMERA,        /* Kamera         (Lucide: camera)          */
+    FLUX_ICON_X,             /* Schliessen/Abbrechen (Lucide: x)         */
+    FLUX_ICON_PENCIL,        /* Bearbeiten     (Lucide: pencil)          */
+    FLUX_ICON_MESSAGE_CIRCLE,/* Nachricht/SMS  (Lucide: message-circle)  */
+    FLUX_ICON_GLOBE,         /* Web/Suche      (Lucide: globe)           */
     FLUX_ICON_COUNT
 } flux_icon_t;
 

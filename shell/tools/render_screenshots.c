@@ -241,24 +241,24 @@ int main(int argc, char *argv[]) {
     const char *setting_labels[] = {
         "PIN-Code", "KI-Anbieter", "API-Key (Anbieter)", "Modell (Anbieter)",
         "E-Mail Einstellungen", "WLAN", "Web-Suche (SearXNG)",
-        "Farbthema", "Auto-Sperre", "Sprache (TTS)"
+        "Auto-Sperre", "Sprache (TTS)"
     };
     const char *setting_values[] = {
         "gesetzt", "DeepSeek", "********", "deepseek-chat",
         "ich@icloud.com", "FritzBox 7590", "http://macbook.local:8888",
-        "teal", "60 s", "Deutsch"    /* #13: Deutsch, #14: 60 s */
+        "60 s", "Deutsch"
     };
     static const int setting_icons[] = {
         FLUX_SICON_LOCK, FLUX_SICON_AI, FLUX_SICON_KEY, FLUX_SICON_CHIP,
-        FLUX_SICON_MAIL, FLUX_SICON_WIFI, FLUX_SICON_SEARCH, FLUX_SICON_THEME,
+        FLUX_SICON_MAIL, FLUX_SICON_WIFI, FLUX_SICON_SEARCH,
         FLUX_SICON_CLOCK, FLUX_SICON_SPEAKER
     };
     flux_ui_set_setting_icons(setting_icons);
-    flux_ui_draw_settings(&fb, setting_labels, setting_values, 10);
+    flux_ui_draw_settings(&fb, setting_labels, setting_values, 9);
     save_png(&fb, outdir, "13_einstellungen");
 
     /* 13c -- Eingangsanimation der Einstellungen (Zwischenframe) */
-    flux_ui_draw_settings_reveal(&fb, setting_labels, setting_values, 10,
+    flux_ui_draw_settings_reveal(&fb, setting_labels, setting_values, 9,
                                  5, 60, 40, 1);
     save_png(&fb, outdir, "13c_einstellungen_anim");
 

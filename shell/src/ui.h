@@ -43,6 +43,7 @@ typedef enum {
     FLUX_CONFIRM_NONE = 0,
     FLUX_CONFIRM_CANCEL,
     FLUX_CONFIRM_SEND,
+    FLUX_CONFIRM_EDIT,          /* Stift-Knopf (Bearbeiten der Nachricht) */
     FLUX_CONFIRM_EDIT_TO,       /* Tap auf den Empfaenger */
     FLUX_CONFIRM_EDIT_SUBJECT,  /* Tap auf den Betreff */
     FLUX_CONFIRM_EDIT_BODY,     /* Tap auf den Nachrichtentext */
@@ -79,6 +80,10 @@ int flux_ui_quickrow_hit(const flux_fb_t *fb, int x, int y);
 /* Eingangsanimation der Schnellzugriff-Knoepfe: 'shown' Knoepfe voll,
  * der naechste auf grow_pct (0-100). Standard 4/100 (alle sichtbar). */
 void flux_ui_set_quick_reveal(int shown, int grow_pct);
+
+/* Vorschlags-Chip im leeren Assistenten-Zustand: gibt 1..4 zurueck
+ * (Mail/Wecker/Suche/Termin) oder 0. Nur im leeren Zustand auswerten. */
+int flux_ui_suggest_hit(const flux_fb_t *fb, int x, int y);
 
 /* Mikrofon-Knopf rechts neben der Eingabezeile. */
 int flux_ui_mic_hit(const flux_fb_t *fb, int x, int y);

@@ -67,4 +67,19 @@ static inline float flux_pulse(uint64_t now_ms, uint32_t period_ms) {
     return flux_ease_in_out_cubic(tri);
 }
 
+/* Shimmer: ein wandernder Lichtpunkt 0..1, der zyklisch von links nach
+ * rechts laeuft -- fuer "lebendige" Lade-Zustaende (Skeleton/Denke-Chip).
+ * Gibt die normierte Position [0,1] des Highlights zur Zeit now_ms. */
+static inline float flux_shimmer(uint64_t now_ms, uint32_t period_ms) {
+    if (period_ms == 0) return 0.0f;
+    return (float)(now_ms % period_ms) / (float)period_ms;
+}
+
+/* --- Standard-Bewegungsdauern (Flux Motion System) --------------------
+ * Alle Interaktionen bleiben im Fenster 150-350 ms: schnell genug, um
+ * direkt zu wirken, lang genug, um "weich" und ruhig zu erscheinen. */
+#define FLUX_MOTION_FAST_MS   150   /* Tap-Feedback, Glow              */
+#define FLUX_MOTION_BASE_MS   250   /* Standard: Erscheinen/Fade-in    */
+#define FLUX_MOTION_SLOW_MS   350   /* Bildschirmwechsel, groesse Karten*/
+
 #endif

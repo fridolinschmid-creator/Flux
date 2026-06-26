@@ -113,6 +113,33 @@ static void animate_ripple(flux_fb_t *fb, int cx, int cy) {
     free(saved);
 }
 
+/* Progressive Einblendung der KI-Antwort: zeichnet den Assistenten einmal
+ * und blendet ihn dann ueber ~250 ms aus einem dunklen Overlay heraus
+ * (Deckkraft 100 -> 0). Mit dem Bitmap-Font kein Per-Glyph-Alpha noetig --
+ * die Karte/Antwort "faded in", ruhig und lebendig (Flux Motion System). */
+static void animate_answer_fadein(flux_fb_t *fb, const char *last_q,
+                                  const char *input_buf, const char *answer_buf) {
+    if (!fb->mmio) {
+        flux_ui_draw_assistant(fb, last_q, input_buf, answer_buf, 0);
+        return;
+    }
+    size_t npx = (size_t)fb->width * fb->height;
+    uint32_t *base = malloc(npx * sizeof(uint32_t));
+    if (!base) { flux_ui_draw_assistant(fb, last_q, input_buf, answer_buf, 0); return; }
+    flux_ui_draw_assistant(fb, last_q, input_buf, answer_buf, 0);
+    memcpy(base, fb->back, npx * sizeof(uint32_t));
+    const int frames = 6;
+    for (int f = frames; f >= 0; f--) {
+        memcpy(fb->back, base, npx * sizeof(uint32_t));
+        uint8_t a = (uint8_t)(f * 120 / frames);   /* 120 -> 0 */
+        if (a) flux_fb_blend_rect(fb, 0, 0, fb->width, fb->height, 0x07080D, a);
+        memset(fb->prev, 0xFF, npx * sizeof(uint32_t));
+        flux_fb_present(fb);
+        usleep(34000);
+    }
+    free(base);
+}
+
 /* Spielt ein animiertes Aktions-Symbol fuer 'frames' Bilder ab. */
 static void animate_action(flux_fb_t *fb, flux_anim_kind_t kind,
                            const char *caption, int frames, int delay_us) {
@@ -309,15 +336,10 @@ static void save_screenshot(const flux_fb_t *fb, char *msg_out, size_t msg_cap) 
 
 /* ---- Farbthema ---------------------------------------------------------- */
 
+/* Flux hat genau EINE Signaturfarbe (Indigo -> Violet). Frueher waehlbare
+ * Themes sind entfallen -- ein Akzent ueber das ganze OS (docs/DESIGN.md). */
 static void apply_theme(void) {
-    char theme[32] = {0};
-    flux_config_get("theme", theme, sizeof(theme));
-    if      (!strcmp(theme, "blau"))   flux_ui_set_accent(0x3B82F6);
-    else if (!strcmp(theme, "lila"))   flux_ui_set_accent(0xA855F7);
-    else if (!strcmp(theme, "orange")) flux_ui_set_accent(0xF97316);
-    else if (!strcmp(theme, "gruen"))  flux_ui_set_accent(0x22C55E);
-    else if (!strcmp(theme, "rot"))    flux_ui_set_accent(0xEF4444);
-    /* teal ist default -- kein else noetig */
+    flux_ui_set_accent(0x6366F1);
 }
 
 /* Generiert eine KI-Begruessung asynchron (Fork) wenn noch keine fuer heute existiert. */
@@ -351,7 +373,7 @@ static void maybe_generate_greeting(void) {
 
 #define FLUX_PIN_LEN       4
 #define FLUX_FILES_MAX     12
-#define FLUX_SETTINGS_N    11   /* + WLAN + Stimme */
+#define FLUX_SETTINGS_N    10   /* + WLAN + Stimme (Farbthema entfallen) */
 #define VIEWER_CONTENT_MAX 32768
 
 typedef enum {
@@ -385,7 +407,6 @@ static const char *setting_keys[FLUX_SETTINGS_N] = {
     "__email",          /* E-Mail-Adresse + App-Passwort (leitet SMTP/IMAP ab) */
     "__wifi",           /* oeffnet den WLAN-Screen (Scan + Verbinden) */
     "searxng_url",      /* Web-Suche ueber eigene SearXNG-Instanz (z.B. MacBook) */
-    "theme",    /* teal|blau|lila|orange|gruen|rot */
     "auto_lock",      /* 0=aus, 30, 60, 120, 300 Sekunden */
     "tts",            /* 0=aus, 1=ein */
     "__voice_enroll", /* oeffnet Stimm-Einlern-Screen */
@@ -398,7 +419,6 @@ static const char *setting_labels[FLUX_SETTINGS_N] = {
     "E-Mail Einstellungen", /* Adresse + App-Passwort, Rest automatisch */
     "WLAN",                 /* oeffnet Netz-Scan + Verbinden */
     "Web-Suche (SearXNG)",  /* URL der eigenen SearXNG-Instanz */
-    "Farbthema",    /* teal/blau/lila/orange/gruen/rot */
     "Auto-Sperre",  /* 0=aus */
     "Sprache (TTS)",/* 0=aus, 1=ein */
     "Stimme (2. Faktor)", /* Stimm-Entsperrung einlernen */
@@ -411,7 +431,7 @@ static const int setting_secret[FLUX_SETTINGS_N] = {
     0, /* email (zeigt Adresse) */
     0, /* wifi (zeigt Verbindung) */
     0, /* searxng_url */
-    0, 0, 0,  /* theme/auto_lock/tts */
+    0, 0,     /* auto_lock/tts */
     0,        /* voice_enroll */
 };
 
@@ -424,7 +444,6 @@ static const int setting_icons[FLUX_SETTINGS_N] = {
     FLUX_SICON_MAIL,   /* __email */
     FLUX_SICON_WIFI,   /* __wifi */
     FLUX_SICON_SEARCH, /* searxng_url */
-    FLUX_SICON_THEME,  /* theme */
     FLUX_SICON_CLOCK,  /* auto_lock */
     FLUX_SICON_SPEAKER,/* tts */
     FLUX_SICON_LOCK,   /* voice_enroll */
@@ -1728,10 +1747,13 @@ int main(void) {
                 flux_ui_draw_assistant(&fb, last_q, input_buf, answer_buf, 0);
                 animate_slide_in(&fb, old);
                 free(old);
-            } else if (hit == FLUX_CONFIRM_EDIT_TO ||
+            } else if (hit == FLUX_CONFIRM_EDIT ||
+                       hit == FLUX_CONFIRM_EDIT_TO ||
                        hit == FLUX_CONFIRM_EDIT_SUBJECT ||
                        hit == FLUX_CONFIRM_EDIT_BODY) {
-                /* Direkt die angetippte Zeile bearbeiten -- kein extra Knopf */
+                /* Stift-Knopf ODER direkter Tap auf eine Zeile. Der Stift
+                 * bearbeitet die Nachricht (haeufigster Fall); ein Tap auf
+                 * Empfaenger/Betreff bearbeitet gezielt diese Zeile. */
                 if (hit == FLUX_CONFIRM_EDIT_TO) {
                     snprintf(edit_buf, sizeof(edit_buf), "%s", pending_action.to);
                     edit_target = EDIT_ACTION_TO;
@@ -2907,6 +2929,23 @@ int main(void) {
                 free(old);
                 continue;
             }
+            /* Vorschlags-Chips: nur im leeren Zustand. Fuellen die Eingabe
+             * mit einem Starttext vor -- der Nutzer tippt weiter (kein
+             * verstecktes Verhalten, kein toter Knopf). */
+            if (!last_q[0] && !input_buf[0] && !answer_buf[0]) {
+                int sg = flux_ui_suggest_hit(&fb, ev.x, ev.y);
+                if (sg) {
+                    animate_ripple(&fb, ev.x, ev.y);
+                    switch (sg) {
+                        case 1: snprintf(input_buf, sizeof(input_buf), "Schreibe eine E-Mail an "); break;
+                        case 2: snprintf(input_buf, sizeof(input_buf), "Stell einen Wecker auf "); break;
+                        case 3: snprintf(input_buf, sizeof(input_buf), "Suche im Web nach "); break;
+                        case 4: snprintf(input_buf, sizeof(input_buf), "Erstelle einen Termin: "); break;
+                    }
+                    flux_ui_draw_assistant(&fb, last_q, input_buf, answer_buf, 0);
+                    continue;
+                }
+            }
             if (flux_ui_mic_hit(&fb, ev.x, ev.y)) {
                 if (!flux_voice_can_record()) {
                     snprintf(answer_buf, sizeof(answer_buf),
@@ -3199,7 +3238,8 @@ int main(void) {
                 animate_slide_in(&fb, old);
                 free(old);
             } else {
-                flux_ui_draw_assistant(&fb, last_q, input_buf, answer_buf, 0);
+                /* KI-Textantwort: weich einblenden statt hartem Umschalten. */
+                animate_answer_fadein(&fb, last_q, input_buf, answer_buf);
             }
         }
     }

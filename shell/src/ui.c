@@ -7,18 +7,19 @@
 #include <time.h>
 #include <stdlib.h>
 
-/* Dynamische Akzentfarbe -- aenderbar via flux_ui_set_accent(). */
-static uint32_t g_accent  = 0x6366F1;  /* Standard: Modern Indigo */
-static uint32_t g_accent2 = 0x8B5CF6;  /* Gradient-Endpunkt Violet */
+/* EINE Signatur-Akzentfarbe fuer das ganze System: Indigo -> Violet.
+ *
+ * Flux hat bewusst KEINE pro-Bildschirm- oder Nutzer-Themes mehr: ein
+ * einziger Akzent ueber das gesamte OS ist Teil der Identitaet ("kein
+ * Regenbogen, gleicher Akzent ueberall", siehe docs/DESIGN.md). Die
+ * Funktion bleibt aus Kompatibilitaet erhalten, ignoriert ihr Argument
+ * aber bewusst -- so erzwingen wir die eine Farbe an genau einer Stelle. */
+static uint32_t g_accent  = 0x6366F1;  /* Flux Indigo  */
+static uint32_t g_accent2 = 0x8B5CF6;  /* Flux Violet (Gradient-Endpunkt) */
 void flux_ui_set_accent(uint32_t rgb) {
-    g_accent = rgb;
-    /* Accent2: passendes komplementaeres Gradient-Ende */
-    if      (rgb == 0x6366F1) g_accent2 = 0x8B5CF6;
-    else if (rgb == 0x06B6D4) g_accent2 = 0x3B82F6;
-    else if (rgb == 0xF43F5E) g_accent2 = 0xEC4899;
-    else if (rgb == 0x10B981) g_accent2 = 0x06B6D4;
-    else if (rgb == 0xF97316) g_accent2 = 0xEAB308;
-    else g_accent2 = rgb;
+    (void)rgb;                 /* eine Identitaetsfarbe -- Argument ignoriert */
+    g_accent  = 0x6366F1;
+    g_accent2 = 0x8B5CF6;
 }
 
 /* Premium Dark-Mode Palette "Deep Space" */
@@ -367,6 +368,15 @@ void flux_ui_draw_lock(flux_fb_t *fb) {
     /* Hintergrund: vertikaler Verlauf von COL_BG nach leicht hellerem COL_SURFACE */
     flux_fb_fill_gradient_v(fb, 0, 0, fb->width, fb->height, COL_BG, 0x0B0D14);
 
+    /* Ambientes Akzent-Glimmen hinter der Uhr: weiche, dunkle Indigo-Halo
+     * (mehrere Kreise von gross/dunkel nach klein/heller). Ruhig, "lebt". */
+    {
+        int gx = fb->width / 2, gy = fb->height * 29 / 100;
+        fill_circle(fb, gx, gy, 150, 0x090B16);
+        fill_circle(fb, gx, gy, 112, 0x0B0D1F);
+        fill_circle(fb, gx, gy, 72,  0x0F1130);
+    }
+
     /* Statusleiste nur mit Zeit -- minimal auf dem Lockscreen */
     {
         time_t t = time(NULL);
@@ -560,6 +570,8 @@ void flux_ui_draw_lock(flux_fb_t *fb) {
     {
         int ind_y = fb->height - 42;
         int ind_x = fb->width / 2;
+        /* Schloss-Symbol als ruhiger Hinweis "gesperrt -> nach oben wischen". */
+        flux_icon_draw(fb, FLUX_ICON_LOCK, ind_x, ind_y - 30, 16, COL_DIM);
         /* Drei nach oben zeigende Pfeile, leicht verblasst */
         for (int i = 0; i < 3; i++) {
             int oy = ind_y - i * 10;
@@ -709,20 +721,13 @@ static void draw_quickrow(flux_fb_t *fb) {
         int pill_x = bx + 5;
         int pill_y = y + 6;
 
-        /* Pill-Hintergrund */
+        /* Icon-first: zentriertes Lucide-Symbol, kein Textlabel mehr --
+         * Zahnrad/Ordner/Kalender/Person sind selbsterklaerend. */
         fill_round_rect(fb, pill_x, pill_y, pill_w, pill_h, pill_h / 2, COL_SURFACE3);
-
-        /* Icon + Text horizontal nebeneinander */
-        int isz = 12 * grow / 100;
-        int icon_x = pill_x + 10 + isz;
-        int icon_y = pill_y + pill_h / 2;
-        draw_nav_icon(fb, icons[i], icon_x, icon_y, isz, COL_ACCENT);
-
-        int lw = flux_fb_text_width(labels[i], 1);
-        int tx = icon_x + isz + 5;
-        flux_fb_text(fb, tx, pill_y + (pill_h - 9) / 2, labels[i], COL_TEXT_MUTED, 1);
-
-        (void)lw;
+        int isz = 22 * grow / 100;
+        draw_nav_icon(fb, icons[i], pill_x + pill_w / 2, pill_y + pill_h / 2,
+                      isz, COL_ACCENT);
+        (void)labels;
     }
 }
 
@@ -1060,6 +1065,43 @@ static void draw_input_bar(flux_fb_t *fb, int input_y, const char *prompt_text,
     }
 }
 
+/* ---- Vorschlags-Chips (leerer Assistenten-Zustand) ------------------ *
+ * Icon-first Schnellstart-Aktionen. Geometrie wird von Zeichnen UND
+ * Hit-Test geteilt (2x2-Raster), damit Taps nie daneben landen. */
+#define SUGGEST_N 4
+static const struct { flux_icon_t icon; const char *label; } s_suggest[SUGGEST_N] = {
+    { FLUX_ICON_MAIL,      "Mail"    },
+    { FLUX_ICON_BELL_RING, "Wecker"  },
+    { FLUX_ICON_SEARCH,    "Suche"   },
+    { FLUX_ICON_CALENDAR,  "Termin"  },
+};
+
+static int suggest_geom(const flux_fb_t *fb, int i, int *x, int *y, int *w, int *h) {
+    int kbd_top  = flux_ui_kbd_top(fb);
+    int input_y  = kbd_top - INPUT_BAR_H;
+    int chat_top = STATUSBAR_H + QUICKROW_H + 10;
+    int center_y = chat_top + (input_y - chat_top) / 2;
+    int top_y    = center_y + 88;
+    int margin = 30, gap = 12, cols = 2, chh = 46;
+    int cw = (fb->width - 2 * margin - gap) / cols;
+    int row = i / cols, col = i % cols;
+    *w = cw; *h = chh;
+    *x = margin + col * (cw + gap);
+    *y = top_y + row * (chh + gap);
+    return SUGGEST_N;
+}
+
+/* Gibt 1..SUGGEST_N bei Treffer eines Vorschlags-Chips zurueck, sonst 0.
+ * Der Aufrufer prueft selbst, ob der leere Zustand aktiv ist. */
+int flux_ui_suggest_hit(const flux_fb_t *fb, int x, int y) {
+    for (int i = 0; i < SUGGEST_N; i++) {
+        int bx, by, bw, bh;
+        suggest_geom(fb, i, &bx, &by, &bw, &bh);
+        if (x >= bx && x < bx + bw && y >= by && y < by + bh) return i + 1;
+    }
+    return 0;
+}
+
 void flux_ui_draw_assistant(flux_fb_t *fb, const char *last_q,
                               const char *input, const char *answer, int thinking) {
     flux_fb_clear(fb, COL_BG);
@@ -1108,11 +1150,10 @@ void flux_ui_draw_assistant(flux_fb_t *fb, const char *last_q,
         /* Leerer Zustand: zentiertes KI-Symbol + Einladungstext */
         int center_y = chat_top + (input_y - chat_top) / 2;
 
-        /* Grosses Akzent-Logo: Kreis mit "F" */
-        int logo_r = 36;
+        /* Grosses Akzent-Logo: Funken-Symbol (KI) im Gradient-Kreis. */
+        int logo_r = 38;
         int logo_cx = fb->width / 2;
-        int logo_cy = center_y - 30;
-        /* Gradient-Kreis */
+        int logo_cy = center_y - 34;
         for (int dy = -logo_r; dy <= logo_r; dy++) {
             for (int dx = -logo_r; dx <= logo_r; dx++) {
                 if (dx*dx + dy*dy <= logo_r*logo_r) {
@@ -1122,22 +1163,31 @@ void flux_ui_draw_assistant(flux_fb_t *fb, const char *last_q,
                 }
             }
         }
-        /* "F" im Kreis */
-        int fw = flux_fb_text_width("F", 4);
-        flux_fb_text(fb, logo_cx - fw/2, logo_cy - 14, "F", 0xFFFFFF, 4);
+        flux_icon_draw(fb, FLUX_ICON_SPARKLES, logo_cx, logo_cy, 38, 0xFFFFFF);
 
         /* Haupt-Einladungstext */
         const char *h = "Wie kann ich helfen?";
         int hw = flux_fb_text_width(h, 3);
-        flux_fb_text(fb, (fb->width - hw) / 2, center_y + 20, h, COL_TEXT, 3);
+        flux_fb_text(fb, (fb->width - hw) / 2, center_y + 18, h, COL_TEXT, 3);
 
         /* Sub-Text */
-        const char *sub = "Stell mir eine Frage oder gib eine Aufgabe.";
+        const char *sub = "Frag mich etwas oder waehle einen Vorschlag.";
         int sw = flux_fb_text_width(sub, 2);
         if (sw > fb->width - 40)
-            draw_wrapped(fb, 20, center_y + 52, fb->width - 40, sub, COL_DIM, 2, 22);
+            draw_wrapped(fb, 20, center_y + 48, fb->width - 40, sub, COL_DIM, 2, 22);
         else
-            flux_fb_text(fb, (fb->width - sw) / 2, center_y + 52, sub, COL_DIM, 2);
+            flux_fb_text(fb, (fb->width - sw) / 2, center_y + 48, sub, COL_DIM, 2);
+
+        /* Vorschlags-Chips (Icon + Label) -- icon-first Schnellstart. */
+        for (int i = 0; i < SUGGEST_N; i++) {
+            int bx, by, bw, bh;
+            suggest_geom(fb, i, &bx, &by, &bw, &bh);
+            fill_round_rect(fb, bx, by, bw, bh, bh / 2, COL_SURFACE2);
+            int isz = 20, icx = bx + 22, icy = by + bh / 2;
+            flux_icon_draw(fb, s_suggest[i].icon, icx, icy, isz, COL_ACCENT);
+            flux_fb_text(fb, icx + isz / 2 + 12, icy - 7, s_suggest[i].label,
+                         COL_TEXT_MUTED, 2);
+        }
 
     } else {
         /* Nutzer-Blase rechts */
@@ -1146,20 +1196,23 @@ void flux_ui_draw_assistant(flux_fb_t *fb, const char *last_q,
 
         /* KI-Blase links oder Lade-Animation */
         if (thinking) {
-            /* Premium-Denke-Indikator: 3 pulsierende Punkte mit Gradient */
-            int btop  = cy;
-            int bbot  = cy + 52;
-            int bwid  = 90;
-            fill_round_rect(fb, 14, btop, bwid, 52, BUBBLE_RADIUS, COL_BUBBLE_AI);
-            flux_fb_fill_rect(fb, 14, btop + BUBBLE_RADIUS/2, 2, 52 - BUBBLE_RADIUS, COL_ACCENT);
-            /* 3 Dots */
-            for (int d = 0; d < 3; d++) {
-                int dcx = 14 + 18 + d * 24;
-                int dcy = btop + 28;
-                fill_circle(fb, dcx, dcy, 5, COL_ACCENT);
-                fill_circle(fb, dcx, dcy, 3, COL_ACCENT2);
-            }
-            (void)bbot;
+            /* Lebendiger Denke-Indikator: Funken-Icon + Schimmer-Balken.
+             * Ein wandernder Lichtpunkt laeuft durch den Balken -- ruhig,
+             * "lebt", reduziert die gefuehlte Wartezeit. */
+            int btop = cy, bh = 52, bwid = 168;
+            fill_round_rect(fb, 14, btop, bwid, bh, BUBBLE_RADIUS, COL_BUBBLE_AI);
+            flux_fb_fill_rect(fb, 14, btop + BUBBLE_RADIUS/2, 2, bh - BUBBLE_RADIUS, COL_ACCENT);
+            flux_icon_draw(fb, FLUX_ICON_SPARKLES, 14 + 24, btop + bh/2, 18, COL_ACCENT);
+            /* Schimmer-Balken */
+            int sbx = 14 + 44, sby = btop + bh/2 - 3, sbw = bwid - 58, sbh = 6;
+            fill_round_rect(fb, sbx, sby, sbw, sbh, 3, COL_SURFACE3);
+            float ph = flux_shimmer(flux_now_ms(), 1100);
+            int hlw = sbw / 3;
+            int hlx = sbx + (int)(ph * (sbw + hlw)) - hlw;
+            int cx0 = hlx < sbx ? sbx : hlx;
+            int cx1 = (hlx + hlw) > (sbx + sbw) ? (sbx + sbw) : (hlx + hlw);
+            if (cx1 > cx0)
+                flux_fb_fill_gradient_h(fb, cx0, sby, cx1 - cx0, sbh, COL_ACCENT, COL_ACCENT2);
         } else if (has_a) {
             draw_bubble(fb, answer, cy, bubble_max_w, COL_BUBBLE_AI, 2, 24, 0);
         }
@@ -1245,32 +1298,50 @@ static void draw_send_arrow(flux_fb_t *fb, int cx, int cy, int s, uint32_t col) 
     flux_icon_draw(fb, FLUX_ICON_SEND, cx, cy, s, col);
 }
 
-/* Symbol-Knopf unten: abgerundete Pille + Icon + Beschriftung. */
-static void draw_action_button(flux_fb_t *fb, btn_geom_t b, uint32_t col,
-                               const char *label, int is_send) {
-    int m = 8; /* Aussenabstand zwischen den Knoepfen */
-    int bx = b.x + m, by = b.y + m / 2;
-    int bw = b.w - 2 * m, bh = b.h - m;
-    fill_round_rect(fb, bx, by, bw, bh, 18, col);
-
-    int icx = bx + bw / 2;
-    int icy = by + bh / 2 - 8;
-    if (is_send) {
-        draw_send_arrow(fb, icx + 2, icy, 22, COL_TEXT);
+/* ---- Agent-Zuordnung (indirekte Spiegelung der Subagenten) ----------
+ * Flux delegiert Aktionen intern an spezialisierte Faehigkeiten. Die UI
+ * zeigt nur *welche* Faehigkeit gerade ausfuehrt -- rein informativ, der
+ * Nutzer verwaltet diese Agenten nie selbst (siehe docs/DESIGN.md). */
+static void agent_for_action(const char *type_label, flux_icon_t *icon,
+                             const char **name) {
+    if (strcmp(type_label, "SMS") == 0) {
+        *icon = FLUX_ICON_MESSAGE_CIRCLE; *name = "Messaging-Agent";
+    } else if (strcmp(type_label, "Anruf") == 0) {
+        *icon = FLUX_ICON_PHONE_CALL;     *name = "Telefon-Agent";
+    } else if (strcmp(type_label, "E-Mail") == 0) {
+        *icon = FLUX_ICON_MAIL;           *name = "Mail-Agent";
     } else {
-        draw_thick_line(fb, icx - 9, icy - 9, icx + 9, icy + 9, 4, COL_TEXT);
-        draw_thick_line(fb, icx + 9, icy - 9, icx - 9, icy + 9, 4, COL_TEXT);
+        *icon = FLUX_ICON_SPARKLES;       *name = "Flux-Agent";
     }
-    int tw = flux_fb_text_width(label, 2);
-    flux_fb_text(fb, bx + (bw - tw) / 2, by + bh - 24, label, COL_TEXT, 2);
 }
 
-static void build_confirm_buttons(const flux_fb_t *fb, btn_geom_t out[2]) {
-    int h = 92;
+/* Kleine "<Agent> fuehrt aus"-Pille: Icon + Label + pulsierender Akzentpunkt,
+ * zentriert um cx_center bei y. Macht Delegation sicht- und spuerbar. */
+static void draw_agent_chip(flux_fb_t *fb, int cx_center, int y,
+                            flux_icon_t icon, const char *name) {
+    int isz = 16, lw = flux_fb_text_width(name, 2);
+    int pad = 14, gap = 8, dot = 4, dgap = 9;
+    int w = pad + isz + gap + lw + dgap + dot * 2 + pad;
+    int h = 30;
+    int x = cx_center - w / 2, mid = y + h / 2;
+    fill_round_rect(fb, x, y, w, h, h / 2, COL_SURFACE3);
+    flux_icon_draw(fb, icon, x + pad + isz / 2, mid, isz, COL_ACCENT);
+    flux_fb_text(fb, x + pad + isz + gap, mid - 7, name, COL_TEXT_MUTED, 2);
+    /* Akzentpunkt rechts -- "lebt" via Pulsieren (Aufrufer ruft pro Frame). */
+    float pulse = flux_pulse(flux_now_ms(), 1600);
+    fill_circle(fb, x + pad + isz + gap + lw + dgap + dot, mid,
+                dot + (int)(pulse * 1.5f), COL_ACCENT);
+}
+
+/* Drei gleich breite Symbol-Knoepfe unten: Abbrechen (X) | Bearbeiten
+ * (Stift) | Senden (Haken). Icon-first statt Textknoepfe. */
+static void build_confirm_buttons(const flux_fb_t *fb, btn_geom_t out[3]) {
+    int h = 96;
     int y = fb->height - h;
-    int w = fb->width / 2;
-    out[0] = (btn_geom_t){ 0, y, w, h };               /* Abbrechen */
-    out[1] = (btn_geom_t){ w, y, fb->width - w, h };   /* Senden */
+    int w = fb->width / 3;
+    out[0] = (btn_geom_t){ 0,     y, w,               h }; /* Abbrechen (X)     */
+    out[1] = (btn_geom_t){ w,     y, w,               h }; /* Bearbeiten (Stift)*/
+    out[2] = (btn_geom_t){ 2 * w, y, fb->width - 2*w, h }; /* Senden (Haken)    */
 }
 
 /* Gemeinsame Geometrie der antippbaren Zeilen -- von Draw UND Hit genutzt,
@@ -1278,13 +1349,14 @@ static void build_confirm_buttons(const flux_fb_t *fb, btn_geom_t out[2]) {
 static void confirm_layout(const flux_fb_t *fb, int has_subject,
                            int *card_x, int *card_y, int *card_w, int *card_h,
                            int *to_y, int *subj_y, int *div_y, int *body_y) {
-    btn_geom_t btn[2];
+    btn_geom_t btn[3];
     build_confirm_buttons(fb, btn);
     *card_x = 10;
-    *card_y = STATUSBAR_H + 78;
+    /* Platz oben fuer: grosses Aktions-Icon + Kopfzeile + Agent-Pille. */
+    *card_y = STATUSBAR_H + 168;
     *card_w = fb->width - 2 * (*card_x);
-    *card_h = btn[0].y - *card_y - 8;
-    *to_y   = *card_y + 14;
+    *card_h = btn[0].y - *card_y - 10;
+    *to_y   = *card_y + 16;
     *subj_y = *to_y + 36;
     *div_y  = (has_subject ? *subj_y : *to_y) + 36;
     *body_y = *div_y + 12;
@@ -1298,17 +1370,32 @@ void flux_ui_draw_confirm(flux_fb_t *fb, const char *type_label,
 
     int has_subject = (subject && subject[0]) ? 1 : 0;
 
-    /* Kopfzeile */
+    /* Welcher Subagent fuehrt aus? -> grosses Symbol + Agent-Pille. */
+    flux_icon_t act_icon; const char *agent_name;
+    agent_for_action(type_label, &act_icon, &agent_name);
+
+    /* Grosses Aktions-Symbol in einem Akzent-Gradient-Kreis (icon-first). */
+    int badge_cx = fb->width / 2, badge_cy = STATUSBAR_H + 52, badge_r = 34;
+    for (int dy = -badge_r; dy <= badge_r; dy++)
+        for (int dx = -badge_r; dx <= badge_r; dx++)
+            if (dx*dx + dy*dy <= badge_r*badge_r) {
+                int tt = (dy + badge_r) * 100 / (2 * badge_r + 1);
+                flux_fb_set_px(fb, badge_cx + dx, badge_cy + dy,
+                               (tt < 50) ? COL_ACCENT : COL_ACCENT2);
+            }
+    flux_icon_draw(fb, act_icon, badge_cx, badge_cy, 34, 0xFFFFFF);
+
+    /* Kopfzeile (zentriert, unter dem Symbol). */
     char header[80];
     if (strcmp(type_label, "Anruf") == 0)
         snprintf(header, sizeof(header), "Anrufen?");
     else
         snprintf(header, sizeof(header), "%s senden?", type_label);
     int hw = flux_fb_text_width(header, 3);
-    flux_fb_text(fb, (fb->width - hw) / 2, STATUSBAR_H + 16, header, COL_TEXT, 3);
-    const char *hint = "Tippe auf eine Zeile zum Ändern";
-    int hiw = flux_fb_text_width(hint, 2);
-    flux_fb_text(fb, (fb->width - hiw) / 2, STATUSBAR_H + 44, hint, COL_DIM, 2);
+    flux_fb_text(fb, (fb->width - hw) / 2, badge_cy + badge_r + 8, header, COL_TEXT, 3);
+
+    /* Agent-Pille: zeigt, welche Faehigkeit die Aktion ausfuehrt. */
+    draw_agent_chip(fb, fb->width / 2, badge_cy + badge_r + 38, act_icon, agent_name);
 
     int card_x, card_y, card_w, card_h, to_y, subj_y, div_y, body_y;
     confirm_layout(fb, has_subject, &card_x, &card_y, &card_w, &card_h,
@@ -1344,43 +1431,41 @@ void flux_ui_draw_confirm(flux_fb_t *fb, const char *type_label,
     draw_wrapped(fb, cx, body_y, card_w - 36, body[0] ? body : "(tippen)",
                  body[0] ? COL_TEXT : COL_DIM, 2, 24);
 
-    /* Drei Knoepfe unten: [Bearbeiten] [Abbrechen] [Senden] */
-    btn_geom_t btn[2];
+    /* Drei Symbol-Knoepfe unten: [X] Abbrechen | [Stift] Bearbeiten |
+     * [Haken] Senden. Icon-first, jeder Knopf >= 48px antippbar. */
+    btn_geom_t btn[3];
     build_confirm_buttons(fb, btn);
-
-    /* Abbrechen (links, outlined) */
-    int b1x = btn[0].x + 6, b1y = btn[0].y + 10;
-    int b1w = btn[0].w - 12, b1h = btn[0].h - 20;
-    fill_round_rect(fb, b1x, b1y, b1w, b1h, 12, COL_SURFACE3);
-    flux_fb_hline(fb, b1x + 12, b1y, b1w - 24, 0x3D4A60);
+    int m = 8;
+    /* Abbrechen (X, neutrale Oberflaeche) */
     {
-        int lw = flux_fb_text_width("Abbruch", 2);
-        flux_fb_text(fb, b1x + (b1w - lw) / 2, b1y + (b1h - 14) / 2, "Abbruch", COL_TEXT_MUTED, 2);
+        int bx = btn[0].x + m, by = btn[0].y + m, bw = btn[0].w - 2*m, bh = btn[0].h - 2*m;
+        fill_round_rect(fb, bx, by, bw, bh, 16, COL_SURFACE3);
+        flux_icon_draw(fb, FLUX_ICON_X, bx + bw/2, by + bh/2, 26, COL_TEXT_MUTED);
     }
-
-    /* Senden (rechts, Gradient-Filled) */
-    int b2x = btn[1].x + 6, b2y = btn[1].y + 10;
-    int b2w = btn[1].w - 12, b2h = btn[1].h - 20;
-    flux_fb_fill_gradient_v_rounded(fb, b2x, b2y, b2w, b2h, 12, 0x059669, 0x10B981);
+    /* Bearbeiten (Stift, Oberflaeche mit Akzent-Icon) */
     {
-        const char *btn_label = (strcmp(type_label, "Anruf") == 0) ? "Anrufen" : "Senden";
-        int lw = flux_fb_text_width(btn_label, 2);
-        int icon_w = 14, gap = 5;
-        int total_w = icon_w + gap + lw;
-        int sx = b2x + (b2w - total_w) / 2;
-        int mid_y = b2y + b2h / 2;
-        draw_send_arrow(fb, sx + icon_w / 2, mid_y, icon_w, 0xFFFFFF);
-        flux_fb_text(fb, sx + icon_w + gap, mid_y - 7, btn_label, 0xFFFFFF, 2);
+        int bx = btn[1].x + m, by = btn[1].y + m, bw = btn[1].w - 2*m, bh = btn[1].h - 2*m;
+        fill_round_rect(fb, bx, by, bw, bh, 16, COL_SURFACE3);
+        flux_icon_draw(fb, FLUX_ICON_PENCIL, bx + bw/2, by + bh/2, 24, COL_ACCENT);
+    }
+    /* Senden/Bestaetigen (Haken, gefuellter Gradient) */
+    {
+        int bx = btn[2].x + m, by = btn[2].y + m, bw = btn[2].w - 2*m, bh = btn[2].h - 2*m;
+        flux_fb_fill_gradient_v_rounded(fb, bx, by, bw, bh, 16, COL_ACCENT, COL_ACCENT2);
+        flux_icon_draw(fb, FLUX_ICON_CHECK, bx + bw/2, by + bh/2, 30, 0xFFFFFF);
     }
 
     flux_fb_present(fb);
 }
 
 flux_confirm_hit_t flux_ui_confirm_hit(const flux_fb_t *fb, int x, int y, int has_subject) {
-    btn_geom_t btn[2];
+    btn_geom_t btn[3];
     build_confirm_buttons(fb, btn);
     if (y >= btn[0].y) {
-        return (x < fb->width / 2) ? FLUX_CONFIRM_CANCEL : FLUX_CONFIRM_SEND;
+        int third = fb->width / 3;
+        if (x < third)       return FLUX_CONFIRM_CANCEL;
+        if (x < 2 * third)   return FLUX_CONFIRM_EDIT;
+        return FLUX_CONFIRM_SEND;
     }
 
     int card_x, card_y, card_w, card_h, to_y, subj_y, div_y, body_y;
