@@ -3144,11 +3144,8 @@ void flux_ui_draw_alarm(flux_fb_t *fb, const char *label) {
     int cx = fb->width / 2;
     int icon_y = fb->height * 25 / 100;
 
-    /* Glocken-Umriss (vereinfacht aus Rechtecken + Kreis) */
-    fill_round_rect(fb, cx - 44, icon_y, 88, 66, 18, 0xFF3333);
-    fill_circle(fb, cx, icon_y - 12, 12, 0xFF3333);   /* Kopf der Glocke */
-    flux_fb_fill_rect(fb, cx - 30, icon_y + 66, 60, 14, 0xFF3333); /* Sockel */
-    flux_fb_fill_rect(fb, cx - 12, icon_y + 80, 24, 10, 0xFF3333); /* Kloepper */
+    /* Klingelnde Glocke (Lucide bell-ring) */
+    flux_icon_draw(fb, FLUX_ICON_BELL_RING, cx, icon_y + 40, 96, 0xFF3333);
 
     /* "WECKER" in gross */
     const char *head = "WECKER";
