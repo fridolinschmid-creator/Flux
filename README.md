@@ -18,16 +18,33 @@ der in QEMU bootet, bei dem `flux-shell` auf den von `virtio-gpu`
 bereitgestellten Framebuffer zeichnet und `fluxaid` ueber den
 Unix-Socket antwortet. Bedienung komplett ohne Tastatur moeglich --
 per `virtio-tablet` simuliertem Touch (Wisch-Geste + Bildschirm-
-tastatur), Hardware-Tastatur funktioniert weiterhin parallel:
+tastatur), Hardware-Tastatur funktioniert weiterhin parallel.
 
-| Lockscreen (Wisch-Hinweis) | Entsperrt per Wisch | Bildschirmtastatur | Lokaler Intent (per Touch) | Ehrlicher Cloud-Hinweis (per Tastatur) |
+> **Zu den Bildern:** Die folgenden Screenshots werden direkt aus dem
+> echten UI-Code gerendert (`shell/tools/render_screenshots.c` ueber
+> `flux_fb_open_null()`) -- es ist exakt derselbe Zeichen-Code mit
+> denselben `flux_ui_draw_*`-Funktionen, der auf dem Geraet/in QEMU auf
+> den Framebuffer zeichnet, nur in einen RAM-Puffer statt nach `/dev/fb0`.
+> Die Symbole sind jetzt echte **Lucide-Vektor-Icons** (siehe
+> [`docs/ICONS.md`](docs/ICONS.md)).
+
+| Lockscreen (Wisch-Hinweis) | Assistent (Homescreen) | Bildschirmtastatur | Lokaler Intent | Ehrlicher Cloud-Hinweis |
 |---|---|---|---|---|
-| ![Lockscreen](docs/screenshots/01-lockscreen.png) | ![Assistent](docs/screenshots/02-assistant.png) | ![Bildschirmtastatur](docs/screenshots/03-touch-keyboard.png) | ![Lokaler Intent](docs/screenshots/04-local-intent.png) | ![Cloud-Hinweis](docs/screenshots/05-cloud-fallback.png) |
+| ![Lockscreen](docs/screenshots/01_lockscreen.png) | ![Assistent](docs/screenshots/04_assistent_leer.png) | ![Bildschirmtastatur](docs/screenshots/05_assistent_tipp.png) | ![Lokaler Intent](docs/screenshots/07_assistent_antwort.png) | ![Cloud-Hinweis](docs/screenshots/30_cloud_fallback.png) |
 
-("Akku" -> kein Sensor in QEMU vorhanden, ehrlich gemeldet statt erfunden,
-hier komplett per Touch-Tastatur eingetippt und abgesendet.
+("Akku" -> kein Sensor in QEMU vorhanden, ehrlich gemeldet statt erfunden.
 "Wer bist du" -> kein `FLUX_AI_API_KEY` gesetzt, ehrlich gemeldet statt
-Absturz oder Fantasieantwort, hier per Hardware-Tastatur gestellt.)
+Absturz oder Fantasieantwort.)
+
+### Neue Vektor-Icons (Lucide via NanoSVG)
+
+Alle Symbole stammen jetzt aus dem Open-Source-Set **Lucide** (MIT) und
+werden mit **NanoSVG** (zlib) gerastert -- gestochen scharf, einheitlich,
+in jeder Akzentfarbe einfaerbbar. Details: [`docs/ICONS.md`](docs/ICONS.md).
+
+| Einstellungen (Icons) | Kontakte | Kalender | WLAN-Auswahl |
+|---|---|---|---|
+| ![Einstellungen](docs/screenshots/13_einstellungen.png) | ![Kontakte](docs/screenshots/20_kontakte.png) | ![Kalender](docs/screenshots/19_kalender.png) | ![WLAN](docs/screenshots/31_wlan.png) |
 
 ### Neue Features (Batch 5)
 

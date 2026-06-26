@@ -29,6 +29,14 @@ typedef enum {
     FLUX_ICON_SEARCH,        /* Lupe           (Lucide: search)          */
     FLUX_ICON_WIFI,          /* WLAN           (Lucide: wifi)            */
     FLUX_ICON_BATTERY,       /* Akku           (Lucide: battery)         */
+    FLUX_ICON_LOCK,          /* Schloss        (Lucide: lock)            */
+    FLUX_ICON_SPARKLES,      /* KI/Funken      (Lucide: sparkles)        */
+    FLUX_ICON_KEY,           /* Schluessel     (Lucide: key-round)       */
+    FLUX_ICON_CPU,           /* Chip/Modell    (Lucide: cpu)             */
+    FLUX_ICON_MAIL,          /* E-Mail         (Lucide: mail)            */
+    FLUX_ICON_PALETTE,       /* Farbthema      (Lucide: palette)         */
+    FLUX_ICON_CLOCK,         /* Uhr/Auto-Sperre(Lucide: clock)           */
+    FLUX_ICON_VOLUME,        /* Lautsprecher   (Lucide: volume-2)        */
     FLUX_ICON_COUNT
 } flux_icon_t;
 

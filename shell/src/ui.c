@@ -1240,14 +1240,9 @@ static void draw_thick_line(flux_fb_t *fb, int x0, int y0, int x1, int y1,
     }
 }
 
-/* Nach rechts zeigendes gefuelltes Dreieck (Sende-Pfeil), Spitze rechts. */
+/* Sende-Symbol (Papierflieger), echtes Lucide-Icon. */
 static void draw_send_arrow(flux_fb_t *fb, int cx, int cy, int s, uint32_t col) {
-    for (int i = 0; i < s; i++) {
-        int hh = (s - i) * 7 / 10;       /* Hoehe nimmt zur Spitze ab */
-        flux_fb_fill_rect(fb, cx - s / 2 + i, cy - hh, 2, 2 * hh, col);
-    }
-    /* kleiner Schaft links fuer Papierflieger-Anmutung */
-    flux_fb_fill_rect(fb, cx - s / 2 - s / 3, cy - 1, s / 3, 3, col);
+    flux_icon_draw(fb, FLUX_ICON_SEND, cx, cy, s, col);
 }
 
 /* Symbol-Knopf unten: abgerundete Pille + Icon + Beschriftung. */
@@ -1475,75 +1470,26 @@ int flux_ui_list_hit(const flux_fb_t *fb, int x, int y, int n, int *out_index, i
 static const int *s_setting_icons = NULL;
 void flux_ui_set_setting_icons(const int *icons) { s_setting_icons = icons; }
 
-/* Zeichnet ein kleines Symbol (zentriert bei cx,cy, Kantenmass s). */
+/* Zeichnet ein kleines Symbol (zentriert bei cx,cy, Kantenmass s).
+ * Bildet die Einstellungs-Symbole auf echte Lucide-Vektor-Icons ab. */
 static void draw_setting_icon(flux_fb_t *fb, int icon, int cx, int cy, int s,
                               uint32_t col) {
     if (s < 6) return;
+    flux_icon_t id;
     switch (icon) {
-        case FLUX_SICON_LOCK: {
-            int bw = s*7/10, bh = s/2;
-            draw_ring(fb, cx, cy - bh/4, s*7/20, 2, col);                 /* Buegel */
-            fill_round_rect(fb, cx-bw/2, cy-bh/4, bw, bh, 3, col);        /* Koerper */
-            break; }
-        case FLUX_SICON_AI: {
-            int bw = s*7/10, bh = s*6/10;
-            flux_fb_fill_rect(fb, cx-1, cy-bh/2 - s/6, 2, s/6, col);      /* Antenne */
-            fill_round_rect(fb, cx-bw/2, cy-bh/2, bw, bh, 4, col);        /* Kopf */
-            fill_circle(fb, cx-bw/5, cy, s/12+1, COL_BG);                 /* Augen */
-            fill_circle(fb, cx+bw/5, cy, s/12+1, COL_BG);
-            break; }
-        case FLUX_SICON_KEY: {
-            draw_ring(fb, cx-s/5, cy, s/4, 2, col);                       /* Griff */
-            flux_fb_fill_rect(fb, cx-s/12, cy-1, s/2, 3, col);            /* Schaft */
-            flux_fb_fill_rect(fb, cx+s/6, cy+2, 2, s/6, col);            /* Zaehne */
-            flux_fb_fill_rect(fb, cx+s/3, cy+2, 2, s/6, col);
-            break; }
-        case FLUX_SICON_CHIP: {
-            int b = s*6/10;
-            flux_fb_fill_rect(fb, cx-b/2, cy-b/2, b, b, col);
-            flux_fb_fill_rect(fb, cx-b/6, cy-b/6, b/3, b/3, COL_BG);     /* Kern */
-            for (int i = -1; i <= 1; i++) {                              /* Pins */
-                flux_fb_fill_rect(fb, cx+i*b/3-1, cy-b/2-3, 2, 3, col);
-                flux_fb_fill_rect(fb, cx+i*b/3-1, cy+b/2,   2, 3, col);
-                flux_fb_fill_rect(fb, cx-b/2-3, cy+i*b/3-1, 3, 2, col);
-                flux_fb_fill_rect(fb, cx+b/2,   cy+i*b/3-1, 3, 2, col);
-            }
-            break; }
-        case FLUX_SICON_MAIL: {
-            int w = s*7/10, h = s/2;
-            flux_fb_fill_rect(fb, cx-w/2, cy-h/2, w, h, col);
-            draw_thick_line(fb, cx-w/2, cy-h/2, cx, cy, 2, COL_BG);      /* Klappe */
-            draw_thick_line(fb, cx+w/2, cy-h/2, cx, cy, 2, COL_BG);
-            break; }
-        case FLUX_SICON_WIFI: {
-            int bw = s/6;
-            for (int i = 0; i < 3; i++) {
-                int hh = s/5 + i*s/5;
-                flux_fb_fill_rect(fb, cx-s/3 + i*(bw+2), cy+s/4 - hh, bw, hh, col);
-            }
-            break; }
-        case FLUX_SICON_SEARCH: {
-            draw_ring(fb, cx-2, cy-2, s/4, 2, col);                      /* Lupe */
-            draw_thick_line(fb, cx+s/12, cy+s/12, cx+s/3, cy+s/3, 3, col);
-            break; }
-        case FLUX_SICON_THEME: {                                        /* Farbpalette */
-            fill_circle(fb, cx-s/6, cy-s/12, s/6, col);
-            fill_circle(fb, cx+s/6, cy-s/12, s/6, 0xF97316);
-            fill_circle(fb, cx,      cy+s/6, s/6, 0xA855F7);
-            break; }
-        case FLUX_SICON_CLOCK: {
-            draw_ring(fb, cx, cy, s*2/5, 2, col);
-            draw_thick_line(fb, cx, cy, cx, cy-s/4, 2, col);
-            draw_thick_line(fb, cx, cy, cx+s/5, cy, 2, col);
-            break; }
-        case FLUX_SICON_SPEAKER: {
-            flux_fb_fill_rect(fb, cx-s/3, cy-s/8, s/6, s/4, col);        /* Box */
-            for (int i = 0; i < s/4; i++)                                /* Kegel */
-                flux_fb_fill_rect(fb, cx-s/3+s/6+i, cy-s/8-i, 2, s/4+2*i, col);
-            draw_ring(fb, cx+s/6, cy, s/4, 2, col);                      /* Schallwelle */
-            break; }
-        default: break;
+        case FLUX_SICON_LOCK:    id = FLUX_ICON_LOCK;     break;
+        case FLUX_SICON_AI:      id = FLUX_ICON_SPARKLES; break;
+        case FLUX_SICON_KEY:     id = FLUX_ICON_KEY;      break;
+        case FLUX_SICON_CHIP:    id = FLUX_ICON_CPU;      break;
+        case FLUX_SICON_MAIL:    id = FLUX_ICON_MAIL;     break;
+        case FLUX_SICON_WIFI:    id = FLUX_ICON_WIFI;     break;
+        case FLUX_SICON_SEARCH:  id = FLUX_ICON_SEARCH;   break;
+        case FLUX_SICON_THEME:   id = FLUX_ICON_PALETTE;  break;
+        case FLUX_SICON_CLOCK:   id = FLUX_ICON_CLOCK;    break;
+        case FLUX_SICON_SPEAKER: id = FLUX_ICON_VOLUME;   break;
+        default: return;
     }
+    flux_icon_draw(fb, id, cx, cy, s, col);
 }
 
 /* Zeichnet eine Einstellungs-Zeile (Card-Stil). */

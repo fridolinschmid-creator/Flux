@@ -61,6 +61,42 @@ static const char *ICON_BODY[FLUX_ICON_COUNT] = {
         "<path d=\"M5 12.859a10 10 0 0 1 14 0\"/><path d=\"M8.5 16.429a5 5 0 0 1 7 0\"/>",
     [FLUX_ICON_BATTERY] =
         "<path d=\"M22 14v-4\"/><rect x=\"2\" y=\"6\" width=\"16\" height=\"12\" rx=\"2\"/>",
+    [FLUX_ICON_LOCK] =
+        "<rect width=\"18\" height=\"11\" x=\"3\" y=\"11\" rx=\"2\" ry=\"2\"/>"
+        "<path d=\"M7 11V7a5 5 0 0 1 10 0v4\"/>",
+    [FLUX_ICON_SPARKLES] =
+        "<path d=\"M11.017 2.814a1 1 0 0 1 1.966 0l1.051 5.558a2 2 0 0 0 1.594 1.594l5.558 "
+        "1.051a1 1 0 0 1 0 1.966l-5.558 1.051a2 2 0 0 0-1.594 1.594l-1.051 5.558a1 1 0 0 1"
+        "-1.966 0l-1.051-5.558a2 2 0 0 0-1.594-1.594l-5.558-1.051a1 1 0 0 1 0-1.966l5.558"
+        "-1.051a2 2 0 0 0 1.594-1.594z\"/><path d=\"M20 2v4\"/><path d=\"M22 4h-4\"/>"
+        "<circle cx=\"4\" cy=\"20\" r=\"2\"/>",
+    [FLUX_ICON_KEY] =
+        "<path d=\"M2.586 17.414A2 2 0 0 0 2 18.828V21a1 1 0 0 0 1 1h3a1 1 0 0 0 1-1v-1a1 "
+        "1 0 0 1 1-1h1a1 1 0 0 0 1-1v-1a1 1 0 0 1 1-1h.172a2 2 0 0 0 1.414-.586l.814-.814a"
+        "6.5 6.5 0 1 0-4-4z\"/><circle cx=\"16.5\" cy=\"7.5\" r=\".5\" fill=\"#ffffff\"/>",
+    [FLUX_ICON_CPU] =
+        "<path d=\"M12 20v2\"/><path d=\"M12 2v2\"/><path d=\"M17 20v2\"/><path d=\"M17 2v2\"/>"
+        "<path d=\"M2 12h2\"/><path d=\"M2 17h2\"/><path d=\"M2 7h2\"/><path d=\"M20 12h2\"/>"
+        "<path d=\"M20 17h2\"/><path d=\"M20 7h2\"/><path d=\"M7 20v2\"/><path d=\"M7 2v2\"/>"
+        "<rect x=\"4\" y=\"4\" width=\"16\" height=\"16\" rx=\"2\"/>"
+        "<rect x=\"8\" y=\"8\" width=\"8\" height=\"8\" rx=\"1\"/>",
+    [FLUX_ICON_MAIL] =
+        "<path d=\"m22 7-8.991 5.727a2 2 0 0 1-2.009 0L2 7\"/>"
+        "<rect x=\"2\" y=\"4\" width=\"20\" height=\"16\" rx=\"2\"/>",
+    [FLUX_ICON_PALETTE] =
+        "<path d=\"M12 22a1 1 0 0 1 0-20 10 9 0 0 1 10 9 5 5 0 0 1-5 5h-2.25a1.75 1.75 0 0 "
+        "0-1.4 2.8l.3.4a1.75 1.75 0 0 1-1.4 2.8z\"/>"
+        "<circle cx=\"13.5\" cy=\"6.5\" r=\".5\" fill=\"#ffffff\"/>"
+        "<circle cx=\"17.5\" cy=\"10.5\" r=\".5\" fill=\"#ffffff\"/>"
+        "<circle cx=\"6.5\" cy=\"12.5\" r=\".5\" fill=\"#ffffff\"/>"
+        "<circle cx=\"8.5\" cy=\"7.5\" r=\".5\" fill=\"#ffffff\"/>",
+    [FLUX_ICON_CLOCK] =
+        "<circle cx=\"12\" cy=\"12\" r=\"10\"/><path d=\"M12 6v6l4 2\"/>",
+    [FLUX_ICON_VOLUME] =
+        "<path d=\"M11 4.702a.705.705 0 0 0-1.203-.498L6.413 7.587A1.4 1.4 0 0 1 5.416 8H3a1 "
+        "1 0 0 0-1 1v6a1 1 0 0 0 1 1h2.416a1.4 1.4 0 0 1 .997.413l3.383 3.384A.705.705 0 0 0 "
+        "11 19.298z\"/><path d=\"M16 9a5 5 0 0 1 0 6\"/>"
+        "<path d=\"M19.364 18.364a9 9 0 0 0 0-12.728\"/>",
 };
 
 /* --- Raster-Cache: pro (Icon,Groesse) ein fertiger RGBA-Puffer ---------- */
