@@ -2096,11 +2096,83 @@ void flux_ui_draw_action_anim(flux_fb_t *fb, flux_anim_kind_t kind,
 
 /* ---- Kalender -------------------------------------------------------- */
 
-#define CAL_HEADER_H    52
-#define CAL_DAYROW_H    32
+#define CAL_HEADER_H    60
+#define CAL_DAYROW_H    24
 #define CAL_CELL_W(fb)  ((fb)->width / 7)
-#define CAL_CELL_H      58
+#define CAL_CELL_H      64
+#define CAL_GRID_ROWS   6   /* feste Hoehe (6 Wochen) -> stabiles Layout */
 #define CAL_GRID_TOP(fb) (STATUSBAR_H + CAL_HEADER_H + CAL_DAYROW_H)
+
+/* Akzentfarbe pro Termin: deterministisch aus dem Titel gehasht. So hat
+ * jeder Termin eine stabile "Kalender-Farbe" (wie Apples Kalender-Gruppen),
+ * ohne Daten zu erfinden. */
+static uint32_t cal_event_color(const char *title) {
+    static const uint32_t pal[] = {
+        0xEF4444, 0xF97316, 0xEAB308, 0x22C55E,
+        0x06B6D4, 0x3B82F6, 0xA855F7, 0xEC4899,
+    };
+    unsigned h = 2166136261u;
+    for (const char *p = title; p && *p; p++) { h ^= (unsigned char)*p; h *= 16777619u; }
+    return pal[h % (sizeof(pal) / sizeof(pal[0]))];
+}
+
+/* Zerlegt eine Termin-Zeile "YYYY-MM-DD HH:MM Titel". Gibt 1 zurueck wenn
+ * ein gueltiger Tag erkannt wurde. *hhmm bekommt "HH:MM" (oder ""), *title
+ * zeigt in die Originalzeile hinter die Uhrzeit. */
+static int cal_parse_event(const char *s, int *day, char hhmm[6], const char **title) {
+    *day = 0; hhmm[0] = '\0'; *title = "";
+    if (!s) return 0;
+    size_t len = strlen(s);
+    if (len < 10) return 0;
+    for (int i = 0; i < 10; i++) {
+        if (i == 4 || i == 7) { if (s[i] != '-') return 0; }
+        else if (s[i] < '0' || s[i] > '9') return 0;
+    }
+    *day = (s[8] - '0') * 10 + (s[9] - '0');
+    if (*day < 1 || *day > 31) { *day = 0; return 0; }
+    if (len >= 16 && s[10] == ' ' &&
+        s[11] >= '0' && s[11] <= '9' && s[13] == ':') {
+        memcpy(hhmm, s + 11, 5); hhmm[5] = '\0';
+        *title = (len > 17) ? s + 17 : "";
+    } else {
+        *title = (len > 11) ? s + 11 : "";
+    }
+    return 1;
+}
+
+/* Kopiert so viele Zeichen von src nach dst, wie in max_px (bei Skalierung
+ * scale) passen. Fuer die knappen Ereignis-Pillen in den Tageszellen. */
+static void cal_fit_text(char *dst, size_t cap, const char *src, int max_px, int scale) {
+    size_t n = 0;
+    char probe[64];
+    for (const unsigned char *p = (const unsigned char *)src; *p && n < cap - 1; p++) {
+        if (n < sizeof(probe) - 1) { probe[n] = (char)*p; probe[n + 1] = '\0'; }
+        if (flux_fb_text_width(probe, scale) > max_px) break;
+        dst[n++] = (char)*p;
+    }
+    dst[n] = '\0';
+}
+
+/* Geometrie der vier Kopfzeilen-Knoepfe -- EINZIGE Wahrheit fuer Zeichnen
+ * UND Hit-Test, damit Taps nie daneben landen. */
+typedef struct { int x, y, w, h; } cal_rect;
+static void cal_header_geom(const flux_fb_t *fb, cal_rect *prev, cal_rect *next,
+                            cal_rect *today, cal_rect *add) {
+    int W = fb->width;
+    int cy = STATUSBAR_H + CAL_HEADER_H / 2;
+    int bs = 34;
+    int by = cy - bs / 2;
+    add->w  = add->h  = bs; add->x  = W - 6 - bs;        add->y  = by;
+    next->w = next->h = bs; next->x = add->x  - 4 - bs;  next->y = by;
+    prev->w = prev->h = bs; prev->x = next->x - 4 - bs;  prev->y = by;
+    int tw = flux_fb_text_width("Heute", 2);
+    today->w = tw + 22; today->h = 30;
+    today->x = prev->x - 8 - today->w; today->y = cy - today->h / 2;
+}
+
+static int cal_pt_in(int x, int y, cal_rect r) {
+    return x >= r.x && x < r.x + r.w && y >= r.y && y < r.y + r.h;
+}
 
 static int days_in_month(int y, int m) {
     static const int d[] = {31,28,31,30,31,30,31,31,30,31,30,31};
@@ -2133,29 +2205,40 @@ void flux_ui_draw_calendar(flux_fb_t *fb, int year, int month,
 
     int cw = CAL_CELL_W(fb);
     int grid_top = CAL_GRID_TOP(fb);
+    int grid_h = CAL_GRID_ROWS * CAL_CELL_H;
 
-    /* --- Header: < Monat Jahr > --------------------------------------- */
-    int hdr_y = STATUSBAR_H + (CAL_HEADER_H - 21) / 2;
-    /* "<" Pfeil links (rounded button) */
-    fill_round_rect(fb, 6, STATUSBAR_H + 6, 38, CAL_HEADER_H - 12, 8, COL_SURFACE2);
-    flux_fb_text(fb, 16, hdr_y, "<", COL_ACCENT, 3);
-    /* ">" Pfeil rechts (rounded button) */
-    fill_round_rect(fb, fb->width - 44, STATUSBAR_H + 6, 38, CAL_HEADER_H - 12, 8, COL_SURFACE2);
-    flux_fb_text(fb, fb->width - 34, hdr_y, ">", COL_ACCENT, 3);
-    /* Monat + Jahr zentriert */
-    char title[32];
-    snprintf(title, sizeof(title), "%s %d", month_name(month), year);
-    int tw = flux_fb_text_width(title, 3);
-    flux_fb_text(fb, (fb->width - tw) / 2, hdr_y, title, COL_TEXT, 3);
+    /* --- Header: Monat (fett) + Jahr (dezent) links ------------------- */
+    int month_y = STATUSBAR_H + (CAL_HEADER_H - 21) / 2;
+    int mw = flux_fb_text_width(month_name(month), 3);
+    flux_fb_text(fb, 14, month_y, month_name(month), COL_TEXT, 3);
+    char yearstr[8];
+    snprintf(yearstr, sizeof(yearstr), "%d", year);
+    flux_fb_text(fb, 14 + mw + 8, month_y + 7, yearstr, COL_DIM, 2);
+
+    /* --- Header-Knoepfe: Chevrons, "Heute", Plus --------------------- */
+    cal_rect rp, rn, rt, ra;
+    cal_header_geom(fb, &rp, &rn, &rt, &ra);
+    fill_round_rect(fb, rp.x, rp.y, rp.w, rp.h, rp.h / 2, COL_SURFACE2);
+    flux_icon_draw(fb, FLUX_ICON_CHEVRON_LEFT,  rp.x + rp.w / 2, rp.y + rp.h / 2, 20, COL_ACCENT);
+    fill_round_rect(fb, rn.x, rn.y, rn.w, rn.h, rn.h / 2, COL_SURFACE2);
+    flux_icon_draw(fb, FLUX_ICON_CHEVRON_RIGHT, rn.x + rn.w / 2, rn.y + rn.h / 2, 20, COL_ACCENT);
+    fill_round_rect(fb, ra.x, ra.y, ra.w, ra.h, ra.h / 2, COL_SURFACE2);
+    flux_icon_draw(fb, FLUX_ICON_PLUS,          ra.x + ra.w / 2, ra.y + ra.h / 2, 20, COL_ACCENT);
+    fill_round_rect(fb, rt.x, rt.y, rt.w, rt.h, rt.h / 2, COL_SURFACE2);
+    int htw = flux_fb_text_width("Heute", 2);
+    flux_fb_text(fb, rt.x + (rt.w - htw) / 2, rt.y + (rt.h - 14) / 2, "Heute", COL_ACCENT, 2);
+
+    /* --- Wochenend-Spalten dezent absetzen ---------------------------- */
+    flux_fb_fill_rect(fb, 5 * cw, grid_top, fb->width - 5 * cw, grid_h, COL_ROW_ALT);
 
     /* --- Wochentag-Kopfzeile ------------------------------------------ */
     static const char *dow_labels[] = {"Mo","Di","Mi","Do","Fr","Sa","So"};
     for (int i = 0; i < 7; i++) {
         int bx = i * cw;
         int lw = flux_fb_text_width(dow_labels[i], 2);
-        uint32_t col = (i >= 5) ? 0xEE8855 : COL_DIM; /* Sa/So in orange */
+        uint32_t col = (i >= 5) ? 0xEE8855 : COL_TEXT_MUTED; /* Sa/So in orange */
         flux_fb_text(fb, bx + (cw - lw) / 2,
-                     STATUSBAR_H + CAL_HEADER_H + (CAL_DAYROW_H - 16) / 2,
+                     STATUSBAR_H + CAL_HEADER_H + (CAL_DAYROW_H - 14) / 2,
                      dow_labels[i], col, 2);
     }
 
@@ -2163,44 +2246,106 @@ void flux_ui_draw_calendar(flux_fb_t *fb, int year, int month,
     int first_dow = first_weekday(year, month);
     int dim = days_in_month(year, month);
 
+    /* Dezente Wochen-Trennlinien */
+    for (int r = 1; r < CAL_GRID_ROWS; r++)
+        flux_fb_hline(fb, 0, grid_top + r * CAL_CELL_H, fb->width, COL_SURFACE2);
+
     for (int day = 1; day <= dim; day++) {
         int cell_idx = first_dow + day - 1; /* 0-based cell in grid */
         int row = cell_idx / 7;
         int col_idx = cell_idx % 7;
         int cx2 = col_idx * cw;
         int cy = grid_top + row * CAL_CELL_H;
+        int is_today = (today_day > 0 && day == today_day);
+        int is_sel   = (day == selected_day);
+        int is_weekend = (col_idx >= 5);
 
-        /* Cell background */
-        if (day == selected_day) {
-            fill_round_rect(fb, cx2 + 2, cy + 2, cw - 4, CAL_CELL_H - 4, 6, COL_SURFACE3);
-            flux_fb_fill_rect(fb, cx2 + 2, cy + 2, 3, CAL_CELL_H - 4, COL_ACCENT);
-        } else if (day == today_day) {
-            fill_round_rect(fb, cx2 + 2, cy + 2, cw - 4, CAL_CELL_H - 4, 6, 0x052E16);
-            flux_fb_fill_rect(fb, cx2 + 2, cy + 2, 3, CAL_CELL_H - 4, 0x22C55E);
-        }
+        /* Markierung des ausgewaehlten Tages: gefuellte Zelle */
+        if (is_sel)
+            fill_round_rect(fb, cx2 + 3, cy + 3, cw - 6, CAL_CELL_H - 6, 8, COL_SURFACE3);
 
-        /* Day number */
+        /* Tageszahl -- "Heute" als gefuellter Akzent-Kreis */
         char daystr[4]; snprintf(daystr, sizeof(daystr), "%d", day);
         int dw = flux_fb_text_width(daystr, 2);
-        uint32_t tcol = (day == selected_day) ? COL_TEXT :
-                        (day == today_day)     ? 0x22C55E : COL_DIM;
-        flux_fb_text(fb, cx2 + (cw - dw) / 2, cy + (CAL_CELL_H - 16) / 2, daystr, tcol, 2);
+        int num_cx = cx2 + cw / 2;
+        int num_cy = cy + 15;
+        if (is_today) {
+            fill_circle(fb, num_cx, num_cy, 12, COL_ACCENT);
+            flux_fb_text(fb, num_cx - dw / 2, num_cy - 7, daystr, COL_BG, 2);
+        } else {
+            uint32_t tcol = is_sel ? COL_TEXT :
+                            is_weekend ? COL_TEXT_MUTED : COL_TEXT;
+            flux_fb_text(fb, num_cx - dw / 2, num_cy - 7, daystr, tcol, 2);
+        }
+
+        /* Termin-Marker: bis zu zwei farbige Pillen + Ueberlauf-Zaehler */
+        int ecount = 0;
+        const char *etitles[2]; uint32_t ecolors[2];
+        for (int e = 0; e < n_events; e++) {
+            int ed; char ehh[6]; const char *et;
+            if (!cal_parse_event(event_strs[e], &ed, ehh, &et)) continue;
+            if (ed != day) continue;
+            if (ecount < 2) {
+                etitles[ecount] = (et && et[0]) ? et : "Termin";
+                ecolors[ecount] = cal_event_color(et && et[0] ? et : event_strs[e]);
+            }
+            ecount++;
+        }
+        int pill_x = cx2 + 4, pill_w = cw - 8, pill_h = 11;
+        int pill_y = cy + 30;
+        int shown = ecount < 2 ? ecount : 2;
+        for (int k = 0; k < shown; k++) {
+            fill_round_rect(fb, pill_x, pill_y, pill_w, pill_h, 3, ecolors[k]);
+            char fit[24];
+            cal_fit_text(fit, sizeof(fit), etitles[k], pill_w - 6, 1);
+            flux_fb_text(fb, pill_x + 3, pill_y + 2, fit, COL_TEXT, 1);
+            pill_y += pill_h + 2;
+        }
+        if (ecount > 2) {
+            char more[8]; snprintf(more, sizeof(more), "+%d", ecount - 2);
+            flux_fb_text(fb, pill_x + 2, pill_y + 1, more, COL_TEXT_MUTED, 1);
+        }
     }
 
-    /* --- Ereignisse fuer ausgewaehlten Tag ------------------------------ */
-    int ev_y = grid_top + ((first_dow + dim - 1) / 7 + 1) * CAL_CELL_H + 8;
-    if (ev_y > fb->height - LIST_BACK_H - 8) ev_y = grid_top + 6 * CAL_CELL_H + 8;
+    /* --- Tagesdetail unter dem Raster: Termine als Karten ------------- */
+    static const char *wday_long[] = {
+        "Montag","Dienstag","Mittwoch","Donnerstag","Freitag","Samstag","Sonntag"
+    };
+    int ev_y = grid_top + grid_h + 12;
+    int ev_bottom = fb->height - LIST_BACK_H - 8;
 
-    if (n_events > 0) {
-        const char *ev_title = "Termine:";
-        flux_fb_text(fb, 12, ev_y, ev_title, COL_ACCENT, 2);
-        ev_y += 24;
-        for (int i = 0; i < n_events && ev_y < fb->height - LIST_BACK_H - 20; i++) {
-            draw_wrapped(fb, 20, ev_y, fb->width - 32, event_strs[i], COL_TEXT, 2, 24);
-            ev_y += 28;
+    if (selected_day > 0) {
+        int wd = (first_dow + selected_day - 1) % 7;
+        char hdr[48];
+        snprintf(hdr, sizeof(hdr), "%s, %d. %s",
+                 wday_long[wd], selected_day, month_name(month));
+        flux_fb_text(fb, 16, ev_y, hdr, COL_TEXT, 2);
+        flux_fb_fill_gradient_h(fb, 16, ev_y + 20, 80, 2, COL_ACCENT, COL_ACCENT2);
+        ev_y += 32;
+
+        int any = 0;
+        for (int e = 0; e < n_events && ev_y + 44 <= ev_bottom; e++) {
+            int ed; char ehh[6]; const char *et;
+            if (!cal_parse_event(event_strs[e], &ed, ehh, &et)) continue;
+            if (ed != selected_day) continue;
+            any = 1;
+            uint32_t col = cal_event_color(et && et[0] ? et : event_strs[e]);
+            int card_x = 12, card_w = fb->width - 24, card_h = 40;
+            fill_round_rect(fb, card_x, ev_y, card_w, card_h, 10, COL_SURFACE2);
+            flux_fb_fill_rect(fb, card_x, ev_y + 6, 4, card_h - 12, col);
+            int ty = ev_y + (card_h - 14) / 2;
+            if (ehh[0]) flux_fb_text(fb, card_x + 16, ty, ehh, COL_TEXT, 2);
+            int title_x = card_x + (ehh[0] ? 84 : 16);
+            char fit[64];
+            cal_fit_text(fit, sizeof(fit), (et && et[0]) ? et : "Termin",
+                         card_x + card_w - title_x - 10, 2);
+            flux_fb_text(fb, title_x, ty, fit, COL_TEXT_MUTED, 2);
+            ev_y += card_h + 8;
         }
-    } else if (selected_day > 0) {
-        flux_fb_text(fb, 12, ev_y, "(Keine Termine)", COL_DIM, 2);
+        if (!any)
+            flux_fb_text(fb, 16, ev_y + 2, "Keine Termine an diesem Tag.", COL_DIM, 2);
+    } else {
+        flux_fb_text(fb, 16, ev_y, "Tippe auf einen Tag fuer Details.", COL_DIM, 2);
     }
 
     draw_back_bar(fb, "Zurück");
@@ -2208,27 +2353,28 @@ void flux_ui_draw_calendar(flux_fb_t *fb, int year, int month,
 }
 
 int flux_ui_calendar_hit(const flux_fb_t *fb, int x, int y,
-                          int *day, int *prev_month, int *next_month) {
+                          int *day, int *prev_month, int *next_month,
+                          int *today_btn, int *add_btn) {
     *day = 0; *prev_month = 0; *next_month = 0;
+    *today_btn = 0; *add_btn = 0;
 
     if (y >= fb->height - LIST_BACK_H) return 0; /* back bar handled by caller */
 
-    /* Navigation arrows */
-    if (y >= STATUSBAR_H && y < STATUSBAR_H + CAL_HEADER_H) {
-        if (x >= 4 && x < 44) { *prev_month = 1; return 1; }
-        if (x >= fb->width - 44 && x < fb->width - 4) { *next_month = 1; return 1; }
-        return 0;
-    }
+    /* Kopfzeilen-Knoepfe (gleiche Geometrie wie beim Zeichnen) */
+    cal_rect rp, rn, rt, ra;
+    cal_header_geom(fb, &rp, &rn, &rt, &ra);
+    if (cal_pt_in(x, y, rp)) { *prev_month = 1; return 1; }
+    if (cal_pt_in(x, y, rn)) { *next_month = 1; return 1; }
+    if (cal_pt_in(x, y, rt)) { *today_btn  = 1; return 1; }
+    if (cal_pt_in(x, y, ra)) { *add_btn    = 1; return 1; }
 
-    /* Day cells */
+    /* Tageszellen */
     if (y < CAL_GRID_TOP(fb)) return 0;
     int row = (y - CAL_GRID_TOP(fb)) / CAL_CELL_H;
+    if (row >= CAL_GRID_ROWS) return 0; /* Detailbereich unter dem Raster */
     int col_idx = x / CAL_CELL_W(fb);
-    int cell_idx = row * 7 + col_idx;
-    /* We need year/month to compute first_dow; pass dummy -- caller knows */
-    /* Actually we need the caller to pass day_offset. Let's embed it here.
-     * We return the cell index and let the caller map to day. */
-    *day = cell_idx; /* raw cell index -- caller adjusts by first_weekday */
+    if (col_idx > 6) col_idx = 6;
+    *day = row * 7 + col_idx; /* Roh-Zellenindex -- Aufrufer rechnet via first_weekday um */
     return 1;
 }
 

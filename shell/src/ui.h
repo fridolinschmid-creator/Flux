@@ -178,10 +178,12 @@ void flux_ui_draw_calendar(flux_fb_t *fb, int year, int month,
                             int today_day, int selected_day,
                             const char **event_strs, int n_events);
 
-/* Gibt 1 bei Treffer. Setzt *day (1-31) bei Tagszellen,
- * *prev_month / *next_month bei den Navigationspfeilen. */
+/* Gibt 1 bei Treffer. Setzt *day (Roh-Zellenindex) bei Tageszellen,
+ * *prev_month / *next_month bei den Chevron-Knoepfen, *today_btn beim
+ * "Heute"-Knopf, *add_btn beim Plus-Knopf. */
 int flux_ui_calendar_hit(const flux_fb_t *fb, int x, int y,
-                          int *day, int *prev_month, int *next_month);
+                          int *day, int *prev_month, int *next_month,
+                          int *today_btn, int *add_btn);
 
 /* ---- Kontakte -------------------------------------------------------
  * names/details parallel (z.B. "+49 151 ...  ich@mail.de").

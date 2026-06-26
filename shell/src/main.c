@@ -622,6 +622,15 @@ static void load_cal_events(int year, int month) {
     fclose(f);
 }
 
+/* "Heute"-Tag nur hervorheben, wenn der angezeigte Monat auch der reale
+ * aktuelle Monat ist -- sonst leuchtet sonst in jedem Monat dieselbe Zahl. */
+static int cal_today_view(void) {
+    time_t t = time(NULL); struct tm m; localtime_r(&t, &m);
+    if (cal_year == m.tm_year + 1900 && cal_month == m.tm_mon + 1)
+        return m.tm_mday;
+    return 0;
+}
+
 /* Kontakte */
 #define CONTACTS_MAX 50
 static char contact_names_buf[CONTACTS_MAX][64];
@@ -1039,7 +1048,7 @@ static void redraw_current_screen(flux_fb_t *fb, flux_screen_t screen,
         case FLUX_SCREEN_FILE_VIEWER:
             flux_ui_draw_file_viewer(fb, viewer_path, viewer_content, viewer_scroll); break;
         case FLUX_SCREEN_CALENDAR:
-            flux_ui_draw_calendar(fb, cal_year, cal_month, cal_today_day,
+            flux_ui_draw_calendar(fb, cal_year, cal_month, cal_today_view(),
                                    cal_selected_day, cal_event_strs, cal_n_events); break;
         case FLUX_SCREEN_CONTACTS:
             flux_ui_draw_contacts(fb, contact_names_p, contact_details_p,
@@ -1931,7 +1940,7 @@ int main(void) {
                     flux_ui_draw_files(&fb, files_path, file_names, file_metas,
                                        file_n, file_truncated, file_selected);
                 else if (screen == FLUX_SCREEN_CALENDAR)
-                    flux_ui_draw_calendar(&fb, cal_year, cal_month, cal_today_day,
+                    flux_ui_draw_calendar(&fb, cal_year, cal_month, cal_today_view(),
                                           cal_selected_day, cal_event_strs, cal_n_events);
                 else if (screen == FLUX_SCREEN_CONTACTS)
                     flux_ui_draw_contacts(&fb, contact_names_p, contact_details_p,
@@ -2103,8 +2112,9 @@ int main(void) {
                 continue;
             }
 
-            int hit_cell = 0, prev_m = 0, next_m = 0;
-            if (flux_ui_calendar_hit(&fb, ev.x, ev.y, &hit_cell, &prev_m, &next_m)) {
+            int hit_cell = 0, prev_m = 0, next_m = 0, today_btn = 0, add_btn = 0;
+            if (flux_ui_calendar_hit(&fb, ev.x, ev.y, &hit_cell, &prev_m, &next_m,
+                                     &today_btn, &add_btn)) {
                 if (prev_m) {
                     if (--cal_month < 1)  { cal_month = 12; cal_year--; }
                     load_cal_events(cal_year, cal_month);
@@ -2113,6 +2123,19 @@ int main(void) {
                     if (++cal_month > 12) { cal_month = 1;  cal_year++; }
                     load_cal_events(cal_year, cal_month);
                     cal_selected_day = 0;
+                } else if (today_btn) {
+                    /* Zurueck zum aktuellen Monat + heutigen Tag markieren */
+                    time_t _t = time(NULL); struct tm _m; localtime_r(&_t, &_m);
+                    cal_year  = _m.tm_year + 1900;
+                    cal_month = _m.tm_mon + 1;
+                    cal_today_day = _m.tm_mday;
+                    cal_selected_day = _m.tm_mday;
+                    load_cal_events(cal_year, cal_month);
+                } else if (add_btn) {
+                    /* Ehrlicher Platzhalter: "Termin hinzufuegen" ist noch
+                     * nicht implementiert. Kurzes Tipp-Feedback, keine
+                     * erfundenen Daten. */
+                    animate_ripple(&fb, ev.x, ev.y);
                 } else {
                     /* Zellenindex → Tagesnummer */
                     static const int ft[] = {0,3,2,5,0,3,5,1,4,6,2,4};
@@ -2128,7 +2151,7 @@ int main(void) {
                         load_cal_events(cal_year, cal_month);
                     }
                 }
-                flux_ui_draw_calendar(&fb, cal_year, cal_month, cal_today_day,
+                flux_ui_draw_calendar(&fb, cal_year, cal_month, cal_today_view(),
                                        cal_selected_day, cal_event_strs, cal_n_events);
             }
             continue;
@@ -2695,7 +2718,7 @@ int main(void) {
                 animate_ripple(&fb, ev.x, ev.y);
                 uint32_t *old = capture_frame(&fb);
                 screen = FLUX_SCREEN_CALENDAR;
-                flux_ui_draw_calendar(&fb, cal_year, cal_month, cal_today_day,
+                flux_ui_draw_calendar(&fb, cal_year, cal_month, cal_today_view(),
                                        cal_selected_day, cal_event_strs, cal_n_events);
                 animate_slide_in(&fb, old);
                 free(old);
@@ -2819,7 +2842,7 @@ int main(void) {
                 load_cal_events(cal_year, cal_month);
                 uint32_t *old = capture_frame(&fb);
                 screen = FLUX_SCREEN_CALENDAR;
-                flux_ui_draw_calendar(&fb, cal_year, cal_month, cal_today_day,
+                flux_ui_draw_calendar(&fb, cal_year, cal_month, cal_today_view(),
                                        cal_selected_day, cal_event_strs, cal_n_events);
                 animate_slide_in(&fb, old);
                 free(old);

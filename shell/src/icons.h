@@ -41,6 +41,9 @@ typedef enum {
     FLUX_ICON_PHONE,         /* Hoerer (annehmen)(Lucide: phone)         */
     FLUX_ICON_PHONE_OFF,     /* Auflegen       (Lucide: phone-off)       */
     FLUX_ICON_PHONE_CALL,    /* Anruf laeuft   (Lucide: phone-call)      */
+    FLUX_ICON_CHEVRON_LEFT,  /* Pfeil links    (Lucide: chevron-left)    */
+    FLUX_ICON_CHEVRON_RIGHT, /* Pfeil rechts   (Lucide: chevron-right)   */
+    FLUX_ICON_PLUS,          /* Plus/Hinzufuegen(Lucide: plus)           */
     FLUX_ICON_COUNT
 } flux_icon_t;
 

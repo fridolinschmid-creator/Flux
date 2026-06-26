@@ -223,10 +223,14 @@ int main(int argc, char *argv[]) {
     flux_ui_set_accent(0x4FD1C5);
     {
         const char *evs[] = {
+            "2026-06-12 19:00 Friedensfest",
+            "2026-06-12 09:30 Zahnarzt",
+            "2026-06-12 14:00 Team-Sync",
             "2026-06-20 14:00 Arzttermin",
             "2026-06-25 09:00 Meeting mit Team",
+            "2026-06-25 18:30 Abendessen",
         };
-        flux_ui_draw_calendar(&fb, 2026, 6, today_day, today_day, evs, 2);
+        flux_ui_draw_calendar(&fb, 2026, 6, today_day, 20, evs, 6);
     }
     save_png(&fb, outdir, "19_kalender");
 
@@ -296,8 +300,11 @@ int main(int argc, char *argv[]) {
 
     /* 24 -- KI-Overlay über Kalender (#2: aktueller Tag) */
     {
-        const char *evs[] = { "2026-06-20 14:00 Arzttermin" };
-        flux_ui_draw_calendar(&fb, 2026, 6, today_day, today_day, evs, 1);
+        const char *evs[] = {
+            "2026-06-20 14:00 Arzttermin",
+            "2026-06-12 19:00 Friedensfest",
+        };
+        flux_ui_draw_calendar(&fb, 2026, 6, today_day, 20, evs, 2);
     }
     flux_ui_draw_ai_overlay(&fb,
         "Kalender: Juni 2026",

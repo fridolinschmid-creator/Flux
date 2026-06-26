@@ -118,6 +118,12 @@ static const char *ICON_BODY[FLUX_ICON_COUNT] = {
         "<path d=\"M13.832 16.568a1 1 0 0 0 1.213-.303l.355-.465A2 2 0 0 1 17 15h3a2 2 0 0 1 2 "
         "2v3a2 2 0 0 1-2 2A18 18 0 0 1 2 4a2 2 0 0 1 2-2h3a2 2 0 0 1 2 2v3a2 2 0 0 1-.8 1.6l"
         "-.468.351a1 1 0 0 0-.292 1.233 14 14 0 0 0 6.392 6.384\"/>",
+    [FLUX_ICON_CHEVRON_LEFT] =
+        "<path d=\"m15 18-6-6 6-6\"/>",
+    [FLUX_ICON_CHEVRON_RIGHT] =
+        "<path d=\"m9 18 6-6-6-6\"/>",
+    [FLUX_ICON_PLUS] =
+        "<path d=\"M5 12h14\"/><path d=\"M12 5v14\"/>",
 };
 
 /* --- Raster-Cache: pro (Icon,Groesse) ein fertiger RGBA-Puffer ---------- */
