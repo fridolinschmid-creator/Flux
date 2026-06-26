@@ -122,6 +122,65 @@ static void animate_action(flux_fb_t *fb, flux_anim_kind_t kind,
     }
 }
 
+/* Speichert den KI-Mitschnitt eines Anrufs als Markdown unter
+ * /home/user/Anrufe/. Ohne Mikrofon/Whisper bleibt das Transkript leer --
+ * dann wird ein ehrlicher Hinweis geschrieben. Die Struktur ist schon die,
+ * die ein echtes Whisper-Backend spaeter nur noch fuellen muss. Liegt
+ * echter Transkript-Text vor, holt die KI zusaetzlich eine Zusammenfassung.
+ * status: Rueckmeldung fuer die UI (Pfad oder Fehler). */
+static void save_call_log(const char *name, const char *number,
+                          const char *transcript, const char *tel_note,
+                          int duration_s, char *status, size_t status_cap) {
+    mkdir("/home/user/Anrufe", 0755);
+    time_t nt = time(NULL); struct tm tmv; localtime_r(&nt, &tmv);
+
+    /* Dateiname: Anruf_<Name>_<Zeit>.md, Name auf [A-Za-z0-9_] reduziert. */
+    char safe[40]; int j = 0;
+    for (const char *p = (name && *name) ? name : "Unbekannt";
+         *p && j < (int)sizeof(safe) - 1; p++) {
+        char c = *p;
+        safe[j++] = ((c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') ||
+                     (c >= '0' && c <= '9')) ? c : '_';
+    }
+    safe[j] = '\0';
+    char stamp[20]; strftime(stamp, sizeof(stamp), "%Y%m%d_%H%M%S", &tmv);
+    char path[256];
+    snprintf(path, sizeof(path), "/home/user/Anrufe/Anruf_%s_%s.md", safe, stamp);
+
+    FILE *f = fopen(path, "w");
+    if (!f) { snprintf(status, status_cap, "Mitschnitt konnte nicht gespeichert werden."); return; }
+
+    char hdr[64]; strftime(hdr, sizeof(hdr), "%d.%m.%Y %H:%M", &tmv);
+    fprintf(f, "# Anruf mit %s\n\n", (name && *name) ? name : "Unbekannt");
+    fprintf(f, "- Datum: %s\n", hdr);
+    if (number && *number) fprintf(f, "- Nummer: %s\n", number);
+    fprintf(f, "- Dauer: %d:%02d\n", duration_s / 60, duration_s % 60);
+    if (tel_note && *tel_note) fprintf(f, "- Verbindung: %s\n", tel_note);
+
+    fprintf(f, "\n## Mitschnitt (KI-Transkription)\n\n");
+    if (transcript && *transcript) {
+        fprintf(f, "%s\n", transcript);
+    } else {
+        fprintf(f, "*(Keine Transkription -- kein Mikrofon/Whisper auf diesem Geraet. "
+                   "Mit Mikrofon + lokalem whisper.cpp fuellt sich dieser Abschnitt "
+                   "automatisch waehrend des Gespraechs.)*\n");
+    }
+
+    fprintf(f, "\n## Zusammenfassung (KI)\n\n");
+    if (transcript && *transcript) {
+        char q[8300]; char sum[2048];
+        snprintf(q, sizeof(q),
+                 "Fasse dieses Telefonat in hoechstens 3 Stichpunkten zusammen:\n%.7000s",
+                 transcript);
+        flux_ipc_ask(q, sum, sizeof(sum));
+        fprintf(f, "%s\n", sum);
+    } else {
+        fprintf(f, "*(Folgt automatisch, sobald ein Transkript vorliegt.)*\n");
+    }
+    fclose(f);
+    snprintf(status, status_cap, "Mitschnitt gespeichert: %s", path);
+}
+
 /* Eingangsanimation der Einstellungen: die Zeilen fliegen nacheinander
  * (abwechselnd von links/rechts) herein, ihr Symbol "poppt" auf. Ein Tap
  * beschleunigt auf 4x, ein weiterer Tap ueberspringt den Rest -- damit man
@@ -688,10 +747,13 @@ static char voice_verify_msg[256] = {0};
 /* Alarm */
 static char alarm_label[256] = {0};
 
-/* Anruf-Vollbildschirm */
-static char call_name[96]   = {0};
-static char call_number[96] = {0};
-static int  call_connected  = 0;
+/* Anruf-Vollbildschirm + KI-Mitschnitt */
+static char   call_name[96]   = {0};
+static char   call_number[96] = {0};
+static int    call_connected  = 0;
+static time_t call_start_t    = 0;
+static char   call_transcript[8192] = {0};   /* Whisper-Transkript (Stub: leer) */
+static char   call_tel_note[160]    = {0};   /* ehrliche Telefonie-Meldung */
 
 /* Nutzungsgewohnheiten */
 #define HABITS_MAX 200
@@ -1008,7 +1070,8 @@ static void redraw_current_screen(flux_fb_t *fb, flux_screen_t screen,
         case FLUX_SCREEN_ALARM:
             flux_ui_draw_alarm(fb, alarm_label); break;
         case FLUX_SCREEN_CALL:
-            flux_ui_draw_call(fb, call_name, call_number, call_connected); break;
+            flux_ui_draw_call(fb, call_name, call_number, call_connected,
+                              call_connected ? (int)(time(NULL) - call_start_t) : 0); break;
         case FLUX_SCREEN_HABITS:
             flux_ui_draw_habits(fb, habits_p, habits_n, habits_scroll); break;
         default: break;
@@ -1278,8 +1341,10 @@ int main(void) {
         int maxfd = have_input ? flux_input_add_fds(&in, &rfds) : -1;
         /* Waehrend der Aufnahme schneller ticken (~10 fps) fuer eine fluessige
          * Mikrofon-Animation, sonst 1 s (stromsparend). */
-        struct timeval tv = voice_active ? (struct timeval){ 0, 100000 }
-                                         : (struct timeval){ 1, 0 };
+        struct timeval tv = (voice_active ||
+                             (screen == FLUX_SCREEN_CALL && call_connected))
+                                ? (struct timeval){ 0, 100000 }
+                                : (struct timeval){ 1, 0 };
         int ready = (maxfd >= 0) ? select(maxfd + 1, &rfds, NULL, NULL, &tv) : (sleep(1), 0);
 
         if (ready <= 0) {
@@ -1309,6 +1374,11 @@ int main(void) {
             /* Kein Input -- Uhr auf dem Lockscreen, Auto-Sperre pruefen. */
             if (screen == FLUX_SCREEN_LOCK) {
                 flux_ui_draw_lock(&fb);
+            } else if (screen == FLUX_SCREEN_CALL && call_connected) {
+                /* Laufendes Gespraech: Timer + Rec-Punkt aktualisieren,
+                 * Auto-Sperre ausgesetzt. */
+                flux_ui_draw_call(&fb, call_name, call_number, call_connected,
+                                  (int)(time(NULL) - call_start_t));
             } else {
                 char auto_lock_s[16] = {0};
                 flux_config_get("auto_lock", auto_lock_s, sizeof(auto_lock_s));
@@ -1562,8 +1632,10 @@ int main(void) {
                              pending_action.to[0] ? pending_action.to : "Unbekannt");
                     call_number[0] = '\0';
                     call_connected = 0;
+                    call_transcript[0] = '\0';
+                    call_tel_note[0] = '\0';
                     screen = FLUX_SCREEN_CALL;
-                    flux_ui_draw_call(&fb, call_name, call_number, call_connected);
+                    flux_ui_draw_call(&fb, call_name, call_number, call_connected, 0);
                     continue;
                 }
                 /* Mail/SMS: animiertes Symbol (Papierflieger / Sprechblase). */
@@ -2425,20 +2497,26 @@ int main(void) {
             if (ev.type == FLUX_EV_TAP) {
                 flux_call_hit_t h = flux_ui_call_hit(&fb, ev.x, ev.y, call_connected);
                 if (h == FLUX_CALL_ACCEPT && !call_connected) {
-                    /* Jetzt erst den Anruf wirklich aufbauen (Telefonie-Stub). */
+                    /* Annehmen: Telefonie-Stub anstossen (ehrliche Meldung
+                     * merken) und das Gespraech samt KI-Mitschnitt starten. */
                     char req[FLUX_MAX_LINE];
                     flux_action_build_request(&pending_action, req, sizeof(req));
-                    flux_ipc_send_raw(req, answer_buf, sizeof(answer_buf));
-                    if (strstr(answer_buf, "Verbunden")) {
-                        call_connected = 1;
-                        flux_ui_draw_call(&fb, call_name, call_number, call_connected);
-                    } else {
-                        /* Ehrliche Meldung (z.B. kein Modem) -> Assistent */
-                        screen = FLUX_SCREEN_ASSISTANT;
-                        flux_ui_draw_assistant(&fb, last_q, input_buf, answer_buf, 0);
-                    }
+                    flux_ipc_send_raw(req, call_tel_note, sizeof(call_tel_note));
+                    for (char *p = call_tel_note; *p; p++)
+                        if (*p == '\n' || *p == '\r') { *p = '\0'; break; }
+                    call_connected = 1;
+                    call_start_t   = time(NULL);
+                    call_transcript[0] = '\0';   /* kein Mikrofon -> Stub bleibt leer */
+                    flux_ui_draw_call(&fb, call_name, call_number, call_connected, 0);
                 } else if (h == FLUX_CALL_HANGUP) {
-                    snprintf(answer_buf, sizeof(answer_buf), "Anruf beendet.");
+                    if (call_connected) {
+                        /* Auflegen: Mitschnitt speichern (KI-Transkript-Struktur). */
+                        int dur = (int)(time(NULL) - call_start_t);
+                        save_call_log(call_name, call_number, call_transcript,
+                                      call_tel_note, dur, answer_buf, sizeof(answer_buf));
+                    } else {
+                        snprintf(answer_buf, sizeof(answer_buf), "Anruf abgelehnt.");
+                    }
                     call_connected = 0;
                     screen = FLUX_SCREEN_ASSISTANT;
                     flux_ui_draw_assistant(&fb, last_q, input_buf, answer_buf, 0);

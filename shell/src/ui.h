@@ -354,9 +354,10 @@ void flux_ui_draw_alarm(flux_fb_t *fb, const char *label);
  * Name + Nummer, unten zwei runde Knoepfe -- gruen "Annehmen" (Hoerer),
  * rot "Auflegen" (durchgestrichener Hoerer).
  * connected=0: klingelt/ruft an (beide Knoepfe). connected=1: Gespraech
- * laeuft (nur der rote Auflegen-Knopf). */
+ * laeuft (Timer + Aufnahme-Indikator, nur der rote Auflegen-Knopf).
+ * elapsed_s: Gespraechsdauer in Sekunden (nur bei connected genutzt). */
 void flux_ui_draw_call(flux_fb_t *fb, const char *name, const char *number,
-                       int connected);
+                       int connected, int elapsed_s);
 
 /* Hit-Test fuer den Anruf-Screen:
  *   FLUX_CALL_ACCEPT (1) = gruener Annehmen-Knopf

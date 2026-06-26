@@ -440,11 +440,11 @@ int main(int argc, char *argv[]) {
     save_png(&fb, outdir, "38_alarm_lang");
 
     /* 38b -- Vollbild-Anruf: annehmen (gruen) / auflegen (rot) */
-    flux_ui_draw_call(&fb, "Stefan Schmied", "+49 151 12345678", 0);
+    flux_ui_draw_call(&fb, "Stefan Schmied", "+49 151 12345678", 0, 0);
     save_png(&fb, outdir, "38b_anruf");
 
-    /* 38c -- Anruf verbunden (nur Auflegen) */
-    flux_ui_draw_call(&fb, "Stefan Schmied", "+49 151 12345678", 1);
+    /* 38c -- Anruf verbunden: KI nimmt auf (Timer + Rec-Indikator) */
+    flux_ui_draw_call(&fb, "Stefan Schmied", "+49 151 12345678", 1, 125);
     save_png(&fb, outdir, "38c_anruf_verbunden");
 
     /* 39 -- Nutzungsgewohnheiten (mehrere Eintraege, reales Format aus habits.c) */

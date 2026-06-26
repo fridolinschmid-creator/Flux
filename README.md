@@ -46,16 +46,29 @@ in jeder Akzentfarbe einfaerbbar. Details: [`docs/ICONS.md`](docs/ICONS.md).
 |---|---|---|---|
 | ![Einstellungen](docs/screenshots/13_einstellungen.png) | ![Kontakte](docs/screenshots/20_kontakte.png) | ![Kalender](docs/screenshots/19_kalender.png) | ![WLAN](docs/screenshots/31_wlan.png) |
 
-### Vollbild-Anruf (annehmen / auflegen)
+### Vollbild-Anruf mit KI-Mitschnitt (annehmen / auflegen)
 
 Im selben Stil wie der Wecker: grosses Telefon-Symbol, Name + Nummer und
 zwei runde Knoepfe -- **gruen "Annehmen"** (Hoerer) und **rot "Auflegen"**
 (durchgestrichener Hoerer), beides echte Lucide-Icons. Erscheint nach der
-Bestaetigung eines Anrufs (`FLUX_SCREEN_CALL`). Erst ein Tipp auf
-"Annehmen" schickt die `X:`-Anfrage an `fluxaid` -- ohne Modem kommt die
-ehrliche "kein Modem"-Meldung statt eines erfundenen Gespraechs.
+Bestaetigung eines Anrufs (`FLUX_SCREEN_CALL`).
 
-| Eingehender Anruf | Verbunden |
+**KI-Mitschnitt:** Sobald der Anruf angenommen ist, zeigt der Screen einen
+laufenden Timer und einen roten **"KI nimmt auf"**-Indikator -- die KI
+schneidet das Gespraech mit. Beim **Auflegen** wird der Mitschnitt
+automatisch als Markdown unter `/home/user/Anrufe/` gespeichert (Datum,
+Nummer, Dauer, Transkript und eine KI-Zusammenfassung); ueber den
+Datei-Browser einsehbar.
+
+Ehrlich wie der Rest von Flux: QEMU/Pi 5 haben **kein Mikrofon** und
+(noch) kein lokales `whisper.cpp`, also bleibt das Transkript vorerst ein
+Stub -- die gespeicherte Datei sagt das klar und ist exakt so aufgebaut,
+dass ein echtes Whisper-Backend den Abschnitt nur noch fuellen muss
+(dann liefert die KI auch die Zusammenfassung). Beim Annehmen geht
+ausserdem die `X:`-Anfrage an `fluxaid`; die ehrliche Telefonie-Meldung
+(z.B. "kein Modem") landet mit im Mitschnitt.
+
+| Eingehender Anruf | Verbunden + KI-Mitschnitt |
 |---|---|
 | ![Anruf](docs/screenshots/38b_anruf.png) | ![Verbunden](docs/screenshots/38c_anruf_verbunden.png) |
 

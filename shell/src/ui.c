@@ -3196,7 +3196,7 @@ static void call_btn_geom(const flux_fb_t *fb, int connected,
 }
 
 void flux_ui_draw_call(flux_fb_t *fb, const char *name, const char *number,
-                       int connected) {
+                       int connected, int elapsed_s) {
     flux_fb_fill_gradient_v(fb, 0, 0, fb->width, fb->height, 0x0C1A16, 0x06100D);
 
     int cx = fb->width / 2;
@@ -3220,11 +3220,29 @@ void flux_ui_draw_call(flux_fb_t *fb, const char *name, const char *number,
         flux_fb_text(fb, (fb->width - w) / 2, fb->height * 52 / 100, dn, 0x9CA3AF, 2);
     }
 
-    /* Status-Zeile */
-    const char *st = connected ? "Verbunden" : "Eingehender Anruf...";
+    /* Status-Zeile: bei Verbindung mit laufendem Timer */
+    char st[40];
+    if (connected) snprintf(st, sizeof(st), "Verbunden  %d:%02d", elapsed_s / 60, elapsed_s % 60);
+    else           snprintf(st, sizeof(st), "Eingehender Anruf...");
     int sw = flux_fb_text_width(st, 2);
     flux_fb_text(fb, (fb->width - sw) / 2, fb->height * 58 / 100, st,
                  connected ? 0x34D399 : 0x9CA3AF, 2);
+
+    /* Aufnahme-Indikator: pulsierender roter Punkt + Hinweis, dass die KI
+     * den Anruf mitschneidet (Transkription per Whisper, Stub ohne Mikrofon). */
+    if (connected) {
+        int ry = fb->height * 64 / 100;
+        const char *rec = "KI nimmt auf";
+        int rw = flux_fb_text_width(rec, 2);
+        int total = rw + 20;
+        int rx0 = (fb->width - total) / 2;
+        if (flux_pulse(flux_now_ms(), 1100) > 0.45f)
+            fill_circle(fb, rx0 + 6, ry + 7, 5, 0xEF4444);          /* blinkender Rec-Punkt */
+        flux_fb_text(fb, rx0 + 20, ry, rec, 0xEF4444, 2);
+        const char *hint = "Mitschnitt wird beim Auflegen gespeichert";
+        int hw = flux_fb_text_width(hint, 1);
+        flux_fb_text(fb, (fb->width - hw) / 2, ry + 22, hint, 0x6B7280, 1);
+    }
 
     /* Runde Aktions-Knoepfe */
     int gx, rx, by, r; call_btn_geom(fb, connected, &gx, &rx, &by, &r);
