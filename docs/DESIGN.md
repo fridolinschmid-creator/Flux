@@ -128,6 +128,16 @@ warning/amber tones. These appear only for status — never as decoration.
 **Rules:** no rainbow UI · no per-screen accent · the same Indigo→Violet
 gradient marks every primary action, every active state, every AI moment.
 
+### Typography
+Flux renders a **real proportional sans-serif** — *Instrument Sans* (SIL OFL),
+embedded as TrueType and rasterized with `stb_truetype` (`shell/src/fb.c`,
+`font_data.h`). No monospace, no bitmap "terminal" glyphs. The conventions are
+unchanged for layout code: `flux_fb_text(x, y, …, scale)` still treats `y` as
+the line top and `scale` as the size step (2 = body, 3 = title, 4 = large,
+7 = clock), so existing centering via `flux_fb_text_width` just works. Real
+umlauts and ß are drawn as proper glyphs (kerned), not approximated. AI replies
+read as conversation, not logs.
+
 ---
 
 ## 5. Screen redesigns

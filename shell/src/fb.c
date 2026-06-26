@@ -1,5 +1,13 @@
 #include "fb.h"
-#include "stb_easy_font.h"
+
+/* Echtes TrueType-Rendering statt des frueheren Bitmap-Fonts
+ * (stb_easy_font sah "nach Code"/Terminal aus). stb_truetype rastert
+ * eine moderne Sans-Serif (Instrument Sans, SIL OFL) -- passt zur
+ * framebufferbasierten, GPU-losen Architektur: jedes Glyph wird einmal
+ * pro (Codepoint, Pixelgroesse) gerastert, gecacht und alpha-geblittet. */
+#define STB_TRUETYPE_IMPLEMENTATION
+#include "stb_truetype.h"
+#include "font_data.h"   /* eingebettete TTF-Bytes: flux_font_ttf[] */
 
 #include <fcntl.h>
 #include <unistd.h>
@@ -153,107 +161,147 @@ void flux_fb_blit_mask(flux_fb_t *fb, int x, int y, int w, int h, const uint8_t 
     }
 }
 
-/* stb_easy_font liefert pro Buchstabenstrich ein Quad (4 Vertices a
- * 16 Byte: float x, float y, float z, uint8 color[4]). Wir rastern
- * jedes Quad als gefuelltes Rechteck in den Backbuffer.
- * Unterstuetzt UTF-8: deutsche Umlaute werden als Basiszeichen + Punkte gerendert. */
+/* ---- TrueType-Textrendering (Instrument Sans, eingebettet) -----------
+ * y ist weiterhin die OBERKANTE der Textzeile (wie beim alten Bitmap-Font),
+ * `scale` bleibt die gewohnte Stufe (2 = Fliesstext, 3 = Titel, ...). So
+ * funktioniert das gesamte vorhandene Layout (zentriert ueber
+ * flux_fb_text_width) unveraendert weiter -- nur die Glyphen sind jetzt
+ * echte, proportionale Sans-Serif-Buchstaben statt Strich-Quads. */
 
-/* Rasterniert alle Quads eines einzelnen ASCII-Zeichens; gibt Zeichenbreite zurueck. */
-static int render_ascii_char(flux_fb_t *fb, int x, int y, char c, uint32_t rgb, int scale) {
-    char s[2] = {c, 0};
-    char vbuf[4096];
-    int num_quads = stb_easy_font_print(0, 0, s, NULL, vbuf, sizeof(vbuf));
-    int weight = scale + (scale >= 3 ? 1 : 0);
-    for (int q = 0; q < num_quads; q++) {
-        float qx[4], qy[4];
-        for (int v = 0; v < 4; v++) {
-            const char *base = vbuf + (size_t)(q * 4 + v) * 16;
-            float fx, fy;
-            memcpy(&fx, base, 4);
-            memcpy(&fy, base + 4, 4);
-            qx[v] = fx; qy[v] = fy;
-        }
-        float minx=qx[0], maxx=qx[0], miny=qy[0], maxy=qy[0];
-        for (int v = 1; v < 4; v++) {
-            if (qx[v] < minx) minx = qx[v];
-            if (qx[v] > maxx) maxx = qx[v];
-            if (qy[v] < miny) miny = qy[v];
-            if (qy[v] > maxy) maxy = qy[v];
-        }
-        int rw = (int)((maxx - minx) * scale);
-        int rh = (int)((maxy - miny) * scale);
-        if (rw < weight) rw = weight;
-        if (rh < weight) rh = weight;
-        flux_fb_fill_rect(fb, x + (int)(minx * scale), y + (int)(miny * scale), rw, rh, rgb);
-    }
-    return stb_easy_font_width(s) * scale;
+static stbtt_fontinfo g_font;
+static int            g_font_ready = -1;  /* -1 uninit, 0 fehlgeschlagen, 1 ok */
+
+static void font_init(void) {
+    if (g_font_ready >= 0) return;
+    g_font_ready = stbtt_InitFont(&g_font, flux_font_ttf,
+                                  stbtt_GetFontOffsetForIndex(flux_font_ttf, 0)) ? 1 : 0;
 }
 
-/* Zwei Punkte ueber einem Buchstaben (Umlaut-Diaeresis). */
-static void draw_diaeresis(flux_fb_t *fb, int x, int char_w, int y, int scale, uint32_t rgb) {
-    int dot = (scale <= 2) ? 2 : scale;
-    int dot_y = y - dot - 1;
-    int third = char_w / 3;
-    flux_fb_fill_rect(fb, x + third - dot / 2,     dot_y, dot, dot, rgb);
-    flux_fb_fill_rect(fb, x + 2 * third - dot / 2, dot_y, dot, dot, rgb);
+/* scale-Stufe -> Pixelhoehe. Der alte Bitmap-Font war ~7px je Stufe; eine
+ * Proportionalschrift wirkt bei gleicher Boxhoehe etwas kleiner, daher ein
+ * leicht groesserer Faktor -- empirisch an den Screenshots abgestimmt. */
+static float font_px_for_scale(int scale) {
+    return (float)scale * 8.0f;
 }
 
-/* Dekodiert ein UTF-8-Codepoint (erstes Zeichen); gibt Basiszeichen und Flags zurueck.
- * Returns Anzahl verbrauchter Bytes. base_char gesetzt, dots=1 fuer Umlaut, dbl=1 fuer ss (ß). */
-static int utf8_decode_german(const unsigned char *p, char *base_char, int *dots, int *dbl) {
-    *dots = 0; *dbl = 0; *base_char = '?';
-    if (p[0] < 0x80) { *base_char = (char)p[0]; return 1; }
-    if (p[0] == 0xC3 && p[1]) {
-        switch (p[1]) {
-            case 0xA4: *base_char='a'; *dots=1; return 2;  /* ä */
-            case 0xB6: *base_char='o'; *dots=1; return 2;  /* ö */
-            case 0xBC: *base_char='u'; *dots=1; return 2;  /* ü */
-            case 0x84: *base_char='A'; *dots=1; return 2;  /* Ä */
-            case 0x96: *base_char='O'; *dots=1; return 2;  /* Ö */
-            case 0x9C: *base_char='U'; *dots=1; return 2;  /* Ü */
-            case 0x9F: *base_char='s'; *dbl=1;  return 2;  /* ß -> ss */
-            case 0xA9: *base_char='e';           return 2;  /* é */
-            default: break;
+/* Glyph-Cache: pro (Codepoint, Pixelhoehe) eine 8-bit-Alpha-Maske. */
+typedef struct {
+    int cp, px, w, h, xoff, yoff, adv;
+    unsigned char *bmp;
+} glyph_entry_t;
+#define GLYPH_CACHE_MAX 512
+static glyph_entry_t g_glyphs[GLYPH_CACHE_MAX];
+static int           g_glyph_n = 0;
+
+static glyph_entry_t *glyph_get(int cp, int px) {
+    for (int i = 0; i < g_glyph_n; i++)
+        if (g_glyphs[i].cp == cp && g_glyphs[i].px == px) return &g_glyphs[i];
+    if (!g_font_ready) return NULL;
+
+    float sf = stbtt_ScaleForPixelHeight(&g_font, (float)px);
+    int adv, lsb; stbtt_GetCodepointHMetrics(&g_font, cp, &adv, &lsb);
+    int x0, y0, x1, y1;
+    stbtt_GetCodepointBitmapBox(&g_font, cp, sf, sf, &x0, &y0, &x1, &y1);
+    int w = x1 - x0, h = y1 - y0;
+    unsigned char *bmp = NULL;
+    if (w > 0 && h > 0) {
+        bmp = malloc((size_t)w * h);
+        if (bmp) stbtt_MakeCodepointBitmap(&g_font, bmp, w, h, w, sf, sf, cp);
+        else { w = h = 0; }
+    }
+
+    glyph_entry_t *slot;
+    if (g_glyph_n < GLYPH_CACHE_MAX) {
+        slot = &g_glyphs[g_glyph_n++];
+    } else {
+        free(g_glyphs[0].bmp);
+        memmove(&g_glyphs[0], &g_glyphs[1], sizeof(glyph_entry_t) * (GLYPH_CACHE_MAX - 1));
+        slot = &g_glyphs[GLYPH_CACHE_MAX - 1];
+    }
+    slot->cp = cp; slot->px = px; slot->w = w; slot->h = h;
+    slot->xoff = x0; slot->yoff = y0;
+    slot->adv = (int)(adv * sf + 0.5f);
+    slot->bmp = bmp;
+    return slot;
+}
+
+/* UTF-8 -> Unicode-Codepoint; gibt Anzahl verbrauchter Bytes zurueck.
+ * Echte Umlaute/ß werden jetzt direkt als Glyph gerendert (kein Punkte-Hack). */
+static int utf8_next(const unsigned char *p, int *cp) {
+    if (p[0] < 0x80) { *cp = p[0]; return 1; }
+    if ((p[0] & 0xE0) == 0xC0 && p[1]) {
+        *cp = ((p[0] & 0x1F) << 6) | (p[1] & 0x3F); return 2;
+    }
+    if ((p[0] & 0xF0) == 0xE0 && p[1] && p[2]) {
+        *cp = ((p[0] & 0x0F) << 12) | ((p[1] & 0x3F) << 6) | (p[2] & 0x3F); return 3;
+    }
+    if ((p[0] & 0xF8) == 0xF0 && p[1] && p[2] && p[3]) {
+        *cp = ((p[0] & 0x07) << 18) | ((p[1] & 0x3F) << 12) |
+              ((p[2] & 0x3F) << 6) | (p[3] & 0x3F); return 4;
+    }
+    *cp = '?'; return 1;
+}
+
+/* Blittet eine 8-bit-Alpha-Glyphmaske eingefaerbt in den Backbuffer. */
+static void blit_glyph(flux_fb_t *fb, const glyph_entry_t *g, int gx, int gy, uint32_t rgb) {
+    if (!g->bmp) return;
+    int tr = (rgb >> 16) & 0xff, tg = (rgb >> 8) & 0xff, tb = rgb & 0xff;
+    for (int j = 0; j < g->h; j++) {
+        int py = gy + j;
+        if (py < 0 || py >= fb->height) continue;
+        for (int i = 0; i < g->w; i++) {
+            int a = g->bmp[j * g->w + i];
+            if (!a) continue;
+            int pxp = gx + i;
+            if (pxp < 0 || pxp >= fb->width) continue;
+            uint32_t bg = fb->back[py * fb->stride_px + pxp];
+            int br = (bg >> 16) & 0xff, bgc = (bg >> 8) & 0xff, bb = bg & 0xff;
+            int rr = (tr * a + br  * (255 - a)) / 255;
+            int rg = (tg * a + bgc * (255 - a)) / 255;
+            int rb = (tb * a + bb  * (255 - a)) / 255;
+            fb->back[py * fb->stride_px + pxp] = ((uint32_t)rr << 16) | ((uint32_t)rg << 8) | rb;
         }
     }
-    /* Unbekannte Multibyte-Sequenz: ueberspringen */
-    if ((p[0] & 0xE0) == 0xC0) return 2;
-    if ((p[0] & 0xF0) == 0xE0) return 3;
-    if ((p[0] & 0xF8) == 0xF0) return 4;
-    return 1;
 }
 
 void flux_fb_text(flux_fb_t *fb, int x, int y, const char *s, uint32_t rgb, int scale) {
-    int cx = x;
+    font_init();
+    if (!g_font_ready || !s) return;
+    int px = (int)(font_px_for_scale(scale) + 0.5f);
+    float sf = stbtt_ScaleForPixelHeight(&g_font, (float)px);
+    int asc, desc, gap; stbtt_GetFontVMetrics(&g_font, &asc, &desc, &gap);
+    int baseline = y + (int)(asc * sf + 0.5f);
+
+    float pen = (float)x;
     const unsigned char *p = (const unsigned char *)s;
+    int prev = 0;
     while (*p) {
-        char base; int dots, dbl;
-        int consumed = utf8_decode_german(p, &base, &dots, &dbl);
-        if (base != '?') {
-            int cw = render_ascii_char(fb, cx, y, base, rgb, scale);
-            if (dots) draw_diaeresis(fb, cx, cw, y, scale, rgb);
-            cx += cw;
-            if (dbl) cx += render_ascii_char(fb, cx, y, base, rgb, scale);
-        }
-        p += consumed;
+        int cp; p += utf8_next(p, &cp);
+        glyph_entry_t *g = glyph_get(cp, px);
+        if (!g) continue;
+        if (prev) pen += stbtt_GetCodepointKernAdvance(&g_font, prev, cp) * sf;
+        blit_glyph(fb, g, (int)(pen + 0.5f) + g->xoff, baseline + g->yoff, rgb);
+        pen += g->adv;
+        prev = cp;
     }
 }
 
 int flux_fb_text_width(const char *s, int scale) {
-    int w = 0;
+    font_init();
+    if (!g_font_ready || !s) return 0;
+    int px = (int)(font_px_for_scale(scale) + 0.5f);
+    float sf = stbtt_ScaleForPixelHeight(&g_font, (float)px);
+    float w = 0.0f;
     const unsigned char *p = (const unsigned char *)s;
+    int prev = 0;
     while (*p) {
-        char base; int dots, dbl;
-        int consumed = utf8_decode_german(p, &base, &dots, &dbl);
-        if (base != '?') {
-            char buf[2] = {base, 0};
-            int cw = stb_easy_font_width(buf) * scale;
-            w += cw;
-            if (dbl) w += cw;
-        }
-        p += consumed;
+        int cp; p += utf8_next(p, &cp);
+        int adv, lsb; stbtt_GetCodepointHMetrics(&g_font, cp, &adv, &lsb);
+        if (prev) w += stbtt_GetCodepointKernAdvance(&g_font, prev, cp) * sf;
+        w += adv * sf;
+        prev = cp;
     }
-    return w;
+    return (int)(w + 0.5f);
 }
 
 /* ---- Erweiterte Primitive --------------------------------------------- */
