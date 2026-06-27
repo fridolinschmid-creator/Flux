@@ -2872,14 +2872,28 @@ int main(void) {
             continue;
         }
 
-        /* FLUX_SCREEN_ASSISTANT -- Wisch nach unten oeffnet den Notify-Overlay. */
+        /* FLUX_SCREEN_ASSISTANT -- Wisch nach unten: bei offener Tastatur
+         * zuerst die Tastatur ausblenden (Platz fuer lange Gespraeche),
+         * sonst den Notify-Overlay oeffnen. */
         if (ev.type == FLUX_EV_SWIPE_DOWN) {
+            if (flux_ui_kbd_is_open()) {
+                flux_ui_set_kbd_open(0);
+                flux_ui_draw_assistant(&fb, last_q, input_buf, answer_buf, 0);
+                continue;
+            }
             pre_notify_screen = FLUX_SCREEN_ASSISTANT;
             uint32_t *old = capture_frame(&fb);
             screen = FLUX_SCREEN_NOTIFY;
             flux_ui_draw_notify(&fb);
             animate_slide_in(&fb, old);
             free(old);
+            continue;
+        }
+
+        /* Wisch nach oben blendet die Tastatur ein (wie Tippen aufs Feld). */
+        if (ev.type == FLUX_EV_SWIPE_UP && !flux_ui_kbd_is_open()) {
+            flux_ui_set_kbd_open(1);
+            flux_ui_draw_assistant(&fb, last_q, input_buf, answer_buf, 0);
             continue;
         }
 
@@ -2929,56 +2943,86 @@ int main(void) {
                 free(old);
                 continue;
             }
-            /* Vorschlags-Chips: nur im leeren Zustand. Fuellen die Eingabe
-             * mit einem Starttext vor -- der Nutzer tippt weiter (kein
-             * verstecktes Verhalten, kein toter Knopf). */
-            if (!last_q[0] && !input_buf[0] && !answer_buf[0]) {
-                int sg = flux_ui_suggest_hit(&fb, ev.x, ev.y);
-                if (sg) {
-                    animate_ripple(&fb, ev.x, ev.y);
-                    switch (sg) {
-                        case 1: snprintf(input_buf, sizeof(input_buf), "Schreibe eine E-Mail an "); break;
-                        case 2: snprintf(input_buf, sizeof(input_buf), "Stell einen Wecker auf "); break;
-                        case 3: snprintf(input_buf, sizeof(input_buf), "Suche im Web nach "); break;
-                        case 4: snprintf(input_buf, sizeof(input_buf), "Erstelle einen Termin: "); break;
+            if (!flux_ui_kbd_is_open()) {
+                /* Tastatur zu: Vorschlags-Chips (leerer Zustand) fuellen die
+                 * Eingabe vor und oeffnen die Tastatur; ein Tap aufs Feld
+                 * oeffnet sie ebenfalls. Alle anderen Taps werden ignoriert. */
+                if (!last_q[0] && !input_buf[0] && !answer_buf[0]) {
+                    int sg = flux_ui_suggest_hit(&fb, ev.x, ev.y);
+                    if (sg) {
+                        animate_ripple(&fb, ev.x, ev.y);
+                        switch (sg) {
+                            case 1: snprintf(input_buf, sizeof(input_buf), "Schreibe eine E-Mail an "); break;
+                            case 2: snprintf(input_buf, sizeof(input_buf), "Stell einen Wecker auf "); break;
+                            case 3: snprintf(input_buf, sizeof(input_buf), "Suche im Web nach "); break;
+                            case 4: snprintf(input_buf, sizeof(input_buf), "Erstelle einen Termin: "); break;
+                        }
+                        flux_ui_set_kbd_open(1);
+                        flux_ui_draw_assistant(&fb, last_q, input_buf, answer_buf, 0);
+                        continue;
                     }
+                }
+                if (flux_ui_input_field_hit(&fb, ev.x, ev.y)) {
+                    flux_ui_set_kbd_open(1);
                     flux_ui_draw_assistant(&fb, last_q, input_buf, answer_buf, 0);
+                }
+                continue;
+            }
+
+            /* Tastatur offen: Feld-Tap haelt sie offen; Vorschlagsleiste
+             * (Autovervollstaendigung + Kopieren/Einfuegen/Voice) auswerten;
+             * sonst faellt der Tap unten auf die Tastatur-Tasten durch. */
+            if (flux_ui_input_field_hit(&fb, ev.x, ev.y)) continue;
+            {
+                int widx = 0;
+                flux_strip_hit_t sh = flux_ui_strip_hit(&fb, ev.x, ev.y, &widx);
+                if (sh == FLUX_STRIP_WORD) {
+                    const char *words[3];
+                    int wn = flux_ui_kbd_words(input_buf, words);
+                    if (widx < wn) {
+                        /* letzten Token durch das gewaehlte Wort + Leerzeichen ersetzen */
+                        size_t L = strlen(input_buf);
+                        while (L > 0 && input_buf[L-1] != ' ') L--;
+                        input_buf[L] = '\0';
+                        size_t avail = sizeof(input_buf) - L - 2;
+                        if (avail > 0) {
+                            strncat(input_buf, words[widx], avail);
+                            strncat(input_buf, " ", 1);
+                        }
+                        flux_ui_draw_assistant(&fb, last_q, input_buf, answer_buf, 0);
+                    }
                     continue;
                 }
-            }
-            if (flux_ui_mic_hit(&fb, ev.x, ev.y)) {
-                if (!flux_voice_can_record()) {
-                    snprintf(answer_buf, sizeof(answer_buf),
-                             "Kein Mikrofon erkannt -- arecord oder ffmpeg wird benoetigt.");
-                    flux_ui_draw_assistant(&fb, last_q, input_buf, answer_buf, 0);
-                } else if (flux_voice_start()) {
-                    voice_active = 1;
-                    voice_start_t = time(NULL);
-                    voice_frame = 0;
-                    flux_ui_draw_voice_overlay(&fb, 0, voice_frame++);
-                } else {
-                    snprintf(answer_buf, sizeof(answer_buf),
-                             "Aufnahme konnte nicht gestartet werden.");
-                    flux_ui_draw_assistant(&fb, last_q, input_buf, answer_buf, 0);
+                if (sh == FLUX_STRIP_COPY) {
+                    if (input_buf[0]) snprintf(clipboard, sizeof(clipboard), "%s", input_buf);
+                    continue;
                 }
-                continue;
-            }
-            if (flux_ui_copy_hit(&fb, ev.x, ev.y)) {
-                if (input_buf[0])
-                    snprintf(clipboard, sizeof(clipboard), "%s", input_buf);
-                /* kein Redraw noetig, visuelles Feedback nicht erforderlich */
-                continue;
-            }
-            if (flux_ui_paste_hit(&fb, ev.x, ev.y)) {
-                if (clipboard[0]) {
-                    size_t clen = strlen(clipboard);
-                    size_t ilen = strlen(input_buf);
-                    size_t avail = sizeof(input_buf) - ilen - 1;
-                    size_t copy = clen < avail ? clen : avail;
-                    strncat(input_buf, clipboard, copy);
-                    flux_ui_draw_assistant(&fb, last_q, input_buf, answer_buf, 0);
+                if (sh == FLUX_STRIP_PASTE) {
+                    if (clipboard[0]) {
+                        size_t clen = strlen(clipboard), ilen = strlen(input_buf);
+                        size_t avail = sizeof(input_buf) - ilen - 1;
+                        strncat(input_buf, clipboard, clen < avail ? clen : avail);
+                        flux_ui_draw_assistant(&fb, last_q, input_buf, answer_buf, 0);
+                    }
+                    continue;
                 }
-                continue;
+                if (sh == FLUX_STRIP_VOICE) {
+                    if (!flux_voice_can_record()) {
+                        snprintf(answer_buf, sizeof(answer_buf),
+                                 "Kein Mikrofon erkannt -- arecord oder ffmpeg wird benoetigt.");
+                        flux_ui_draw_assistant(&fb, last_q, input_buf, answer_buf, 0);
+                    } else if (flux_voice_start()) {
+                        voice_active = 1;
+                        voice_start_t = time(NULL);
+                        voice_frame = 0;
+                        flux_ui_draw_voice_overlay(&fb, 0, voice_frame++);
+                    } else {
+                        snprintf(answer_buf, sizeof(answer_buf),
+                                 "Aufnahme konnte nicht gestartet werden.");
+                        flux_ui_draw_assistant(&fb, last_q, input_buf, answer_buf, 0);
+                    }
+                    continue;
+                }
             }
         }
 
@@ -3010,6 +3054,8 @@ int main(void) {
             flux_ui_draw_assistant(&fb, last_q, input_buf, answer_buf, 0);
         } else if (kind == FLUX_EV_ENTER) {
             if (input_buf[0] == '\0') continue;
+            /* Abschicken blendet die Tastatur aus -> volle Lesehoehe fuer die Antwort. */
+            flux_ui_set_kbd_open(0);
 
             if (strcasecmp(input_buf, "einstellungen") == 0 || strcasecmp(input_buf, "settings") == 0) {
                 input_buf[0] = '\0';

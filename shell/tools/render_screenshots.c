@@ -174,9 +174,12 @@ int main(int argc, char *argv[]) {
     save_png(&fb, outdir, "04b_home_anim");
     flux_ui_set_quick_reveal(4, 100);
 
-    /* 05 -- Assistent: tippt Frage */
-    flux_ui_draw_assistant(&fb, "", "schreibe eine E-Mail an Max", "", 0);
+    /* 05 -- Assistent: tippt Frage (Tastatur sichtbar: grosse Tasten +
+     * Vorschlagsleiste mit Autovervollstaendigung "ei" -> eine/einen). */
+    flux_ui_set_kbd_open(1);
+    flux_ui_draw_assistant(&fb, "", "Schreibe ei", "", 0);
     save_png(&fb, outdir, "05_assistent_tipp");
+    flux_ui_set_kbd_open(0);
 
     /* 06 -- Assistent: denkt nach (Nutzer-Blase + Lade-Blase) */
     flux_ui_draw_assistant(&fb, "schreibe eine E-Mail an Max", "", "", 1);

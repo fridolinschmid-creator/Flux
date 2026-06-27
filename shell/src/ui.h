@@ -85,6 +85,29 @@ void flux_ui_set_quick_reveal(int shown, int grow_pct);
  * (Mail/Wecker/Suche/Termin) oder 0. Nur im leeren Zustand auswerten. */
 int flux_ui_suggest_hit(const flux_fb_t *fb, int x, int y);
 
+/* ---- Tastatur-Sichtbarkeit (Assistent) ----------------------------- *
+ * Die Tastatur ist auf dem Assistenten ein-/ausblendbar: Tippen aufs
+ * Feld zeigt sie, Wischen verbirgt sie. */
+void flux_ui_set_kbd_open(int open);
+int  flux_ui_kbd_is_open(void);
+
+/* Tap auf das Eingabefeld "Schreib etwas..." (oeffnet die Tastatur). */
+int flux_ui_input_field_hit(const flux_fb_t *fb, int x, int y);
+
+/* Bis zu 3 Autovervollstaendigungs-Vorschlaege fuer den zuletzt getippten
+ * Wortanfang in `input`. out[i] zeigt auf statischen Speicher. */
+int flux_ui_kbd_words(const char *input, const char *out[3]);
+
+/* Treffer in der Vorschlags-/Werkzeugleiste ueber der Tastatur. */
+typedef enum {
+    FLUX_STRIP_NONE = 0,
+    FLUX_STRIP_WORD,    /* Autovervollstaendigungs-Wort (Index via word_idx) */
+    FLUX_STRIP_COPY,
+    FLUX_STRIP_PASTE,
+    FLUX_STRIP_VOICE,
+} flux_strip_hit_t;
+flux_strip_hit_t flux_ui_strip_hit(const flux_fb_t *fb, int x, int y, int *word_idx);
+
 /* Mikrofon-Knopf rechts neben der Eingabezeile. */
 int flux_ui_mic_hit(const flux_fb_t *fb, int x, int y);
 

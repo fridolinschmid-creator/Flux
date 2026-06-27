@@ -354,10 +354,12 @@ static void draw_keyboard(flux_fb_t *fb) {
 
         if (label[0]) {
             uint32_t tcol = keys[i].is_enter ? 0xFFFFFF : COL_TEXT;
-            int tw = flux_fb_text_width(label, 2);
+            /* Groessere Glyphen (Stufe 3) -- gut lesbare, "echte" Tastatur. */
+            int ksc = (keys[i].is_backspace || keys[i].is_enter) ? 2 : 3;
+            int tw = flux_fb_text_width(label, ksc);
             int tx = bx + (bw - tw) / 2;
-            int ty = by + (bh - 14) / 2;
-            flux_fb_text(fb, tx, ty, label, tcol, 2);
+            int ty = by + (bh - ksc * 8) / 2;
+            flux_fb_text(fb, tx, ty, label, tcol, ksc);
         }
     }
 }
@@ -1065,6 +1067,129 @@ static void draw_input_bar(flux_fb_t *fb, int input_y, const char *prompt_text,
     }
 }
 
+/* ---- Tastatur-Sichtbarkeit (nur Assistent) --------------------------
+ * Die Tastatur ist auf dem Assistenten NICHT mehr permanent: Tippen auf
+ * das Eingabefeld blendet sie ein, Wischen blendet sie aus -- so bleibt
+ * Platz fuer lange Gespraeche. Andere Texteingabe-Screens (Bearbeiten,
+ * Suche) behalten ihre permanente Tastatur. */
+static int s_kbd_open = 0;
+void flux_ui_set_kbd_open(int open) { s_kbd_open = open ? 1 : 0; }
+int  flux_ui_kbd_is_open(void) { return s_kbd_open; }
+
+#define SUGGEST_BAR_H 50   /* Vorschlags-/Werkzeugleiste ueber der Tastatur */
+
+/* y-Oberkante der Assistenten-Eingabeleiste je nach Tastatur-Zustand. */
+static int assist_input_y(const flux_fb_t *fb) {
+    if (s_kbd_open) return flux_ui_kbd_top(fb) - SUGGEST_BAR_H - INPUT_BAR_H;
+    return fb->height - INPUT_BAR_H;
+}
+
+/* ---- Autovervollstaendigung ------------------------------------------
+ * Kleines, lokales deutsches Wortlexikon fuer Prefix-Vorschlaege -- keine
+ * Cloud, kein Lernen. Deckt haeufige Woerter + die Schnellstart-Kontexte
+ * (Mail/Termin/Wecker/Suche) ab. */
+static const char *s_dict[] = {
+    "ich","du","ist","eine","einen","und","das","der","die","mir","mich",
+    "bitte","danke","hallo","was","wie","wann","wo","kannst","helfen",
+    "schreibe","E-Mail","an","Nachricht","Termin","erstelle","Wecker",
+    "stell","um","Uhr","morgen","heute","Abend","suche","nach","im","Web",
+    "zeige","oeffne","Kalender","Einstellungen","Dateien","Notiz","mach",
+    "erinnere","spaeter","Minuten","Stunden","Liste","fuer","mit","zum",
+};
+#define DICT_N ((int)(sizeof(s_dict)/sizeof(s_dict[0])))
+
+/* Bis zu 3 Vorschlaege fuer den zuletzt getippten Wortanfang. out[i] zeigt
+ * auf statischen Lexikon-Speicher. Gibt die Anzahl zurueck. Wird von der
+ * Zeichenroutine UND von main.c (beim Antippen) genutzt -- gleiche Liste. */
+int flux_ui_kbd_words(const char *input, const char *out[3]) {
+    const char *tok = input ? input : "";
+    for (const char *p = tok; *p; p++) if (*p == ' ') tok = p + 1;
+    int tlen = (int)strlen(tok), n = 0;
+    if (tlen == 0) {
+        static const char *starters[3] = { "Ich", "Was", "Wie" };
+        for (int i = 0; i < 3; i++) out[n++] = starters[i];
+        return n;
+    }
+    for (int i = 0; i < DICT_N && n < 3; i++) {
+        int match = 1;
+        for (int j = 0; j < tlen; j++) {
+            char a = tok[j], b = s_dict[i][j];
+            if (!b) { match = 0; break; }
+            if (a >= 'A' && a <= 'Z') a += 32;
+            if (b >= 'A' && b <= 'Z') b += 32;
+            if (a != b) { match = 0; break; }
+        }
+        if (match && (int)strlen(s_dict[i]) > tlen) out[n++] = s_dict[i];
+    }
+    return n;
+}
+
+/* Geometrie der Vorschlagsleiste: Woerter links, 3 Icons (Kopieren,
+ * Einfuegen, Voice) rechts. */
+#define STRIP_ICON_SLOT 46
+static void strip_layout(const flux_fb_t *fb, int *sy, int *word_w, int *icon_x0) {
+    *sy = flux_ui_kbd_top(fb) - SUGGEST_BAR_H;
+    *icon_x0 = fb->width - 3 * STRIP_ICON_SLOT;
+    *word_w = *icon_x0;
+}
+
+static void draw_suggest_strip(flux_fb_t *fb, const char *input) {
+    int sy, word_w, icon_x0;
+    strip_layout(fb, &sy, &word_w, &icon_x0);
+    flux_fb_fill_rect(fb, 0, sy, fb->width, SUGGEST_BAR_H, COL_SURFACE);
+    flux_fb_hline(fb, 0, sy, fb->width, COL_DIVIDER);
+
+    const char *words[3]; int wn = flux_ui_kbd_words(input, words);
+    int col = word_w / 3;
+    for (int i = 0; i < 3; i++) {
+        if (i > 0) flux_fb_vline(fb, i * col, sy + 12, SUGGEST_BAR_H - 24, COL_DIVIDER);
+        if (i < wn) {
+            int tw = flux_fb_text_width(words[i], 2);
+            flux_fb_text(fb, i * col + (col - tw) / 2, sy + (SUGGEST_BAR_H - 16) / 2,
+                         words[i], COL_TEXT, 2);
+        }
+    }
+    flux_fb_vline(fb, icon_x0, sy + 12, SUGGEST_BAR_H - 24, COL_DIVIDER);
+    int mid = sy + SUGGEST_BAR_H / 2, h = STRIP_ICON_SLOT;
+    flux_icon_draw(fb, FLUX_ICON_COPY,      icon_x0 + h / 2,         mid, 22, COL_TEXT_MUTED);
+    flux_icon_draw(fb, FLUX_ICON_CLIPBOARD, icon_x0 + h + h / 2,     mid, 22, COL_TEXT_MUTED);
+    flux_icon_draw(fb, FLUX_ICON_MIC,       icon_x0 + 2 * h + h / 2, mid, 22, COL_ACCENT);
+}
+
+/* Assistenten-Eingabeleiste: nur das Feld (Tippen oeffnet die Tastatur). */
+static void draw_assist_input(flux_fb_t *fb, int input_y, const char *input) {
+    flux_fb_fill_rect(fb, 0, input_y, fb->width, INPUT_BAR_H, COL_SURFACE);
+    flux_fb_hline(fb, 0, input_y, fb->width, COL_DIVIDER);
+    int fx = 12, fy = input_y + 12, fw = fb->width - 24, fh = INPUT_BAR_H - 24;
+    fill_round_rect(fb, fx, fy, fw, fh, fh / 2, COL_SURFACE2);
+    if (input && input[0]) {
+        int avail = fw - 28;
+        const char *s = input;
+        while (*s && flux_fb_text_width(s, 2) > avail) s++;
+        flux_fb_text(fb, fx + 16, fy + (fh - 16) / 2, s, COL_TEXT, 2);
+    } else {
+        flux_fb_text(fb, fx + 16, fy + (fh - 16) / 2, "Schreib etwas...", COL_DIM, 2);
+    }
+}
+
+int flux_ui_input_field_hit(const flux_fb_t *fb, int x, int y) {
+    int iy = assist_input_y(fb);
+    (void)x;
+    return (y >= iy && y < iy + INPUT_BAR_H);
+}
+
+flux_strip_hit_t flux_ui_strip_hit(const flux_fb_t *fb, int x, int y, int *word_idx) {
+    if (!s_kbd_open) return FLUX_STRIP_NONE;
+    int sy, word_w, icon_x0;
+    strip_layout(fb, &sy, &word_w, &icon_x0);
+    if (y < sy || y >= sy + SUGGEST_BAR_H) return FLUX_STRIP_NONE;
+    if (x < icon_x0) { if (word_idx) *word_idx = (x * 3) / (word_w > 0 ? word_w : 1); return FLUX_STRIP_WORD; }
+    int s = (x - icon_x0) / STRIP_ICON_SLOT;
+    if (s <= 0) return FLUX_STRIP_COPY;
+    if (s == 1) return FLUX_STRIP_PASTE;
+    return FLUX_STRIP_VOICE;
+}
+
 /* ---- Vorschlags-Chips (leerer Assistenten-Zustand) ------------------ *
  * Icon-first Schnellstart-Aktionen. Geometrie wird von Zeichnen UND
  * Hit-Test geteilt (2x2-Raster), damit Taps nie daneben landen. */
@@ -1077,8 +1202,7 @@ static const struct { flux_icon_t icon; const char *label; } s_suggest[SUGGEST_N
 };
 
 static int suggest_geom(const flux_fb_t *fb, int i, int *x, int *y, int *w, int *h) {
-    int kbd_top  = flux_ui_kbd_top(fb);
-    int input_y  = kbd_top - INPUT_BAR_H;
+    int input_y  = assist_input_y(fb);
     int chat_top = STATUSBAR_H + QUICKROW_H + 10;
     int center_y = chat_top + (input_y - chat_top) / 2;
     int top_y    = center_y + 88;
@@ -1136,8 +1260,7 @@ void flux_ui_draw_assistant(flux_fb_t *fb, const char *last_q,
 
     draw_quickrow(fb);
 
-    int kbd_top   = flux_ui_kbd_top(fb);
-    int input_y   = kbd_top - INPUT_BAR_H;
+    int input_y   = assist_input_y(fb);
     int chat_top  = STATUSBAR_H + QUICKROW_H + 10;
 
     int bubble_max_w = fb->width * 5 / 6;
@@ -1146,7 +1269,7 @@ void flux_ui_draw_assistant(flux_fb_t *fb, const char *last_q,
     int has_q = (last_q && *last_q);
     int has_a = (answer && *answer);
 
-    if (!has_q && !thinking && !has_a) {
+    if (!has_q && !thinking && !has_a && !s_kbd_open) {
         /* Leerer Zustand: zentiertes KI-Symbol + Einladungstext */
         int center_y = chat_top + (input_y - chat_top) / 2;
 
@@ -1218,12 +1341,12 @@ void flux_ui_draw_assistant(flux_fb_t *fb, const char *last_q,
         }
     }
 
-    /* Eingabeleiste */
-    char prompt[300];
-    snprintf(prompt, sizeof(prompt), "%s", input);
-    draw_input_bar(fb, input_y, prompt, 1);
-
-    draw_keyboard(fb);
+    /* Eingabeleiste (nur Feld) + bei offener Tastatur die Vorschlagsleiste. */
+    draw_assist_input(fb, input_y, input);
+    if (s_kbd_open) {
+        draw_suggest_strip(fb, input);
+        draw_keyboard(fb);
+    }
     flux_fb_present(fb);
 }
 
