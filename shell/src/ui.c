@@ -2665,9 +2665,30 @@ int flux_ui_notify_hit(const flux_fb_t *fb, int x, int y) {
 #define GAL_HDR_LINE_H 22                          /* Hoehe einer Datums-Trennueberschrift */
 #define GAL_BOTTOM_H   72                          /* fixer Bereich fuer schwebende Leiste */
 
-/* Sichtbare Rasterhoehe (zwischen Header und schwebender Leiste). */
+/* Such-Modus (Lupe): Suchleiste oben + Tastatur unten, Raster filtert live. */
+static int  s_gal_search = 0;
+static char s_gal_query[64] = "";
+void flux_ui_gallery_set_search(int active, const char *query) {
+    s_gal_search = active ? 1 : 0;
+    snprintf(s_gal_query, sizeof(s_gal_query), "%s", query ? query : "");
+}
+
+/* Such-Leiste im Header-Band: Zurueck-Pfeil | Suchfeld | KI-Knopf. */
+static void gal_search_geom(const flux_fb_t *fb, cal_rect *back,
+                            cal_rect *field, cal_rect *ki) {
+    int h = 40, by = STATUSBAR_H + (GAL_HEADER_H - h) / 2;
+    back->x = 8; back->y = by; back->w = 40; back->h = h;
+    int kiw = flux_fb_text_width("KI", 2) + 30;
+    ki->w = kiw; ki->h = h; ki->x = fb->width - 10 - kiw; ki->y = by;
+    field->x = back->x + back->w + 6; field->y = by;
+    field->w = ki->x - 8 - field->x; field->h = h;
+}
+
+/* Sichtbare Rasterhoehe (zwischen Header und schwebender Leiste bzw. der
+ * Tastatur im Such-Modus). */
 static int gal_grid_h(const flux_fb_t *fb) {
-    return fb->height - GAL_GRID_TOP - GAL_BOTTOM_H;
+    int bottom = s_gal_search ? (fb->height - flux_ui_kbd_top(fb)) : GAL_BOTTOM_H;
+    return fb->height - GAL_GRID_TOP - bottom;
 }
 
 /* Zerlegt ein Datum "TT.MM.JJJJ" in y/m. Gibt 1 bei Erfolg. */
@@ -2975,6 +2996,26 @@ void flux_ui_draw_gallery(flux_fb_t *fb, const char **names, const char **dates,
 
     /* --- Fixer Header (zuletzt, deckt drunterscrollende Kacheln ab) ---- */
     flux_fb_fill_rect(fb, 0, STATUSBAR_H, fb->width, GAL_HEADER_H, COL_BG);
+
+    if (s_gal_search) {
+        /* Such-Modus: Suchleiste oben, Tastatur unten. */
+        cal_rect bk, fld, ki;
+        gal_search_geom(fb, &bk, &fld, &ki);
+        flux_icon_draw(fb, FLUX_ICON_CHEVRON_LEFT, bk.x + bk.w / 2, bk.y + bk.h / 2, 26, COL_ACCENT);
+        fill_round_rect(fb, fld.x, fld.y, fld.w, fld.h, fld.h / 2, COL_SURFACE2);
+        flux_icon_draw(fb, FLUX_ICON_SEARCH, fld.x + 18, fld.y + fld.h / 2, 16, COL_DIM);
+        if (s_gal_query[0])
+            flux_fb_text(fb, fld.x + 34, fld.y + (fld.h - 16) / 2, s_gal_query, COL_TEXT, 2);
+        else
+            flux_fb_text(fb, fld.x + 34, fld.y + (fld.h - 16) / 2, "Fotos durchsuchen", COL_DIM, 2);
+        flux_fb_fill_gradient_v_rounded(fb, ki.x, ki.y, ki.w, ki.h, ki.h / 2, COL_ACCENT, COL_ACCENT2);
+        int tw = flux_fb_text_width("KI", 2);
+        flux_fb_text(fb, ki.x + (ki.w - tw) / 2, ki.y + (ki.h - 16) / 2, "KI", 0xFFFFFF, 2);
+        draw_keyboard(fb);
+        flux_fb_present(fb);
+        return;
+    }
+
     flux_fb_text(fb, 16, STATUSBAR_H + 14, "Fotos", COL_TEXT, 4);
     fill_round_rect(fb, sbtn.x, sbtn.y, sbtn.w, sbtn.h, sbtn.h / 2,
                     select_mode ? COL_ACCENT : COL_SURFACE2);
@@ -3030,21 +3071,36 @@ int flux_ui_gallery_hit(const flux_fb_t *fb, int x, int y, const char **dates,
                         int n, int scroll, int filter, flux_gallery_hit_t *out) {
     out->tile = -1; out->filter = 0; out->select = 0;
     out->segment = -1; out->search = 0; out->camera = 0;
+    out->back = 0; out->ki = 0; out->ch = 0; out->backspace = 0; out->enter = 0;
 
-    /* Header-Knoepfe */
-    cal_rect cam, fbtn, sbtn;
-    gal_header_geom(fb, &cam, &fbtn, &sbtn);
-    if (cal_pt_in(x, y, sbtn)) { out->select = 1; return 1; }
-    if (cal_pt_in(x, y, fbtn)) { out->filter = 1; return 1; }
+    if (s_gal_search) {
+        /* Such-Modus: Zurueck | KI | Tastatur | Kacheln (Raster unten). */
+        cal_rect bk, fld, ki;
+        gal_search_geom(fb, &bk, &fld, &ki);
+        if (cal_pt_in(x, y, bk)) { out->back = 1; return 1; }
+        if (cal_pt_in(x, y, ki)) { out->ki = 1; return 1; }
+        char c; int bs, en;
+        if (flux_ui_kbd_hit(fb, x, y, &c, &bs, &en)) {
+            if (bs) out->backspace = 1; else if (en) out->enter = 1; else out->ch = c;
+            return 1;
+        }
+        /* sonst faellt es unten zur Raster-Pruefung durch */
+    } else {
+        /* Header-Knoepfe */
+        cal_rect cam, fbtn, sbtn;
+        gal_header_geom(fb, &cam, &fbtn, &sbtn);
+        if (cal_pt_in(x, y, sbtn)) { out->select = 1; return 1; }
+        if (cal_pt_in(x, y, fbtn)) { out->filter = 1; return 1; }
 
-    /* Untere Leiste: Kamera, Segmente, Suche */
-    cal_rect kam; gal_camera_geom(fb, &kam);
-    if (cal_pt_in(x, y, kam)) { out->camera = 1; return 1; }
-    cal_rect pill, seg[3], search;
-    gal_bottom_geom(fb, &pill, seg, &search);
-    if (cal_pt_in(x, y, search)) { out->search = 1; return 1; }
-    for (int i = 0; i < 3; i++)
-        if (cal_pt_in(x, y, seg[i])) { out->segment = i; return 1; }
+        /* Untere Leiste: Kamera, Segmente, Suche */
+        cal_rect kam; gal_camera_geom(fb, &kam);
+        if (cal_pt_in(x, y, kam)) { out->camera = 1; return 1; }
+        cal_rect pill, seg[3], search;
+        gal_bottom_geom(fb, &pill, seg, &search);
+        if (cal_pt_in(x, y, search)) { out->search = 1; return 1; }
+        for (int i = 0; i < 3; i++)
+            if (cal_pt_in(x, y, seg[i])) { out->segment = i; return 1; }
+    }
 
     /* Raster -- nur im sichtbaren Bereich, mit gleicher Layout-Berechnung */
     int grid_top = GAL_GRID_TOP;

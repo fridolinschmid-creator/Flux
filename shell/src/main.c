@@ -701,6 +701,13 @@ static int gallery_scroll = 0;          /* gescrollte Rasterzeilen */
 static int gallery_filter = FLUX_GAL_ALLE;
 static int gallery_select_mode = 0;     /* Auswahl-Stub */
 
+/* Foto-Such-Modus (Lupe): lokaler Live-Filter ueber Name/Datum. */
+static int gallery_search = 0;
+static char gallery_query[64] = {0};
+static const char *gal_s_names[GALLERY_MAX];
+static const char *gal_s_dates[GALLERY_MAX];
+static int gal_s_n = 0;
+
 /* Thumbnail-Cache: pro Dateiname genau eine fertige TILE*TILE Kachel
  * (center-gecroppt). Wird beim Neuladen der Galerie geleert, damit kein
  * Speicher pro Frame leckt (Muster wie der Icon-Cache in icons.c). */
@@ -1367,6 +1374,51 @@ static void format_size(off_t size, char *out, size_t cap) {
     if (size < 1024) snprintf(out, cap, "%lld B", (long long)size);
     else if (size < 1024 * 1024) snprintf(out, cap, "%.1f KB", size / 1024.0);
     else snprintf(out, cap, "%.1f MB", size / (1024.0 * 1024.0));
+}
+
+/* Teilstring-Suche, Gross-/Kleinschreibung ignorierend. */
+static int ci_contains(const char *hay, const char *needle) {
+    if (!needle || !needle[0]) return 1;
+    if (!hay) return 0;
+    size_t nl = strlen(needle);
+    for (const char *p = hay; *p; p++) {
+        size_t k = 0;
+        while (k < nl) {
+            char a = p[k], b = needle[k];
+            if (a >= 'A' && a <= 'Z') a += 32;
+            if (b >= 'A' && b <= 'Z') b += 32;
+            if (a != b) break;
+            k++;
+        }
+        if (k == nl) return 1;
+    }
+    return 0;
+}
+
+/* Baut die gefilterte Foto-Liste (Name/Datum enthaelt gallery_query). */
+static void gallery_build_filter(void) {
+    gal_s_n = 0;
+    for (int i = 0; i < gallery_n; i++) {
+        if (ci_contains(gallery_names[i], gallery_query) ||
+            ci_contains(gallery_dates[i], gallery_query)) {
+            gal_s_names[gal_s_n] = gallery_names[i];
+            gal_s_dates[gal_s_n] = gallery_dates[i];
+            gal_s_n++;
+        }
+    }
+}
+
+/* Zeichnet die Galerie -- im Such-Modus mit gefilterter Liste (Filter "Alle",
+ * keine Auswahl), sonst normal. */
+static void gallery_redraw(flux_fb_t *fb) {
+    if (gallery_search)
+        flux_ui_draw_gallery(fb, gal_s_names, gal_s_dates, gal_s_n, -1,
+                             gallery_scroll, FLUX_GAL_ALLE, 0,
+                             gallery_thumb_provider, NULL);
+    else
+        flux_ui_draw_gallery(fb, gallery_names, gallery_dates, gallery_n,
+                             gallery_selected, gallery_scroll, gallery_filter,
+                             gallery_select_mode, gallery_thumb_provider, NULL);
 }
 
 static void load_files(const char *path) {
@@ -2351,6 +2403,13 @@ int main(void) {
 
         if (screen == FLUX_SCREEN_GALLERY) {
             if (ev.type == FLUX_EV_SWIPE_LEFT) {
+                if (gallery_search) {
+                    /* Im Such-Modus: Wisch verlaesst nur die Suche. */
+                    gallery_search = 0; gallery_scroll = 0;
+                    flux_ui_gallery_set_search(0, "");
+                    gallery_redraw(&fb);
+                    continue;
+                }
                 uint32_t *old = capture_frame(&fb);
                 screen = FLUX_SCREEN_ASSISTANT;
                 flux_ui_draw_assistant(&fb, last_q, input_buf, answer_buf, 0);
@@ -2360,24 +2419,83 @@ int main(void) {
             }
             /* Vertikales Scrollen des Rasters (Header/Bottom-Leiste fix). */
             if (ev.type == FLUX_EV_SWIPE_UP || ev.type == FLUX_EV_SWIPE_DOWN) {
-                int maxs = flux_ui_gallery_max_scroll(&fb, gallery_dates,
-                                                      gallery_n, gallery_filter);
+                int maxs = gallery_search
+                    ? flux_ui_gallery_max_scroll(&fb, gal_s_dates, gal_s_n, FLUX_GAL_ALLE)
+                    : flux_ui_gallery_max_scroll(&fb, gallery_dates, gallery_n, gallery_filter);
                 if (ev.type == FLUX_EV_SWIPE_UP) gallery_scroll += 2;
                 else gallery_scroll -= 2;
                 if (gallery_scroll < 0) gallery_scroll = 0;
                 if (gallery_scroll > maxs) gallery_scroll = maxs;
-                flux_ui_draw_gallery(&fb, gallery_names, gallery_dates,
-                                     gallery_n, gallery_selected, gallery_scroll,
-                                     gallery_filter, gallery_select_mode,
-                                     gallery_thumb_provider, NULL);
+                gallery_redraw(&fb);
                 continue;
             }
             if (ev.type != FLUX_EV_TAP) continue;
 
             flux_gallery_hit_t gh;
-            if (!flux_ui_gallery_hit(&fb, ev.x, ev.y, gallery_dates, gallery_n,
-                                     gallery_scroll, gallery_filter, &gh))
+            if (gallery_search) {
+                if (!flux_ui_gallery_hit(&fb, ev.x, ev.y, gal_s_dates, gal_s_n,
+                                         gallery_scroll, FLUX_GAL_ALLE, &gh))
+                    continue;
+            } else if (!flux_ui_gallery_hit(&fb, ev.x, ev.y, gallery_dates, gallery_n,
+                                            gallery_scroll, gallery_filter, &gh)) {
                 continue;
+            }
+
+            /* ---- Such-Modus: Zurueck / KI / Tastatur / Kachel ---- */
+            if (gallery_search) {
+                if (gh.back) {
+                    gallery_search = 0; gallery_scroll = 0;
+                    flux_ui_gallery_set_search(0, "");
+                    gallery_redraw(&fb);
+                } else if (gh.ki || gh.enter) {
+                    /* An die semantische KI-Suche uebergeben. */
+                    if (gallery_query[0]) {
+                        snprintf(search_query, sizeof(search_query), "%s", gallery_query);
+                        gallery_search = 0;
+                        flux_ui_gallery_set_search(0, "");
+                        search_searching = 1; search_n = 0;
+                        screen = FLUX_SCREEN_SEARCH;
+                        flux_ui_draw_search(&fb, search_query, search_results_p, 0, 1);
+                        char sctx[6400] = {0};
+                        collect_search_context(search_query, sctx, sizeof(sctx));
+                        char sq[6800];
+                        snprintf(sq, sizeof(sq),
+                                 "%s\n\nGib die passendsten Treffer als Liste aus. "
+                                 "Format pro Zeile: Quelle: Inhalt. Maximal 8 Treffer.",
+                                 sctx);
+                        char sanswer[FLUX_MAX_RESPONSE] = {0};
+                        flux_ipc_ask(sq, sanswer, sizeof(sanswer));
+                        parse_search_results(sanswer);
+                        search_searching = 0;
+                        flux_ui_draw_search(&fb, search_query, search_results_p,
+                                            search_n, search_searching);
+                    }
+                } else if (gh.backspace) {
+                    size_t l = strlen(gallery_query);
+                    if (l > 0) gallery_query[l-1] = '\0';
+                    gallery_scroll = 0;
+                    gallery_build_filter();
+                    flux_ui_gallery_set_search(1, gallery_query);
+                    gallery_redraw(&fb);
+                } else if (gh.ch) {
+                    size_t l = strlen(gallery_query);
+                    if (l + 1 < sizeof(gallery_query)) { gallery_query[l] = gh.ch; gallery_query[l+1] = '\0'; }
+                    gallery_scroll = 0;
+                    gallery_build_filter();
+                    flux_ui_gallery_set_search(1, gallery_query);
+                    gallery_redraw(&fb);
+                } else if (gh.tile >= 0 && gh.tile < gal_s_n) {
+                    animate_ripple(&fb, ev.x, ev.y);
+                    open_image(&fb, gal_s_names[gh.tile]);
+                    uint32_t *old = capture_frame(&fb);
+                    screen = FLUX_SCREEN_IMAGE_VIEWER;
+                    flux_ui_draw_image_viewer(&fb, gal_s_names[gh.tile],
+                        image_pixels, image_w, image_h, "", 0);
+                    animate_slide_in(&fb, old);
+                    free(old);
+                }
+                continue;
+            }
 
             if (gh.camera) {
                 /* Kamera-Auslöser (kleines Kamera-Icon unten links). */
@@ -2415,8 +2533,13 @@ int main(void) {
                 /* Filter-Knopf: ehrlicher Stub -- Tipp-Feedback (Ripple). */
                 animate_ripple(&fb, ev.x, ev.y);
             } else if (gh.search) {
-                /* Such-Knopf: ehrlicher Stub -- Tipp-Feedback (Ripple). */
+                /* Lupe: Foto-Such-Modus oeffnen (lokaler Live-Filter + KI). */
                 animate_ripple(&fb, ev.x, ev.y);
+                gallery_search = 1; gallery_query[0] = '\0'; gallery_scroll = 0;
+                gallery_select_mode = 0; gallery_selected = -1;
+                gallery_build_filter();
+                flux_ui_gallery_set_search(1, gallery_query);
+                gallery_redraw(&fb);
             } else if (gh.tile >= 0 && gh.tile < gallery_n) {
                 if (gallery_select_mode) {
                     /* Auswahl-Stub: Kachel markieren/abwaehlen. */
