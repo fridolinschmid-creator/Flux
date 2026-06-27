@@ -2816,18 +2816,56 @@ static void gal_bottom_geom(const flux_fb_t *fb, cal_rect *pill,
 
 /* Zeichnet eine echte Thumbnail-Kachel: center-gecroppter Puffer (vom
  * Aufrufer geliefert, genau TILE*TILE) oder ehrliche Platzhalter-Kachel. */
+/* Erkennt Video-Dateien an der Endung (Foto-Galerie zeigt beides). */
+static int gal_name_is_video(const char *name) {
+    if (!name) return 0;
+    size_t L = strlen(name);
+    const char *exts[] = { ".mov", ".mp4", ".m4v", ".avi", ".mkv", ".webm" };
+    for (size_t e = 0; e < sizeof(exts)/sizeof(exts[0]); e++) {
+        size_t el = strlen(exts[e]);
+        if (L > el) {
+            int eq = 1;
+            for (size_t k = 0; k < el; k++) {
+                char a = name[L-el+k], b = exts[e][k];
+                if (a >= 'A' && a <= 'Z') a += 32;
+                if (a != b) { eq = 0; break; }
+            }
+            if (eq) return 1;
+        }
+    }
+    return 0;
+}
+
+/* Play-Badge fuer Video-Kacheln: dunkler Kreis + weisses Play-Dreieck. */
+static void gal_draw_play_badge(flux_fb_t *fb, int cx, int cy) {
+    fill_circle(fb, cx, cy, 17, 0x0B0D14);
+    draw_ring(fb, cx, cy, 17, 2, 0xFFFFFF);
+    /* Nach rechts zeigendes Dreieck: linke Basis (bx), rechte Spitze (ax).
+     * Pro Zeile schrumpft die rechte Kante zur Spitze hin. */
+    int h = 9, bx = cx - 4, ax = cx + 8;
+    for (int dy = -h; dy <= h; dy++) {
+        int ady = dy < 0 ? -dy : dy;
+        int xr = bx + (ax - bx) * (h - ady) / h;
+        for (int x = bx; x <= xr; x++)
+            flux_fb_set_px(fb, x, cy + dy, 0xFFFFFF);
+    }
+}
+
 static void gal_draw_tile(flux_fb_t *fb, const cal_rect *r,
-                          const uint32_t *thumb, int sel, int select_mode) {
+                          const uint32_t *thumb, int sel, int select_mode,
+                          int is_video) {
     if (thumb) {
         for (int j = 0; j < r->h; j++)
             for (int i = 0; i < r->w; i++)
                 flux_fb_set_px(fb, r->x + i, r->y + j, thumb[j * r->w + i]);
     } else {
-        /* Ehrliche Platzhalter-Kachel: dezente Oberflaeche + Bild-Icon. */
+        /* Ehrliche Platzhalter-Kachel: dezente Oberflaeche + Bild-/Video-Icon. */
         flux_fb_fill_rect(fb, r->x, r->y, r->w, r->h, COL_SURFACE2);
-        flux_icon_draw(fb, FLUX_ICON_IMAGE, r->x + r->w / 2, r->y + r->h / 2,
-                       40, COL_DIM);
+        flux_icon_draw(fb, is_video ? FLUX_ICON_FILE : FLUX_ICON_IMAGE,
+                       r->x + r->w / 2, r->y + r->h / 2, 40, COL_DIM);
     }
+    if (is_video)
+        gal_draw_play_badge(fb, r->x + r->w / 2, r->y + r->h / 2);
     if (select_mode) {
         /* Auswahl-Stub: Markierungskreis oben rechts */
         int cx = r->x + r->w - 16, cy = r->y + 16;
@@ -2882,6 +2920,7 @@ void flux_ui_draw_gallery(flux_fb_t *fb, const char **names, const char **dates,
                         /* teilweise sichtbar: per-Pixel clippen */
                         cal_rect r = { it->x, sy, it->w, it->h };
                         const uint32_t *thumb = thumb_fn ? thumb_fn(names[it->idx], user) : NULL;
+                        int is_video = gal_name_is_video(names[it->idx]);
                         for (int j = 0; j < r.h; j++) {
                             int py = r.y + j;
                             if (py < grid_top || py >= grid_bot) continue;
@@ -2891,12 +2930,16 @@ void flux_ui_draw_gallery(flux_fb_t *fb, const char **names, const char **dates,
                             }
                         }
                         if (!thumb && sy + it->h/2 >= grid_top && sy + it->h/2 < grid_bot)
-                            flux_icon_draw(fb, FLUX_ICON_IMAGE, r.x + r.w/2, sy + r.h/2, 40, COL_DIM);
+                            flux_icon_draw(fb, is_video ? FLUX_ICON_FILE : FLUX_ICON_IMAGE,
+                                           r.x + r.w/2, sy + r.h/2, 40, COL_DIM);
+                        if (is_video && sy + it->h/2 >= grid_top && sy + it->h/2 < grid_bot)
+                            gal_draw_play_badge(fb, r.x + r.w/2, sy + r.h/2);
                     } else {
                         cal_rect r = { it->x, sy, it->w, it->h };
                         const uint32_t *thumb = thumb_fn ? thumb_fn(names[it->idx], user) : NULL;
                         int sel = (it->idx == selected_idx);
-                        gal_draw_tile(fb, &r, thumb, sel, select_mode);
+                        gal_draw_tile(fb, &r, thumb, sel, select_mode,
+                                      gal_name_is_video(names[it->idx]));
                     }
                 }
             }
