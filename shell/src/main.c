@@ -1047,16 +1047,31 @@ static uint32_t *load_ppm_thumb(const char *path, int tile) {
     if (crop_h > H) crop_h = H;
     int src_x0 = (W - crop_w) / 2;
     int src_y0 = (H - crop_h) / 2;
+
+    /* Box-Filter (Flaechenmittel) statt Nearest-Neighbor: jeder Ziel-Pixel
+     * mittelt den gesamten Quellblock, den er abdeckt. Das vermeidet die
+     * harte, "hochaufloesende"/aliasende Optik bei stark verkleinerten
+     * Fotos und Screenshots -- Thumbnails wirken sauber und einheitlich. */
     for (int ty = 0; ty < tile; ty++) {
-        int sy = src_y0 + (int)(ty / scale);
-        if (sy >= H) sy = H - 1;
+        int sy0 = src_y0 + (int)(ty       * crop_h / tile);
+        int sy1 = src_y0 + (int)((ty + 1) * crop_h / tile);
+        if (sy1 <= sy0) sy1 = sy0 + 1;
+        if (sy1 > H) sy1 = H;
         for (int tx = 0; tx < tile; tx++) {
-            int sx = src_x0 + (int)(tx / scale);
-            if (sx >= W) sx = W - 1;
-            int idx = (sy * W + sx) * 3;
-            out[ty * tile + tx] = ((uint32_t)rgb[idx] << 16)
-                                 | ((uint32_t)rgb[idx+1] << 8)
-                                 |  (uint32_t)rgb[idx+2];
+            int sx0 = src_x0 + (int)(tx       * crop_w / tile);
+            int sx1 = src_x0 + (int)((tx + 1) * crop_w / tile);
+            if (sx1 <= sx0) sx1 = sx0 + 1;
+            if (sx1 > W) sx1 = W;
+            uint32_t sr = 0, sg = 0, sb = 0, cnt = 0;
+            for (int sy = sy0; sy < sy1; sy++) {
+                const unsigned char *row = rgb + ((size_t)sy * W + sx0) * 3;
+                for (int sx = sx0; sx < sx1; sx++) {
+                    sr += row[0]; sg += row[1]; sb += row[2];
+                    row += 3; cnt++;
+                }
+            }
+            if (!cnt) cnt = 1;
+            out[ty * tile + tx] = ((sr / cnt) << 16) | ((sg / cnt) << 8) | (sb / cnt);
         }
     }
     free(rgb);
