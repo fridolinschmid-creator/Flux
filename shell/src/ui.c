@@ -1903,14 +1903,16 @@ void flux_ui_draw_files(flux_fb_t *fb, const char *path, const char **names,
                 flux_fb_fill_rect(fb, rows[i].x + 6, rows[i].y + 2,
                                   3, rows[i].h - 4, COL_ACCENT);
 
-            /* File/folder icon dot */
-            int is_dir = (names[i][0] && metas[i] && metas[i][0] == 'd');
-            uint32_t icon_col = is_dir ? COL_ACCENT : COL_TEXT_MUTED;
-            fill_circle(fb, rows[i].x + 22, rows[i].y + rows[i].h / 2, 6, icon_col);
+            /* Echtes Ordner-/Datei-Icon (icon-first). Ordner traegt die Meta
+             * "Ordner" (siehe load_files); alles andere ist eine Datei. */
+            int is_dir = (metas && metas[i] && strcmp(metas[i], "Ordner") == 0);
+            flux_icon_draw(fb, is_dir ? FLUX_ICON_FOLDER : FLUX_ICON_FILE,
+                           rows[i].x + 28, rows[i].y + rows[i].h / 2, 22,
+                           is_dir ? COL_ACCENT : COL_TEXT_MUTED);
 
-            flux_fb_text(fb, rows[i].x + 36, rows[i].y + 10, names[i], COL_TEXT, 2);
+            flux_fb_text(fb, rows[i].x + 52, rows[i].y + 10, names[i], COL_TEXT, 2);
             if (metas && metas[i])
-                flux_fb_text(fb, rows[i].x + 36, rows[i].y + rows[i].h - 22,
+                flux_fb_text(fb, rows[i].x + 52, rows[i].y + rows[i].h - 22,
                              metas[i], COL_DIM, 2);
         }
     }

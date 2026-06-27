@@ -51,6 +51,7 @@ typedef enum {
     FLUX_ICON_PENCIL,        /* Bearbeiten     (Lucide: pencil)          */
     FLUX_ICON_MESSAGE_CIRCLE,/* Nachricht/SMS  (Lucide: message-circle)  */
     FLUX_ICON_GLOBE,         /* Web/Suche      (Lucide: globe)           */
+    FLUX_ICON_FILE,          /* Datei          (Lucide: file-text)       */
     FLUX_ICON_COUNT
 } flux_icon_t;
 
