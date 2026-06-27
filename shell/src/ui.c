@@ -2836,18 +2836,44 @@ static int gal_name_is_video(const char *name) {
     return 0;
 }
 
-/* Play-Badge fuer Video-Kacheln: dunkler Kreis + weisses Play-Dreieck. */
+/* Alpha-Blending eines einzelnen Pixels (Deckung a in 0..255). */
+static void blend_px(flux_fb_t *fb, int x, int y, uint32_t col, int a) {
+    if (a <= 0 || x < 0 || y < 0 || x >= fb->width || y >= fb->height) return;
+    if (a >= 255) { flux_fb_set_px(fb, x, y, col); return; }
+    uint32_t bg = fb->back[y * fb->stride_px + x];
+    int br = (bg >> 16) & 0xff, bgc = (bg >> 8) & 0xff, bb = bg & 0xff;
+    int cr = (col >> 16) & 0xff, cg = (col >> 8) & 0xff, cb = col & 0xff;
+    int rr = (cr * a + br  * (255 - a)) / 255;
+    int rg = (cg * a + bgc * (255 - a)) / 255;
+    int rb = (cb * a + bb  * (255 - a)) / 255;
+    fb->back[y * fb->stride_px + x] = ((uint32_t)rr << 16) | ((uint32_t)rg << 8) | rb;
+}
+
+/* Play-Badge fuer Video-Kacheln: dunkler Kreis + weisses Play-Dreieck.
+ * Anti-aliased per 4x4-Supersampling -- so glatt wie der TrueType-Text,
+ * nicht mehr die harten Pixelkanten der einfachen Primitive. */
 static void gal_draw_play_badge(flux_fb_t *fb, int cx, int cy) {
-    fill_circle(fb, cx, cy, 17, 0x0B0D14);
-    draw_ring(fb, cx, cy, 17, 2, 0xFFFFFF);
-    /* Nach rechts zeigendes Dreieck: linke Basis (bx), rechte Spitze (ax).
-     * Pro Zeile schrumpft die rechte Kante zur Spitze hin. */
-    int h = 9, bx = cx - 4, ax = cx + 8;
-    for (int dy = -h; dy <= h; dy++) {
-        int ady = dy < 0 ? -dy : dy;
-        int xr = bx + (ax - bx) * (h - ady) / h;
-        for (int x = bx; x <= xr; x++)
-            flux_fb_set_px(fb, x, cy + dy, 0xFFFFFF);
+    const float R = 16.5f, RW = 2.0f;        /* Kreisradius + Ringbreite */
+    const float bx = cx - 4, ax = cx + 8, h = 9; /* Dreieck: Basis links, Spitze rechts */
+    const float v0x = bx, v0y = cy - h, v1x = ax, v1y = cy, v2x = bx, v2y = cy + h;
+    const int SS = 4; const float inv = 1.0f / SS, tot = SS * SS;
+    int r = (int)R + 2;
+    for (int y = cy - r; y <= cy + r; y++) {
+        for (int x = cx - r; x <= cx + r; x++) {
+            int disc = 0, ring = 0, tri = 0;
+            for (int sj = 0; sj < SS; sj++) for (int si = 0; si < SS; si++) {
+                float px = x + (si + 0.5f) * inv, py = y + (sj + 0.5f) * inv;
+                float dx = px - cx, dy = py - cy, d = dx*dx + dy*dy;
+                if (d <= R*R) { disc++; if (d >= (R-RW)*(R-RW)) ring++; }
+                float e0 = (v1x-v0x)*(py-v0y) - (v1y-v0y)*(px-v0x);
+                float e1 = (v2x-v1x)*(py-v1y) - (v2y-v1y)*(px-v1x);
+                float e2 = (v0x-v2x)*(py-v2y) - (v0y-v2y)*(px-v2x);
+                if ((e0>=0&&e1>=0&&e2>=0) || (e0<=0&&e1<=0&&e2<=0)) tri++;
+            }
+            if (disc) blend_px(fb, x, y, 0x0B0D14, (int)(205 * disc / tot));
+            if (ring) blend_px(fb, x, y, 0xFFFFFF, (int)(255 * ring / tot));
+            if (tri)  blend_px(fb, x, y, 0xFFFFFF, (int)(255 * tri  / tot));
+        }
     }
 }
 
