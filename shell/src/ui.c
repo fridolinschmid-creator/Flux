@@ -1910,9 +1910,12 @@ void flux_ui_draw_files(flux_fb_t *fb, const char *path, const char **names,
                            rows[i].x + 28, rows[i].y + rows[i].h / 2, 22,
                            is_dir ? COL_ACCENT : COL_TEXT_MUTED);
 
-            flux_fb_text(fb, rows[i].x + 52, rows[i].y + 10, names[i], COL_TEXT, 2);
+            /* Name + Meta eng zentriert (wie die Einstellungs-Karten) statt
+             * an Ober-/Unterkante verteilt. */
+            flux_fb_text(fb, rows[i].x + 52, rows[i].y + rows[i].h / 2 - 16,
+                         names[i], COL_TEXT, 2);
             if (metas && metas[i])
-                flux_fb_text(fb, rows[i].x + 52, rows[i].y + rows[i].h - 22,
+                flux_fb_text(fb, rows[i].x + 52, rows[i].y + rows[i].h / 2 + 4,
                              metas[i], COL_DIM, 2);
         }
     }
@@ -1921,12 +1924,16 @@ void flux_ui_draw_files(flux_fb_t *fb, const char *path, const char **names,
     if (selected_idx >= 0 && selected_idx < n) {
         int del_y = fb->height - LIST_BACK_H - FILES_DELETE_BTN_H - 8;
         int del_x = fb->width - FILES_DELETE_BTN_W - 10;
-        fill_round_rect(fb, del_x, del_y, FILES_DELETE_BTN_W, FILES_DELETE_BTN_H, 8, 0x7F1D1D);
-        flux_fb_hline(fb, del_x, del_y, FILES_DELETE_BTN_W, COL_DANGER);
+        /* Klar gefuellter roter Knopf mit Papierkorb-Icon (statt blassem
+         * Block) -- liest sich eindeutig als Aktion. */
+        fill_round_rect(fb, del_x, del_y, FILES_DELETE_BTN_W, FILES_DELETE_BTN_H, 14, COL_DANGER);
         const char *dlabel = "Löschen";
-        int dlw = flux_fb_text_width(dlabel, 2);
-        flux_fb_text(fb, del_x + (FILES_DELETE_BTN_W - dlw) / 2,
-                     del_y + (FILES_DELETE_BTN_H - 16) / 2, dlabel, COL_DANGER, 2);
+        int icon_w = 20, gap = 7, dlw = flux_fb_text_width(dlabel, 2);
+        int total = icon_w + gap + dlw;
+        int sx = del_x + (FILES_DELETE_BTN_W - total) / 2;
+        int mid = del_y + FILES_DELETE_BTN_H / 2;
+        flux_icon_draw(fb, FLUX_ICON_TRASH, sx + icon_w / 2, mid, icon_w, 0xFFFFFF);
+        flux_fb_text(fb, sx + icon_w + gap, mid - 8, dlabel, 0xFFFFFF, 2);
     }
 
     draw_back_bar(fb, "Zurück");
