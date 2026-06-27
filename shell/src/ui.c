@@ -1860,6 +1860,8 @@ void flux_ui_draw_wifi(flux_fb_t *fb, const char *current, const char **names,
 
 #define FILES_DELETE_BTN_H  56
 #define FILES_DELETE_BTN_W  120
+#define NEWBTN_W            108   /* "+ Ordner"-Knopf -- Draw UND Hit teilen sich diese Masse */
+#define NEWBTN_H            36
 
 void flux_ui_draw_files(flux_fb_t *fb, const char *path, const char **names,
                          const char **metas, int n, int truncated, int selected_idx) {
@@ -1876,16 +1878,19 @@ void flux_ui_draw_files(flux_fb_t *fb, const char *path, const char **names,
                      "(+ weitere Eintraege)", COL_DIM, 1);
     }
 
-    /* "Neuer Ordner"-Knopf oben rechts */
+    /* "Neuer Ordner"-Knopf oben rechts: saubere Pille mit Plus-Icon + Label,
+     * kein Akzent-Strich mehr (der wirkte wie ein verirrter Querstrich). */
     {
-        int bw = 104, bh = 34;
+        int bw = NEWBTN_W, bh = NEWBTN_H;
         int bx = fb->width - bw - 10;
         int by = STATUSBAR_H + 8;
-        fill_round_rect(fb, bx, by, bw, bh, 8, COL_SURFACE3);
-        flux_fb_hline(fb, bx, by, bw, COL_ACCENT);
-        const char *nl = "+ Ordner";
-        int nlw = flux_fb_text_width(nl, 2);
-        flux_fb_text(fb, bx + (bw - nlw) / 2, by + (bh - 16) / 2, nl, COL_ACCENT, 2);
+        fill_round_rect(fb, bx, by, bw, bh, bh / 2, COL_SURFACE3);
+        const char *nl = "Ordner";
+        int icon_w = 16, gap = 6, nlw = flux_fb_text_width(nl, 2);
+        int total = icon_w + gap + nlw;
+        int sx = bx + (bw - total) / 2, mid = by + bh / 2;
+        flux_icon_draw(fb, FLUX_ICON_PLUS, sx + icon_w / 2, mid, icon_w, COL_ACCENT);
+        flux_fb_text(fb, sx + icon_w + gap, mid - 8, nl, COL_ACCENT, 2);
     }
 
     if (n == 0) {
@@ -1941,9 +1946,9 @@ void flux_ui_draw_files(flux_fb_t *fb, const char *path, const char **names,
 }
 
 int flux_ui_files_new_btn_hit(const flux_fb_t *fb, int x, int y) {
-    int bw = 100, bh = 32;
-    int bx = fb->width - bw - 8;
-    int by = STATUSBAR_H + (TITLE_AREA_H - bh) / 2;
+    int bw = NEWBTN_W, bh = NEWBTN_H;
+    int bx = fb->width - bw - 10;
+    int by = STATUSBAR_H + 8;
     return (x >= bx && x < bx + bw && y >= by && y < by + bh);
 }
 
