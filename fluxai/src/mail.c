@@ -47,6 +47,15 @@ void flux_mail_send(const char *to, const char *subject, const char *body,
         return;
     }
 
+    /* Header-Injection verhindern: Empfaenger und Betreff kommen aus der
+     * KI-Antwort und landen in einzeiligen Kopfzeilen. Ein eingeschmuggeltes
+     * CR/LF wuerde sonst zusaetzliche Header (z.B. Bcc:) einschleusen. */
+    char to_h[256], subj_h[256];
+    snprintf(to_h, sizeof(to_h), "%s", to);
+    snprintf(subj_h, sizeof(subj_h), "%s", subject[0] ? subject : "(kein Betreff)");
+    for (char *p = to_h;   *p; p++) if (*p == '\r' || *p == '\n') *p = ' ';
+    for (char *p = subj_h; *p; p++) if (*p == '\r' || *p == '\n') *p = ' ';
+
     char date_buf[64];
     time_t t = time(NULL);
     struct tm tmv;
@@ -57,7 +66,7 @@ void flux_mail_send(const char *to, const char *subject, const char *body,
     snprintf(message, sizeof(message),
              "Date: %s\r\nTo: %s\r\nFrom: %s\r\nSubject: %s\r\n"
              "Content-Type: text/plain; charset=utf-8\r\n\r\n%s\r\n",
-             date_buf, to, from, subject[0] ? subject : "(kein Betreff)", body);
+             date_buf, to_h, from, subj_h, body);
 
     struct upload_state us = { .data = message, .pos = 0, .len = strlen(message) };
 
@@ -70,7 +79,7 @@ void flux_mail_send(const char *to, const char *subject, const char *body,
     char url[256];
     snprintf(url, sizeof(url), "smtp://%s:%s", host, port);
 
-    struct curl_slist *rcpt = curl_slist_append(NULL, to);
+    struct curl_slist *rcpt = curl_slist_append(NULL, to_h);
 
     curl_easy_setopt(curl, CURLOPT_URL, url);
     curl_easy_setopt(curl, CURLOPT_USE_SSL, (long)CURLUSESSL_TRY);
