@@ -115,7 +115,8 @@ static int read_wifi_quality(void) {
     if (!f) return -1;
     char line[128];
     int quality = -1;
-    /* Zwei Header-Zeilen ueberspringen */
+    /* Zwei Header-Zeilen ueberspringen; wenn die Datei kuerzer ist, gibt
+     * es kein WLAN-Interface zu melden. */
     if (!fgets(line, sizeof(line), f) || !fgets(line, sizeof(line), f)) {
         fclose(f);
         return -1;

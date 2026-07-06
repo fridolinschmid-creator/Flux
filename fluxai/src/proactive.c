@@ -275,7 +275,7 @@ void flux_proactive_check(const char *api_key, const char *model) {
              ctx);
 
     char answer[512] = {0};
-    flux_provider_ask(question, answer, sizeof(answer));
+    flux_provider_ask_ephemeral(question, answer, sizeof(answer));
 
     if (!answer[0] || strncmp(answer, "Kein Cloud", 10) == 0) return;
 

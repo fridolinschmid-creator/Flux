@@ -40,6 +40,21 @@ static int make_listen_socket(const char *path) {
     return fd;
 }
 
+/* Socket-Pfad: per FLUX_SOCK_PATH ueberschreibbar (fuer Tests/Dev ohne
+ * Root-Zugriff auf /run), sonst der Standard aus flux_protocol.h. */
+static const char *resolve_sock_path(void) {
+    const char *p = getenv("FLUX_SOCK_PATH");
+    return (p && *p) ? p : FLUX_SOCK_PATH;
+}
+
+/* Legt das Elternverzeichnis des Socket-Pfads an (z.B. /run/flux). */
+static void ensure_sock_dir(const char *sock_path) {
+    char dir[256];
+    snprintf(dir, sizeof(dir), "%s", sock_path);
+    char *slash = strrchr(dir, '/');
+    if (slash && slash != dir) { *slash = '\0'; mkdir(dir, 0755); }
+}
+
 static void handle_client(int cfd) {
     char line[FLUX_MAX_LINE];
     ssize_t n = read(cfd, line, sizeof(line) - 1);
@@ -80,10 +95,11 @@ int main(void) {
     signal(SIGPIPE, SIG_IGN); /* Client kann jederzeit weg sein (Lockscreen-Wechsel) */
     flux_provider_init();
 
-    mkdir("/run/flux", 0755);
-    int listen_fd = make_listen_socket(FLUX_SOCK_PATH);
+    const char *sock_path = resolve_sock_path();
+    ensure_sock_dir(sock_path);
+    int listen_fd = make_listen_socket(sock_path);
 
-    fprintf(stderr, "fluxaid: lauscht auf %s\n", FLUX_SOCK_PATH);
+    fprintf(stderr, "fluxaid: lauscht auf %s\n", sock_path);
 
     /* Benachrichtigungs-Hintergrund-Thread starten */
     flux_notification_start();

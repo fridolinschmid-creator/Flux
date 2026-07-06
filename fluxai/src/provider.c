@@ -487,7 +487,10 @@ static void build_system_prompt(char *system_prompt, size_t cap) {
     }
 }
 
-void flux_provider_ask(const char *question, char *out, size_t out_cap) {
+/* use_history: 1 = letzte Gespraechsrunden einbetten und das Ergebnis im
+ * Verlauf speichern; 0 = ephemerer Aufruf (Hintergrund-Aufgaben). */
+static void provider_ask_impl(const char *question, char *out, size_t out_cap,
+                              int use_history) {
     char api_key[512] = {0};
     char model[200]   = {0};
     const flux_provider_def_t *prov =
@@ -504,8 +507,9 @@ void flux_provider_ask(const char *question, char *out, size_t out_cap) {
     char system_prompt[8192];
     build_system_prompt(system_prompt, sizeof(system_prompt));
 
-    /* Erster API-Aufruf -- mit Gespraechsverlauf */
-    if (!api_call(prov, api_key, model, system_prompt, question, out, out_cap, 1))
+    /* Erster API-Aufruf -- Gespraechsverlauf nur bei use_history */
+    if (!api_call(prov, api_key, model, system_prompt, question, out, out_cap,
+                  use_history))
         return;
 
     /* Agenten-Schleife: solange die Antwort ein Tool-Aufruf ist, das Tool
@@ -543,5 +547,13 @@ void flux_provider_ask(const char *question, char *out, size_t out_cap) {
             return;
     }
 
-    ctx_add(question, out);
+    if (use_history) ctx_add(question, out);
+}
+
+void flux_provider_ask(const char *question, char *out, size_t out_cap) {
+    provider_ask_impl(question, out, out_cap, 1);
+}
+
+void flux_provider_ask_ephemeral(const char *question, char *out, size_t out_cap) {
+    provider_ask_impl(question, out, out_cap, 0);
 }

@@ -11,6 +11,9 @@
 #include <stddef.h>
 
 void flux_provider_init(void);
+
+/* Beantwortet eine Nutzerfrage und pflegt den Gespraechsverlauf
+ * (letzte Runden werden als Kontext mitgesendet und gespeichert). */
 void flux_provider_ask(const char *question, char *out, size_t out_cap);
 
 /* 1, wenn der aktuell gewaehlte Anbieter einen nutzbaren API-Key hat. */
@@ -20,5 +23,10 @@ int flux_provider_available(void);
  * wenn ein Key vorliegt. key_out/model_out duerfen NULL sein. */
 int flux_provider_active(char *key_out, size_t key_cap,
                          char *model_out, size_t model_cap);
+
+/* Wie flux_provider_ask, aber OHNE den Gespraechsverlauf zu lesen oder zu
+ * veraendern. Fuer Hintergrund-Aufgaben (Proactive/Journal/Habits), deren
+ * grosse interne Prompts sonst den Verlauf des Nutzers verschmutzen. */
+void flux_provider_ask_ephemeral(const char *question, char *out, size_t out_cap);
 
 #endif

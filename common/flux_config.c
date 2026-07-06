@@ -30,8 +30,14 @@ static int load_entries(flux_cfg_entry_t *entries, int max_entries) {
         const char *key = line;
         const char *value = eq + 1;
 
-        snprintf(entries[n].key, sizeof(entries[n].key), "%.63s", key);
-        snprintf(entries[n].value, sizeof(entries[n].value), "%s", value);
+        /* Ueberlange Keys/Werte ueberspringen statt still abzuschneiden --
+         * ein abgeschnittener Key wuerde sonst auf den falschen Eintrag
+         * zeigen. */
+        if (strlen(key) >= FLUX_CFG_KEY_CAP || strlen(value) >= FLUX_CFG_VAL_CAP)
+            continue;
+
+        memcpy(entries[n].key, key, strlen(key) + 1);
+        memcpy(entries[n].value, value, strlen(value) + 1);
         n++;
     }
     fclose(f);

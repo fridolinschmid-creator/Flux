@@ -56,6 +56,43 @@ static size_t curl_write_cb(void *ptr, size_t size, size_t nmemb, void *ud) {
     return add;
 }
 
+/* ---- Sicherheits-/Such-Hilfsfunktionen ------------------------------- */
+
+/* 1, wenn der Pfad eine ".."-Komponente enthaelt (Directory-Traversal).
+ * Praefix-Checks allein (z.B. "beginnt mit /home/user/") reichen nicht,
+ * weil "/home/user/../../etc/x" den Praefix passiert aber ausbricht. */
+static int path_has_traversal(const char *p) {
+    if (!p) return 1;
+    for (const char *s = p; *s; ) {
+        if (s[0] == '.' && s[1] == '.' &&
+            (s[2] == '\0' || s[2] == '/') &&
+            (s == p || s[-1] == '/'))
+            return 1;
+        const char *slash = strchr(s, '/');
+        if (!slash) break;
+        s = slash + 1;
+    }
+    return 0;
+}
+
+/* Gross-/Kleinschreibung-unabhaengige Teilstringsuche (ASCII).
+ * Ersetzt vier zuvor kopierte "beide Seiten kleinschreiben, dann strstr"-
+ * Schleifen. Gibt 1 zurueck, wenn needle in haystack vorkommt. */
+static int str_contains_ci(const char *haystack, const char *needle) {
+    if (!*needle) return 1;
+    for (const char *h = haystack; *h; h++) {
+        const char *a = h, *b = needle;
+        while (*a && *b) {
+            char ca = (*a >= 'A' && *a <= 'Z') ? *a + 32 : *a;
+            char cb = (*b >= 'A' && *b <= 'Z') ? *b + 32 : *b;
+            if (ca != cb) break;
+            a++; b++;
+        }
+        if (!*b) return 1;
+    }
+    return 0;
+}
+
 /* ---- date_time -------------------------------------------------------- */
 
 static int tool_date_time(const char *arg, char *out, size_t cap) {
@@ -151,8 +188,8 @@ static int tool_weather(const char *arg, char *out, size_t cap) {
  * Verhindert insbesondere Zugriff auf /etc/flux/flux.conf (API-Keys,
  * SMTP-Passwort) und andere Systemdateien. */
 static int path_read_allowed(const char *path) {
-    /* Pfad-Traversal mit ".." grundsaetzlich ablehnen */
-    if (strstr(path, "..")) return 0;
+    /* Pfad-Traversal mit ".."-Komponenten grundsaetzlich ablehnen */
+    if (path_has_traversal(path)) return 0;
 
     /* Kanonischen Pfad aufloesen und ERST DANN gegen die erlaubten
      * Praefixe pruefen. Ohne das laesst sich der Schutz von flux.conf
@@ -298,7 +335,7 @@ static int tool_file_create(const char *arg, char *out, size_t cap) {
     /* Sicherheit: kanonischen Pfad pruefen (verhindert Path-Traversal) */
     if (!path_is_allowed(path, 1)) {
         snprintf(out, cap,
-                 "Fehler: Erstellen nur unter /home/user/ und /tmp/ erlaubt");
+                 "Fehler: Erstellen nur unter /home/user/ und /tmp/ erlaubt (ohne '..')");
         return 1;
     }
 
@@ -610,16 +647,7 @@ static int tool_contacts_search(const char *arg, char *out, size_t cap) {
     char line[256];
     int found = 0;
     while (fgets(line, sizeof(line), f) && pos + 2 < sizeof(tmp)) {
-        /* Gross-Klein-unabhaengige Suche durch manuellen Vergleich */
-        char lower_line[256], lower_arg[128];
-        int li = 0, ai = 0;
-        for (; line[li] && li < 255; li++)
-            lower_line[li] = (line[li] >= 'A' && line[li] <= 'Z') ? line[li] + 32 : line[li];
-        lower_line[li] = '\0';
-        for (; arg[ai] && ai < 127; ai++)
-            lower_arg[ai] = (arg[ai] >= 'A' && arg[ai] <= 'Z') ? arg[ai] + 32 : arg[ai];
-        lower_arg[ai] = '\0';
-        if (strstr(lower_line, lower_arg)) {
+        if (str_contains_ci(line, arg)) {
             size_t ll = strlen(line);
             if (pos + ll + 1 < sizeof(tmp)) {
                 memcpy(tmp + pos, line, ll);
@@ -894,17 +922,9 @@ static int tool_memory_search(const char *arg, char *out, size_t cap) {
     FILE *f = fopen(MEMORY_PATH, "r");
     if (!f) { snprintf(out, cap, "Keine Erinnerungen vorhanden."); return 1; }
     char tmp[4096]; size_t pos = snprintf(tmp, sizeof(tmp), "Erinnerungen zu \"%s\":\n", arg);
-    char lower_arg[128]; size_t ai = 0;
-    for (const char *p = arg; *p && ai < sizeof(lower_arg)-1; p++, ai++)
-        lower_arg[ai] = (*p >= 'A' && *p <= 'Z') ? *p + 32 : *p;
-    lower_arg[ai] = '\0';
     char line[256]; int found = 0;
     while (fgets(line, sizeof(line), f)) {
-        char lower_line[256]; size_t li = 0;
-        for (const char *p = line; *p && li < sizeof(lower_line)-1; p++, li++)
-            lower_line[li] = (*p >= 'A' && *p <= 'Z') ? *p + 32 : *p;
-        lower_line[li] = '\0';
-        if (strstr(lower_line, lower_arg)) {
+        if (str_contains_ci(line, arg)) {
             size_t ll = strlen(line);
             if (pos + ll + 1 < sizeof(tmp)) { memcpy(tmp + pos, line, ll); pos += ll; tmp[pos] = '\0'; }
             found++;
@@ -928,19 +948,11 @@ static int tool_memory_delete(const char *arg, char *out, size_t cap) {
         lines[n-1][sizeof(lines[0])-1] = '\0';
     }
     fclose(f);
-    char lower_arg[128]; size_t ai = 0;
-    for (const char *p = arg; *p && ai < sizeof(lower_arg)-1; p++, ai++)
-        lower_arg[ai] = (*p >= 'A' && *p <= 'Z') ? *p + 32 : *p;
-    lower_arg[ai] = '\0';
     f = fopen(MEMORY_PATH, "w");
     if (!f) { snprintf(out, cap, "Fehler: Datei nicht schreibbar"); return 1; }
     int deleted = 0;
     for (int i = 0; i < n; i++) {
-        char lower_line[256]; size_t li = 0;
-        for (const char *p = lines[i]; *p && li < sizeof(lower_line)-1; p++, li++)
-            lower_line[li] = (*p >= 'A' && *p <= 'Z') ? *p + 32 : *p;
-        lower_line[li] = '\0';
-        if (strstr(lower_line, lower_arg)) { deleted++; }
+        if (str_contains_ci(lines[i], arg)) { deleted++; }
         else { fputs(lines[i], f); }
     }
     fclose(f);
@@ -1111,21 +1123,7 @@ static void search_files_walk(const char *base, const char *pattern,
         snprintf(full, sizeof(full), "%s/%s", base, e->d_name);
         struct stat st;
         if (stat(full, &st) != 0) continue;
-        /* Case-insensitive name match. Terminatoren an den TATSAECHLICH
-         * kopierten Zaehlern setzen -- strlen() koennte groesser als die
-         * Puffergroesse sein (Muster bis 1024 Zeichen) und schriebe sonst
-         * ausserhalb von lower_pat/lower_name. */
-        char lower_name[256], lower_pat[128];
-        int ni = 0, pi = 0;
-        for (; e->d_name[ni] && ni < 255; ni++)
-            lower_name[ni] = (e->d_name[ni] >= 'A' && e->d_name[ni] <= 'Z')
-                           ? e->d_name[ni] + 32 : e->d_name[ni];
-        lower_name[ni] = '\0';
-        for (; pattern[pi] && pi < 127; pi++)
-            lower_pat[pi] = (pattern[pi] >= 'A' && pattern[pi] <= 'Z')
-                          ? pattern[pi] + 32 : pattern[pi];
-        lower_pat[pi] = '\0';
-        if (strstr(lower_name, lower_pat)) {
+        if (str_contains_ci(e->d_name, pattern)) {
             size_t ol = strlen(out);
             snprintf(out + ol, cap - ol, "  %s\n", full);
             (*count)++;
