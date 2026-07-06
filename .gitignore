@@ -8,6 +8,7 @@ build/overlay-pi5/usr/bin/fluxaid
 build/raspberrypi5/flux-bootlogo.ppm
 *.o
 tests/test_actions
+tests/test_config
 tests/protocol_client
 .claude/*
 !.claude/skills/
