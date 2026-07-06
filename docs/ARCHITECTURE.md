@@ -1,5 +1,18 @@
 # Flux -- Architektur
 
+> **Aktueller Stand (2026-06):** Die unten beschriebenen Grundprinzipien
+> (drei Komponenten, Mini-Protokoll, Framebuffer + Dirty-Row, lokale
+> Intents zuerst) gelten unveraendert. Die Oberflaeche ist seitdem aber
+> deutlich gewachsen: die Shell hat **16 Bildschirme** (nicht mehr nur
+> sieben -- Kalender, Kontakte, Galerie/Kamera, Bild-Betrachter,
+> KI-Gedaechtnis, Meeting-Mitschrift, semantische Suche, globaler
+> KI-Overlay), der Daemon hat eine **Tool-Schicht (30 Tools)**,
+> Bildanalyse (Vision), Spracheingabe (Whisper) und drei
+> Hintergrunddienste (Proactive-Hinweise, Tagebuch, Habit-Learning).
+> Der Abschnitt "Erweiterte Komponenten" am Ende dokumentiert das; eine
+> vollstaendige Bestandsaufnahme inkl. gefundener Probleme steht in
+> [`AUDIT.md`](AUDIT.md).
+
 ## Designprinzip
 
 Jede Schicht macht genau eine Sache und macht sie schnell. Keine
@@ -107,6 +120,57 @@ Linux-Kernel + Toolchain + Basissystem kommen von Buildroot
 und liefert die beiden eigenen Binaries aus -- alles andere (Mounten von
 `/proc`/`/sys`, Netzwerk per DHCP, ext4-Rootfs) ist Buildroot-Standard und
 wurde nicht neu erfunden.
+
+## Erweiterte Komponenten (Stand 2026-06)
+
+### Tool-Schicht im Daemon (`fluxai/src/tools.c`)
+Wenn `provider.c` eine Cloud-Antwort holt, darf das Modell statt Freitext
+einen `TOOL:<name>\nARG:<wert>`-Block zuruecksenden. Der Daemon fuehrt das
+Tool aus und stellt das Ergebnis in einem zweiten API-Aufruf zur
+Verfuegung (max. ein Tool-Aufruf pro Anfrage). 30 Tools: Datei-CRUD
+(sandboxed auf `/home/user/` und `/tmp/`, ohne `..`), Wetter (wttr.in),
+Rechner, Notizen/Erinnerungen, Kontakte, Kalender, Helligkeit, WLAN-Info,
+Vibration, Bildanalyse und das **KI-Gedaechtnis** (`memory_save/list/
+search/delete`, persistiert in `/etc/flux/memory.txt`, wird in den
+System-Prompt eingebettet).
+
+**Sicherheit der Tool-Schicht:** `file_read` verweigert die
+Konfigurationsdatei (`flux.conf` enthaelt API-Key/SMTP-Passwort/PIN-Hash),
+Schreib-/Loeschtools lehnen `..`-Pfade ab, und `vision.c` baut den
+`convert`-Aufruf mit shell-gequoteten Pfaden (kein Command-Injection ueber
+Dateinamen). Siehe `AUDIT.md` fuer die Historie.
+
+### Vision (`fluxai/src/vision.c`)
+PPM → JPEG (ImageMagick `convert`) → base64 → Anthropic Vision API.
+Beschreibt Fotos auf Deutsch. Wird vom `image_analyze`-Tool und vom
+Bild-Betrachter der Shell genutzt.
+
+### Spracheingabe (`shell/src/voice.c`)
+Aufnahme per `arecord`/`ffmpeg` (16 kHz Mono), Transkription per
+`whisper-cli` mit lokalem Modell. Beide Schritte optional -- fehlen die
+Binaries/das Modell, meldet die Shell das ehrlich (kein Cloud-Whisper,
+Privacy-Grund). Ersetzt den frueheren reinen Platzhalter.
+
+### Hintergrunddienste (Daemon-Hauptschleife, `select()`-Timeout 5 min)
+- **Proactive** (`proactive.c`): scannt Gedaechtnis/Kalender auf
+  Geburtstage und Termine heute/morgen und schreibt einen kurzen
+  Sperrbildschirm-Hinweis nach `/tmp/flux_proactive.txt` (max. 1×/h).
+- **Journal** (`journal.c`): generiert abends (ab 22:00, 1×/Tag) einen
+  Markdown-Tagebucheintrag unter `/home/user/Journal/`.
+- **Habits** (`habits.c`): protokolliert genutzte Screens/Themen und
+  erzeugt morgens (07:00-10:00) ein personalisiertes Briefing.
+
+Diese drei rufen die KI **ephemerisch** auf
+(`flux_provider_ask_ephemeral`), damit ihre grossen internen Prompts den
+Gespraechsverlauf des Nutzers nicht verschmutzen.
+
+### Zusaetzliche Shell-Bildschirme
+Kalender, Kontakte, Fotogalerie + Kamera (V4L2 mit Testmuster-Fallback,
+`camera.c`), Bild-Betrachter mit KI-Analyse, KI-Gedaechtnis-Liste,
+Meeting-Mitschrift und semantische Suche. Erreichbar ueber die
+Schnellzugriff-Leiste, getippte/gesprochene Schluesselwoerter oder Wisch-
+Gesten. Der globale **KI-Overlay** (Wisch nach rechts) bietet auf jedem
+Screen eine kontextbezogene KI-Frage mit "Als Datei speichern".
 
 ## Warum dieser Zuschnitt?
 

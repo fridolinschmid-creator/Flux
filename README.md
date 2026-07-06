@@ -166,6 +166,17 @@ cd fluxai && make && ./fluxaid &
 cd ../shell && make
 ```
 
+Automatisierte Tests (kein Root, kein Netz, kein API-Key nötig):
+
+```bash
+make test   # Unit-Tests (lokale Intents) + End-to-End-Protokolltest
+```
+
+`make test` startet den Daemon mit einem Socket unter `/tmp`
+(`FLUX_SOCK_PATH`-Override) und prüft mit `FLUX_PROVIDER=mock` den
+kompletten Tool-Dispatch samt Sicherheits-Guards — deterministisch,
+ohne Cloud-Zugriff.
+
 ### 2. Vollständiges Image für QEMU (aarch64)
 
 Baut Linux-Kernel + Rootfs mit Buildroot und cross-kompiliert
