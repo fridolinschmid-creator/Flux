@@ -497,6 +497,32 @@ static int parse_tool_call(const char *response,
     "<Text>\n" \
     "Falls Empfaenger oder Inhalt wirklich unklar sind, frage nach. "
 
+/* Bereinigt Nutzer-gespeicherte Inhalte (memory.txt, prefs.txt) bevor
+ * sie in den System-Prompt eingebettet werden. Zeilen, die mit KI-internen
+ * Steuerpraefixen anfangen (ACTION:, TOOL:, SYSTEM:), werden entfernt --
+ * sonst koennte manipulierter Inhalt in memory.txt das Modell dazu bringen,
+ * Aktionen auszuloesen, als kaemen sie vom Nutzer selbst (Prompt-Injection). */
+static void sanitize_user_content(char *buf, size_t cap) {
+    char out[2048] = {0};
+    size_t o = 0;
+    const char *p = buf;
+    while (*p) {
+        const char *eol = strchr(p, '\n');
+        size_t llen = eol ? (size_t)(eol - p) : strlen(p);
+        int skip = (strncmp(p, "ACTION:", 7) == 0 ||
+                    strncmp(p, "TOOL:",   5) == 0 ||
+                    strncmp(p, "SYSTEM:", 7) == 0);
+        if (!skip && o + llen + 1 < sizeof(out)) {
+            memcpy(out + o, p, llen);
+            o += llen;
+            if (eol) out[o++] = '\n';
+        }
+        p = eol ? eol + 1 : p + llen;
+    }
+    out[o] = '\0';
+    snprintf(buf, cap, "%s", out);
+}
+
 static void build_system_prompt(char *system_prompt, size_t cap) {
     time_t _t = time(NULL); struct tm _tm; localtime_r(&_t, &_tm);
     char _dt[64]; strftime(_dt, sizeof(_dt), "%A, %d. %B %Y, %H:%M Uhr", &_tm);
@@ -508,6 +534,10 @@ static void build_system_prompt(char *system_prompt, size_t cap) {
     char _mem[2048] = {0};
     FILE *_mf = fopen("/etc/flux/memory.txt", "r");
     if (_mf) { size_t _n = fread(_mem, 1, sizeof(_mem)-1, _mf); _mem[_n] = '\0'; fclose(_mf); }
+
+    /* Prompt-Injection-Schutz: Steuerpraefixe aus Nutzerinhalten entfernen */
+    if (_prefs[0]) sanitize_user_content(_prefs, sizeof(_prefs));
+    if (_mem[0])   sanitize_user_content(_mem,   sizeof(_mem));
 
     snprintf(system_prompt, cap, "%s\n\nAktuelles Datum/Uhrzeit: %s\n",
              FLUX_SYSTEM_PROMPT_BASE, _dt);

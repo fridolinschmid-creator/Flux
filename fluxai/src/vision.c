@@ -105,7 +105,8 @@ int flux_vision_analyze(const char *ppm_path, char *out, size_t out_cap,
         return 0;
     }
 
-    /* PPM → JPEG per ImageMagick ohne system()-Shell-Injection */
+    /* PPM → JPEG per ImageMagick (Anthropic akzeptiert kein PPM).
+     * Kein system()/Shell -- direkt execl() um Shell-Injection zu vermeiden. */
     const char *tmp_jpg = "/tmp/flux_vision_img.jpg";
     {
         pid_t pid = fork();
@@ -213,11 +214,32 @@ int flux_vision_analyze(const char *ppm_path, char *out, size_t out_cap,
     curl_easy_setopt(curl, CURLOPT_TIMEOUT, 30L);
 
     CURLcode res = curl_easy_perform(curl);
+    long http_code = 0;
+    curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &http_code);
+
     int ok = 0;
     if (res != CURLE_OK) {
         snprintf(out, out_cap, "Netzwerkfehler: %s", curl_easy_strerror(res));
+    } else if (http_code == 401) {
+        snprintf(out, out_cap, "API-Key ungueltig oder abgelaufen (HTTP 401).");
+    } else if (http_code == 429) {
+        snprintf(out, out_cap, "API-Limit erreicht, bitte kurz warten (HTTP 429).");
+    } else if (http_code != 200) {
+        snprintf(out, out_cap, "Bildanalyse-Fehler (HTTP %ld).", http_code);
     } else if (!extract_text(resp.data, out, out_cap)) {
-        snprintf(out, out_cap, "KI-Antwort konnte nicht gelesen werden.");
+        const char *ekey = "\"message\":\"";
+        const char *ep = strstr(resp.data, ekey);
+        if (ep) {
+            ep += strlen(ekey);
+            char errbuf[256] = {0};
+            size_t ei = 0;
+            while (*ep && *ep != '"' && ei + 1 < sizeof(errbuf))
+                errbuf[ei++] = *ep++;
+            errbuf[ei] = '\0';
+            snprintf(out, out_cap, "KI-Fehler: %s", errbuf);
+        } else {
+            snprintf(out, out_cap, "KI-Antwort konnte nicht gelesen werden.");
+        }
     } else {
         ok = 1;
     }
@@ -226,5 +248,6 @@ int flux_vision_analyze(const char *ppm_path, char *out, size_t out_cap,
     curl_easy_cleanup(curl);
     free(resp.data);
     free(body);
+    explicit_bzero(key_buf, sizeof(key_buf));
     return ok;
 }

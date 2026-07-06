@@ -39,6 +39,7 @@
 #include <sys/select.h>
 #include <sys/wait.h>
 #include <time.h>
+#include <limits.h>
 
 /* ---- Uebergangs-Animation (Einblenden von unten) --------------------- */
 
@@ -686,7 +687,7 @@ static void load_contacts_list(void) {
 }
 
 /* Datei-Betrachter */
-static char viewer_path[1024] = {0};
+static char viewer_path[PATH_MAX] = {0};
 static char viewer_content[VIEWER_CONTENT_MAX] = {0};
 static int  viewer_scroll = 0;
 
@@ -727,7 +728,7 @@ static char ai_ovl_input[512]   = {0};
 static char ai_ovl_result[2048] = {0};
 static char ai_ovl_label[80]    = {0};
 static char ai_ovl_ctx[8192]    = {0};   /* Volltext-Kontext fuer die KI */
-static char ai_ovl_save_path[256] = {0}; /* Pfad fuer "Als Datei speichern" */
+static char ai_ovl_save_path[PATH_MAX + 32] = {0}; /* Pfad fuer "Als Datei speichern" */
 
 /* Bild-Betrachter */
 static char   image_path[512]   = {0};
@@ -1262,11 +1263,11 @@ static void build_ai_overlay_context(flux_screen_t screen,
             fname = fname ? fname + 1 : viewer_path;
             snprintf(ai_ovl_label, sizeof(ai_ovl_label), "Datei: %.50s", fname);
             snprintf(ai_ovl_ctx, sizeof(ai_ovl_ctx),
-                     "Du hilfst dem Nutzer mit der Datei '%s'. "
+                     "Du hilfst dem Nutzer mit der Datei '%.1000s'. "
                      "Inhalt (ggf. gekuerzt):\n%.6000s",
                      viewer_path, viewer_content);
             /* Speicherpfad: gleiche Datei + _Zusammenfassung.txt */
-            char base[256]; snprintf(base, sizeof(base), "%.255s", viewer_path);
+            char base[PATH_MAX]; snprintf(base, sizeof(base), "%s", viewer_path);
             char *dot = strrchr(base, '.'); if (dot) *dot = '\0';
             /* Suffix darf bei langen Pfaden nicht abgeschnitten werden */
             snprintf(ai_ovl_save_path, sizeof(ai_ovl_save_path),
@@ -1550,6 +1551,8 @@ int main(void) {
     char pin_buf[FLUX_PIN_LEN + 1] = {0};
     int  pin_len = 0;
     int  pin_error = 0;
+    int  pin_fail_count = 0;
+    time_t pin_locked_until = 0;
 
     flux_action_t pending_action;
     memset(&pending_action, 0, sizeof(pending_action));
@@ -1680,10 +1683,10 @@ int main(void) {
                         /* kurzes Feedback */
                         char saved_msg[320];
                         snprintf(saved_msg, sizeof(saved_msg),
-                                 "Gespeichert: %s", ai_ovl_save_path);
+                                 "Gespeichert: %.250s", ai_ovl_save_path);
                         /* Ergebnis-Text kurz ersetzen */
                         snprintf(ai_ovl_result, sizeof(ai_ovl_result),
-                                 "[Gespeichert unter %s]", ai_ovl_save_path);
+                                 "[Gespeichert unter %.2000s]", ai_ovl_save_path);
                         redraw_current_screen(&fb, screen, last_q, input_buf, answer_buf);
                         flux_ui_draw_ai_overlay(&fb, ai_ovl_label, ai_ovl_input, ai_ovl_result);
                     }
@@ -1768,6 +1771,13 @@ int main(void) {
             }
             if (!hit) continue;
 
+            /* Brute-Force-Schutz: nach 5 Fehlversuchen 30 s sperren */
+            if (pin_locked_until > 0 && time(NULL) < pin_locked_until) {
+                pin_error = 1;
+                flux_ui_draw_pin(&fb, 0, pin_error);
+                continue;
+            }
+
             pin_error = 0;
             if (backspace) {
                 if (pin_len > 0) pin_len--;
@@ -1782,8 +1792,10 @@ int main(void) {
                 char stored[128] = {0};
                 flux_config_get("pin_hash", stored, sizeof(stored));
                 pin_len = 0;
-                pin_buf[0] = '\0';
+                explicit_bzero(pin_buf, sizeof(pin_buf));
                 if (strcmp(hash, stored) == 0) {
+                    pin_fail_count = 0;
+                    pin_locked_until = 0;
                     /* PIN korrekt -- zweiten Faktor pruefen (falls eingerichtet) */
                     if (voice_unlock_enrolled()) {
                         voice_verify_phase = 0;
@@ -1805,6 +1817,11 @@ int main(void) {
                         animate_home_intro(&fb, &in, last_q, input_buf, answer_buf);
                     }
                 } else {
+                    pin_fail_count++;
+                    if (pin_fail_count >= 5) {
+                        pin_locked_until = time(NULL) + 30;
+                        pin_fail_count = 0;
+                    }
                     pin_error = 1;
                     flux_ui_draw_pin(&fb, pin_len, pin_error);
                 }
@@ -2211,9 +2228,11 @@ int main(void) {
                         snprintf(full_path, sizeof(full_path), "/%s",
                                  file_names_buf[file_selected]);
 
-                    /* Sicherheit: nur /home/user/ loeschen */
-                    if (strncmp(full_path, "/home/user/", 11) == 0)
-                        remove(full_path);
+                    /* Sicherheit: realpath() aufloesen -- verhindert Symlink-Bypass */
+                    char real_del[PATH_MAX];
+                    if (realpath(full_path, real_del) &&
+                        strncmp(real_del, "/home/user/", 11) == 0)
+                        remove(real_del);
                 }
                 file_selected = -1;
                 load_files(files_path);
@@ -3059,7 +3078,7 @@ int main(void) {
                                        FLUX_SETTINGS_N);
                 continue;
             } else if (quick == 2) {
-                strcpy(files_path, "/");
+                files_path[0] = '/'; files_path[1] = '\0';
                 file_selected = -1;
                 load_files(files_path);
                 animate_ripple(&fb, ev.x, ev.y);
@@ -3216,7 +3235,7 @@ int main(void) {
             }
             if (strcasecmp(input_buf, "dateien") == 0 || strcasecmp(input_buf, "files") == 0) {
                 input_buf[0] = '\0';
-                strcpy(files_path, "/");
+                files_path[0] = '/'; files_path[1] = '\0';
                 file_selected = -1;
                 load_files(files_path);
                 uint32_t *old = capture_frame(&fb);
