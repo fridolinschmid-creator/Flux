@@ -1,9 +1,11 @@
 #include "ipc.h"
 #include "../../common/flux_protocol.h"
+#include "../../common/flux_log.h"
 
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <errno.h>
 #include <unistd.h>
 #include <sys/socket.h>
 #include <sys/un.h>
@@ -31,12 +33,14 @@ void flux_ipc_send_raw(const char *request, char *out, size_t out_cap) {
 
     if (connect(fd, (struct sockaddr *)&addr, sizeof(addr)) < 0) {
         snprintf(out, out_cap, "fluxaid laeuft nicht (kein Socket unter %s).", sock);
+        LOGE("ipc: connect(%s) fehlgeschlagen: %s", sock, strerror(errno));
         close(fd);
         return;
     }
 
     if (write(fd, request, strlen(request)) < 0) {
         snprintf(out, out_cap, "Fehler beim Senden an fluxaid.");
+        LOGE("ipc: write() an fluxaid fehlgeschlagen: %s", strerror(errno));
         close(fd);
         return;
     }
@@ -56,6 +60,7 @@ void flux_ipc_send_raw(const char *request, char *out, size_t out_cap) {
     close(fd);
     if (total == 0) {
         snprintf(out, out_cap, "Keine Antwort von fluxaid erhalten.");
+        LOGE("ipc: keine Antwort von fluxaid (read=%zd): %s", n, strerror(errno));
         return;
     }
     resp[total] = '\0';

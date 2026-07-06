@@ -1,6 +1,8 @@
 #include "exec.h"
 #include "mail.h"
 #include "telephony.h"
+#include "radio.h"
+#include "logsync.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -128,6 +130,19 @@ void flux_exec_action(const char *payload, char *out, size_t out_cap) {
             if (resolve_contact(to, 0, resolved, sizeof(resolved)))
                 snprintf(to, sizeof(to), "%s", resolved);
         }
+    }
+
+    if (strcasecmp(type, "flight") == 0) {
+        /* Flugmodus: Zustand ("an"/"aus") steht im body. */
+        int on = (body[0] == 'a' && body[1] == 'n'); /* "an" -> 1, sonst aus */
+        flux_radio_set_airplane(on, out, out_cap);
+        return;
+    }
+
+    if (strcasecmp(type, "logs") == 0) {
+        /* Vom Nutzer angestossener Log-Upload an das konfigurierte Backend. */
+        flux_logsync_upload(out, out_cap);
+        return;
     }
 
     if (strcasecmp(type, "mail") == 0) {

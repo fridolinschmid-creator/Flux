@@ -6,11 +6,35 @@
 
 const char *flux_action_type_label(flux_action_type_t type) {
     switch (type) {
-        case FLUX_ACTION_MAIL: return "mail";
-        case FLUX_ACTION_SMS:  return "sms";
-        case FLUX_ACTION_CALL: return "call";
-        default:                return "none";
+        case FLUX_ACTION_MAIL:   return "mail";
+        case FLUX_ACTION_SMS:    return "sms";
+        case FLUX_ACTION_CALL:   return "call";
+        case FLUX_ACTION_FLIGHT: return "flight";
+        default:                 return "none";
     }
+}
+
+/* Normalisiert einen Flugmodus-Zustand auf "an"/"aus" (in-place).
+ * Gibt 1 zurueck, wenn s ein erkanntes Token war, sonst 0. */
+static int normalize_flight_state(char *s) {
+    /* fuehrende/anhaengende Leerzeichen + Zeilenumbrueche entfernen */
+    char *b = s;
+    while (*b == ' ' || *b == '\n' || *b == '\r' || *b == '\t') b++;
+    char buf[16] = {0};
+    size_t i = 0;
+    for (; b[i] && b[i] != '\n' && b[i] != '\r' && i < sizeof(buf) - 1; i++)
+        buf[i] = (char)((b[i] >= 'A' && b[i] <= 'Z') ? b[i] + 32 : b[i]);
+    while (i > 0 && buf[i-1] == ' ') buf[--i] = '\0';
+
+    if (strcmp(buf, "an") == 0 || strcmp(buf, "ein") == 0 || strcmp(buf, "on") == 0 ||
+        strcmp(buf, "1") == 0 || strcmp(buf, "true") == 0) {
+        strcpy(s, "an"); return 1;
+    }
+    if (strcmp(buf, "aus") == 0 || strcmp(buf, "off") == 0 || strcmp(buf, "0") == 0 ||
+        strcmp(buf, "false") == 0) {
+        strcpy(s, "aus"); return 1;
+    }
+    return 0;
 }
 
 static flux_action_type_t parse_type(const char *s) {
@@ -19,6 +43,7 @@ static flux_action_type_t parse_type(const char *s) {
         strcasecmp(s, "e-mail") == 0) return FLUX_ACTION_MAIL;
     if (strcasecmp(s, "sms") == 0)  return FLUX_ACTION_SMS;
     if (strcasecmp(s, "call") == 0 || strcasecmp(s, "anruf") == 0) return FLUX_ACTION_CALL;
+    if (strcasecmp(s, "flight") == 0 || strcasecmp(s, "flugmodus") == 0) return FLUX_ACTION_FLIGHT;
     return FLUX_ACTION_NONE;
 }
 
@@ -64,16 +89,31 @@ int flux_action_parse(const char *answer, flux_action_t *out) {
             memcpy(out->subject, p, len);
             out->subject[len] = '\0';
             p = e ? e + 1 : p + len;
+        } else if (strncmp(p, "STATE:", 6) == 0) {
+            /* Flugmodus-Zustand -- gleichwertig zu BODY, aber explizit. */
+            p += 6;
+            const char *e = strchr(p, '\n');
+            size_t len = e ? (size_t)(e - p) : strlen(p);
+            if (len >= sizeof(out->body)) len = sizeof(out->body) - 1;
+            memcpy(out->body, p, len);
+            out->body[len] = '\0';
+            p = e ? e + 1 : p + len;
         } else if (strncmp(p, "BODY:", 5) == 0) {
             p += 5;
             if (*p == '\n') p++;
             snprintf(out->body, sizeof(out->body), "%s", p);
-            return out->to[0] != '\0';
+            break;
         } else {
             const char *e = strchr(p, '\n');
             p = e ? e + 1 : p + strlen(p);
         }
     }
+
+    /* Flugmodus braucht keinen Empfaenger, sondern einen gueltigen
+     * Zustand ("an"/"aus") im body. Andere Aktionen brauchen einen
+     * Empfaenger. */
+    if (out->type == FLUX_ACTION_FLIGHT)
+        return normalize_flight_state(out->body);
     return out->to[0] != '\0';
 }
 

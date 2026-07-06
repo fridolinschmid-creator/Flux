@@ -197,6 +197,13 @@ void flux_ui_draw_notify(flux_fb_t *fb);
 /* Gibt 1 wenn der Bildschirm per Tap geschlossen werden soll. */
 int flux_ui_notify_hit(const flux_fb_t *fb, int x, int y);
 
+/* Zeichnet ein Fehler-Banner (rot) ueber den aktuellen Bildschirm. top_y =
+ * obere Kante (fuer die Slide-up-Animation von unten). Hoehe via
+ * flux_ui_error_toast_height(). Der Aufrufer komponiert es ueber den
+ * gesicherten Backbuffer (siehe animate_error_toast in main.c). */
+void flux_ui_draw_error_toast(flux_fb_t *fb, const char *msg, int top_y);
+int  flux_ui_error_toast_height(const flux_fb_t *fb);
+
 /* ---- Kalender -------------------------------------------------------
  * Monatsgitter. today_day: heutiger Tag (1-31, 0=unbekannt).
  * selected_day: markierter Tag (0=keiner). event_strs: Ereignis-Strings

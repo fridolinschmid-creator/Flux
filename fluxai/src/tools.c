@@ -23,6 +23,7 @@
 #include "tools.h"
 #include "vision.h"
 #include "imap.h"
+#include "radio.h"
 #include "../../common/flux_config.h"
 
 #include <curl/curl.h>
@@ -35,7 +36,9 @@
 #include <dirent.h>
 #include <sys/stat.h>
 #include <limits.h>
+#include <ctype.h>
 
+#define FLUX_USER_DOCS_DIR "/home/user/Dokumente"  /* Standard-Ablage fuer Nutzer-/KI-Dateien */
 #define NOTES_PATH      "/etc/flux/notes.txt"
 #define MEMORY_PATH     "/etc/flux/memory.txt"
 #define WEATHER_CACHE   "/tmp/flux_weather.txt"
@@ -337,14 +340,28 @@ static int tool_file_create(const char *arg, char *out, size_t cap) {
 
     /* Format: "pfad|inhalt" -- | als Trennzeichen */
     const char *sep = strchr(arg, '|');
-    char path[512];
+    char raw[512];
     if (!sep) {
-        snprintf(path, sizeof(path), "%s", arg);
+        snprintf(raw, sizeof(raw), "%s", arg);
     } else {
         size_t plen = (size_t)(sep - arg);
-        if (plen >= sizeof(path)) plen = sizeof(path) - 1;
-        memcpy(path, arg, plen);
-        path[plen] = '\0';
+        if (plen >= sizeof(raw)) plen = sizeof(raw) - 1;
+        memcpy(raw, arg, plen);
+        raw[plen] = '\0';
+    }
+    /* fuehrende Leerzeichen am Pfad entfernen */
+    char *rp = raw;
+    while (*rp == ' ') rp++;
+
+    /* Relative/blanke Namen landen im Benutzer-Ordner /home/user/Dokumente
+     * (dort startet auch der Datei-Browser). Ordner bei Bedarf anlegen. */
+    char path[600];
+    if (rp[0] == '/') {
+        snprintf(path, sizeof(path), "%s", rp);
+    } else {
+        mkdir("/home/user", 0755);
+        mkdir(FLUX_USER_DOCS_DIR, 0755);
+        snprintf(path, sizeof(path), "%s/%s", FLUX_USER_DOCS_DIR, rp);
     }
 
     /* Sicherheit: kanonischen Pfad pruefen (verhindert Path-Traversal) */
@@ -405,6 +422,55 @@ static int tool_file_delete(const char *arg, char *out, size_t cap) {
         snprintf(out, cap, "Datei '%s' geloescht", arg);
     } else {
         snprintf(out, cap, "Fehler: '%s' konnte nicht geloescht werden", arg);
+    }
+    return 1;
+}
+
+/* ---- file_rename ----------------------------------------------------- */
+/* Datei umbenennen/verschieben. ARG: "altpfad|neupfad".
+ * Quelle und Ziel muessen beide unter /home/user/ liegen (wie file_delete).
+ * Ein bereits existierendes Ziel wird NICHT ueberschrieben (ehrlich, kein
+ * stiller Datenverlust). */
+static int tool_file_rename(const char *arg, char *out, size_t cap) {
+    if (!arg || !*arg) {
+        snprintf(out, cap, "Fehler: kein Pfad angegeben (Format: altpfad|neupfad)");
+        return 1;
+    }
+    const char *sep = strchr(arg, '|');
+    if (!sep || sep == arg || !sep[1]) {
+        snprintf(out, cap,
+                 "Fehler: Format ist 'altpfad|neupfad' (z.B. /home/user/a.txt|/home/user/b.txt)");
+        return 1;
+    }
+
+    char src[512], dst[512];
+    size_t slen = (size_t)(sep - arg);
+    if (slen >= sizeof(src)) slen = sizeof(src) - 1;
+    memcpy(src, arg, slen); src[slen] = '\0';
+    snprintf(dst, sizeof(dst), "%s", sep + 1);
+
+    /* Sicherheit: beide Pfade kanonisch unter /home/user/ */
+    if (!path_is_allowed(src, 0) || !path_is_allowed(dst, 0)) {
+        snprintf(out, cap,
+                 "Fehler: Umbenennen nur unter /home/user/ erlaubt (Quelle und Ziel)");
+        return 1;
+    }
+
+    struct stat st;
+    if (stat(src, &st) != 0) {
+        snprintf(out, cap, "Fehler: Quelle '%s' existiert nicht", src);
+        return 1;
+    }
+    if (stat(dst, &st) == 0) {
+        snprintf(out, cap,
+                 "Fehler: Ziel '%s' existiert bereits -- wird nicht ueberschrieben", dst);
+        return 1;
+    }
+
+    if (rename(src, dst) == 0) {
+        snprintf(out, cap, "'%s' umbenannt nach '%s'", src, dst);
+    } else {
+        snprintf(out, cap, "Fehler: '%s' konnte nicht nach '%s' umbenannt werden", src, dst);
     }
     return 1;
 }
@@ -869,6 +935,17 @@ static int tool_vibrate(const char *arg, char *out, size_t cap) {
     }
 
     snprintf(out, cap, "Vibration nicht verfuegbar auf diesem Geraet");
+    return 1;
+}
+
+/* ---- flight_mode ----------------------------------------------------- */
+/* NUR Status abfragen (read-only). Das tatsaechliche Schalten laeuft ueber
+ * den Bestaetigungs-Dialog (ACTION:flight -> exec.c -> radio.c), weil das
+ * Kappen der Konnektivitaet Aussenwirkung hat und nie ohne Bestaetigung
+ * passieren darf. Backend: radio.c (austauschbar). */
+static int tool_flight_mode(const char *arg, char *out, size_t cap) {
+    (void)arg;
+    flux_radio_status(out, cap);
     return 1;
 }
 
@@ -1610,6 +1687,7 @@ int flux_tool_exec(const char *name, const char *arg,
     if (strcmp(name, "file_list")        == 0) return tool_file_list(arg, out, out_cap);
     if (strcmp(name, "file_create")      == 0) return tool_file_create(arg, out, out_cap);
     if (strcmp(name, "file_delete")      == 0) return tool_file_delete(arg, out, out_cap);
+    if (strcmp(name, "file_rename")      == 0) return tool_file_rename(arg, out, out_cap);
     if (strcmp(name, "calculate")        == 0) return tool_calculate(arg, out, out_cap);
     if (strcmp(name, "note_save")        == 0) return tool_note_save(arg, out, out_cap);
     if (strcmp(name, "note_list")        == 0) return tool_note_list(arg, out, out_cap);
@@ -1621,6 +1699,7 @@ int flux_tool_exec(const char *name, const char *arg,
     if (strcmp(name, "brightness_set")   == 0) return tool_brightness_set(arg, out, out_cap);
     if (strcmp(name, "wifi_info")        == 0) return tool_wifi_info(arg, out, out_cap);
     if (strcmp(name, "vibrate")          == 0) return tool_vibrate(arg, out, out_cap);
+    if (strcmp(name, "flight_mode")      == 0) return tool_flight_mode(arg, out, out_cap);
     if (strcmp(name, "contact_save")   == 0) return tool_contact_save(arg, out, out_cap);
     if (strcmp(name, "contacts_list")  == 0) return tool_contacts_list(arg, out, out_cap);
     if (strcmp(name, "calendar_add")   == 0) return tool_calendar_add(arg, out, out_cap);
@@ -1653,8 +1732,11 @@ const char *flux_tools_description(void) {
         "  weather          -- aktuelles Wetter. ARG: Stadtname (leer = automatisch)\n"
         "  file_read        -- Dateiinhalt lesen. ARG: Dateipfad\n"
         "  file_list        -- Verzeichnis auflisten. ARG: Verzeichnispfad\n"
-        "  file_create      -- Datei erstellen. ARG: /pfad/datei.txt|Inhalt (\\n fuer Zeilenumbruch)\n"
+        "  file_create      -- Datei erstellen. ARG: name.txt|Inhalt (\\n fuer Zeilenumbruch). "
+        "Ohne fuehrenden / landet die Datei im Benutzer-Ordner /home/user/Dokumente.\n"
         "  file_delete      -- Datei loeschen (nur /home/user/). ARG: Dateipfad\n"
+        "  file_rename      -- Datei umbenennen/verschieben (nur /home/user/). "
+        "ARG: altpfad|neupfad (Ziel wird nicht ueberschrieben)\n"
         "  calculate        -- Rechenausdruck. ARG: z.B. '15 * 8 + 3.5'\n"
         "  note_save        -- Notiz speichern. ARG: Notiztext\n"
         "  note_list        -- Alle Notizen anzeigen. ARG: (leer)\n"
@@ -1667,6 +1749,8 @@ const char *flux_tools_description(void) {
         "  brightness_set   -- Bildschirmhelligkeit setzen. ARG: 0-100 (Prozent)\n"
         "  wifi_info        -- WLAN-Signalstaerke und Interface. ARG: (leer)\n"
         "  vibrate          -- Geraet vibrieren lassen. ARG: Dauer in ms (z.B. 300)\n"
+        "  flight_mode      -- Flugmodus-STATUS abfragen (read-only, ob Funk an/aus). ARG: (leer). "
+        "Zum SCHALTEN nicht dieses Tool nutzen, sondern den ACTION:flight-Block (Bestaetigungs-Dialog).\n"
         "  contact_save    -- Kontakt speichern. ARG: Name,Telefon,Email\n"
         "  contacts_list   -- Alle Kontakte anzeigen. ARG: (leer)\n"
         "  calendar_add    -- Termin eintragen. ARG: YYYY-MM-DD HH:MM Beschreibung\n"

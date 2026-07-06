@@ -1,6 +1,7 @@
 #include "provider.h"
 #include "tools.h"
 #include "../../common/flux_config.h"
+#include "../../common/flux_log.h"
 
 #include <curl/curl.h>
 #include <time.h>
@@ -410,12 +411,16 @@ static int api_call(const flux_provider_def_t *prov, const char *api_key,
         if (res != CURLE_OK) {
             snprintf(out, out_cap, "Netzwerkfehler (%s): %s",
                      prov->label, curl_easy_strerror(res));
+            LOGE("provider %s: Netzwerkfehler: %s", prov->label, curl_easy_strerror(res));
             break;
         }
         if (http == 429 && attempt < 2) {
+            LOGW("provider %s: Rate-Limit (HTTP 429), Versuch %d", prov->label, attempt + 1);
             sleep(1 + attempt); /* einfacher Backoff bei Rate-Limit */
             continue;
         }
+        if (http < 200 || http >= 300)
+            LOGE("provider %s: HTTP %ld", prov->label, http);
         if (extract_text(respbuf, prov->format, out, out_cap)) {
             ok = 1;
         } else if (out[0] == '\0') {
@@ -495,7 +500,15 @@ static int parse_tool_call(const char *response,
     "SUBJECT:<Betreff, nur bei mail>\n" \
     "BODY:\n" \
     "<Text>\n" \
-    "Falls Empfaenger oder Inhalt wirklich unklar sind, frage nach. "
+    "Falls Empfaenger oder Inhalt wirklich unklar sind, frage nach. " \
+    "WENN der Nutzer den Flugmodus ein- oder ausschalten moechte " \
+    "('aktivier Flugmodus', 'Funk aus', 'Flugmodus aus'), antworte " \
+    "AUSSCHLIESSLICH in diesem Format (das Geraet zeigt vor dem Schalten " \
+    "einen Bestaetigungs-Dialog -- du schaltest nie direkt):\n" \
+    "ACTION:flight\n" \
+    "STATE:<an|aus>\n" \
+    "Nur den AKTUELLEN Flugmodus-Status abfragen ('ist Flugmodus an?') " \
+    "geht ohne Bestaetigung ueber das flight_mode-Tool. "
 
 /* Bereinigt Nutzer-gespeicherte Inhalte (memory.txt, prefs.txt) bevor
  * sie in den System-Prompt eingebettet werden. Zeilen, die mit KI-internen

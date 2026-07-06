@@ -28,6 +28,7 @@
 #include "../../common/flux_config.h"
 #include "../../common/flux_sha256.h"
 #include "../../common/flux_privdrop.h"
+#include "../../common/flux_log.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -50,6 +51,60 @@ static uint32_t *capture_frame(const flux_fb_t *fb) {
     uint32_t *buf = malloc(npx * sizeof(uint32_t));
     if (buf) memcpy(buf, fb->back, npx * sizeof(uint32_t));
     return buf;
+}
+
+/* ---- Fehler-Benachrichtigung --------------------------------------------
+ * Ein Fehler (Log-Level ERROR+) soll nicht still im Hintergrund bleiben:
+ * er landet im Log (common/flux_log.c), erscheint als Eintrag im
+ * Benachrichtigungs-Overlay (/tmp/flux_errors.txt, "Push") und loest beim
+ * naechsten sicheren Punkt der Hauptschleife einen Slide-up-Toast aus.
+ * Der Hook selbst zeichnet NICHT (er kann mitten in beliebigem Code
+ * feuern) -- er setzt nur ein Flag; das Rendern macht die Schleife. */
+#define ERR_FILE "/tmp/flux_errors.txt"
+#define ERR_KEEP 10
+
+static volatile int g_error_pending = 0;
+static char         g_error_msg[200];
+
+/* Haengt eine Fehlerzeile (mit Uhrzeit) an ERR_FILE an und kuerzt die Datei
+ * auf die letzten ERR_KEEP Zeilen. */
+static void error_file_append(const char *line) {
+    char lines[ERR_KEEP][340];
+    int n = 0;
+    FILE *f = fopen(ERR_FILE, "r");
+    if (f) {
+        char buf[200];
+        while (fgets(buf, sizeof(buf), f)) {
+            size_t l = strlen(buf);
+            while (l > 0 && (buf[l-1] == '\n' || buf[l-1] == '\r')) buf[--l] = '\0';
+            if (!buf[0]) continue;
+            if (n < ERR_KEEP) { snprintf(lines[n++], sizeof(lines[0]), "%s", buf); }
+            else { memmove(lines[0], lines[1], (ERR_KEEP-1)*sizeof(lines[0]));
+                   snprintf(lines[ERR_KEEP-1], sizeof(lines[0]), "%s", buf); }
+        }
+        fclose(f);
+    }
+    char stamp[340];
+    time_t t = time(NULL); struct tm tmv; localtime_r(&t, &tmv);
+    char hm[8]; strftime(hm, sizeof(hm), "%H:%M", &tmv);
+    snprintf(stamp, sizeof(stamp), "[%s] %s", hm, line);
+    if (n < ERR_KEEP) { snprintf(lines[n++], sizeof(lines[0]), "%s", stamp); }
+    else { memmove(lines[0], lines[1], (ERR_KEEP-1)*sizeof(lines[0]));
+           snprintf(lines[ERR_KEEP-1], sizeof(lines[0]), "%s", stamp); }
+
+    f = fopen(ERR_FILE, "w");
+    if (f) { for (int i = 0; i < n; i++) fprintf(f, "%s\n", lines[i]); fclose(f); }
+}
+
+/* Wird von common/flux_log.c bei ERROR+ aufgerufen (siehe error-hook). */
+static void shell_error_hook(flux_log_level_t level, const char *module,
+                             const char *message) {
+    (void)level;
+    snprintf(g_error_msg, sizeof(g_error_msg), "%s", message ? message : "Fehler");
+    char line[320];
+    snprintf(line, sizeof(line), "[%.48s] %s", module ? module : "flux", g_error_msg);
+    error_file_append(line);
+    g_error_pending = 1;
 }
 
 /* Animiert den Uebergang vom gespeicherten Bild im old_buf zum aktuellen
@@ -140,6 +195,45 @@ static void animate_answer_fadein(flux_fb_t *fb, const char *last_q,
         usleep(34000);
     }
     free(base);
+}
+
+/* Zeigt den Fehler-Toast: faehrt von unten herein, bleibt kurz, faehrt
+ * wieder hinaus. Der darunterliegende Bildschirm (gesicherter Backbuffer)
+ * bleibt unveraendert -- wie animate_ripple. */
+static void animate_error_toast(flux_fb_t *fb, const char *msg) {
+    if (!fb->mmio) return; /* kein echter Framebuffer (Host-Test) */
+    size_t npx = (size_t)fb->width * fb->height;
+    uint32_t *saved = malloc(npx * sizeof(uint32_t));
+    if (!saved) return;
+    memcpy(saved, fb->back, npx * sizeof(uint32_t));
+
+    int th = flux_ui_error_toast_height(fb);
+    int final_y = fb->height - th;
+
+    /* Hereinfahren */
+    int slide[] = { fb->height, final_y + th*2/3, final_y + th/3, final_y };
+    for (int i = 0; i < (int)(sizeof(slide)/sizeof(slide[0])); i++) {
+        memcpy(fb->back, saved, npx * sizeof(uint32_t));
+        flux_ui_draw_error_toast(fb, msg, slide[i]);
+        memset(fb->prev, 0xFF, npx * sizeof(uint32_t));
+        flux_fb_present(fb);
+        usleep(22000);
+    }
+    /* Stehen lassen (~2.2 s) */
+    usleep(2200000);
+    /* Hinausfahren (gleiche Positionen rueckwaerts: final -> unten) */
+    for (int i = 2; i >= 0; i--) {
+        memcpy(fb->back, saved, npx * sizeof(uint32_t));
+        flux_ui_draw_error_toast(fb, msg, slide[i]);
+        memset(fb->prev, 0xFF, npx * sizeof(uint32_t));
+        flux_fb_present(fb);
+        usleep(18000);
+    }
+    /* Bildschirm wiederherstellen */
+    memcpy(fb->back, saved, npx * sizeof(uint32_t));
+    memset(fb->prev, 0xFF, npx * sizeof(uint32_t));
+    flux_fb_present(fb);
+    free(saved);
 }
 
 /* Spielt ein animiertes Aktions-Symbol fuer 'frames' Bilder ab. */
@@ -375,7 +469,7 @@ static void maybe_generate_greeting(void) {
 
 #define FLUX_PIN_LEN       4
 #define FLUX_FILES_MAX     12
-#define FLUX_SETTINGS_N    10   /* + WLAN + Stimme (Farbthema entfallen) */
+#define FLUX_SETTINGS_N    13   /* + WLAN + Stimme + Log-Backend */
 #define VIEWER_CONTENT_MAX 32768
 
 typedef enum {
@@ -411,6 +505,9 @@ static const char *setting_keys[FLUX_SETTINGS_N] = {
     "searxng_url",      /* Web-Suche ueber eigene SearXNG-Instanz (z.B. MacBook) */
     "auto_lock",      /* 0=aus, 30, 60, 120, 300 Sekunden */
     "tts",            /* 0=aus, 1=ein */
+    "log_backend_url",/* URL des Fehler-/Log-Backends (leer = aus, opt-in) */
+    "log_report",     /* 0=aus, 1=ein -- Fehler automatisch melden */
+    "__send_logs",    /* Aktion: gesammelte Logs jetzt senden */
     "__voice_enroll", /* oeffnet Stimm-Einlern-Screen */
 };
 static const char *setting_labels[FLUX_SETTINGS_N] = {
@@ -423,6 +520,9 @@ static const char *setting_labels[FLUX_SETTINGS_N] = {
     "Web-Suche (SearXNG)",  /* URL der eigenen SearXNG-Instanz */
     "Auto-Sperre",  /* 0=aus */
     "Sprache (TTS)",/* 0=aus, 1=ein */
+    "Fehler-Backend (URL)",   /* leer = kein Upload (opt-in) */
+    "Auto-Fehlerbericht",     /* Fehler automatisch ans Backend melden */
+    "Logs an Backend senden", /* Aktion: jetzt senden */
     "Stimme (2. Faktor)", /* Stimm-Entsperrung einlernen */
 };
 static const int setting_secret[FLUX_SETTINGS_N] = {
@@ -434,6 +534,7 @@ static const int setting_secret[FLUX_SETTINGS_N] = {
     0, /* wifi (zeigt Verbindung) */
     0, /* searxng_url */
     0, 0,     /* auto_lock/tts */
+    0, 0, 0,  /* log_backend_url / log_report / __send_logs */
     0,        /* voice_enroll */
 };
 
@@ -448,6 +549,9 @@ static const int setting_icons[FLUX_SETTINGS_N] = {
     FLUX_SICON_SEARCH, /* searxng_url */
     FLUX_SICON_CLOCK,  /* auto_lock */
     FLUX_SICON_SPEAKER,/* tts */
+    FLUX_SICON_SEARCH, /* log_backend_url */
+    FLUX_SICON_AI,     /* log_report */
+    FLUX_SICON_MAIL,   /* __send_logs */
     FLUX_SICON_LOCK,   /* voice_enroll */
 };
 
@@ -567,6 +671,12 @@ static void load_settings_values(void) {
             flux_wifi_current(cur, sizeof(cur));
             snprintf(setting_values_buf[i], sizeof(setting_values_buf[0]), "%s",
                       cur[0] ? cur : "nicht verbunden");
+        } else if (strcmp(setting_keys[i], "log_report") == 0) {
+            snprintf(setting_values_buf[i], sizeof(setting_values_buf[0]), "%s",
+                      (raw[0] == '1') ? "ein" : "aus");
+        } else if (strcmp(setting_keys[i], "__send_logs") == 0) {
+            snprintf(setting_values_buf[i], sizeof(setting_values_buf[0]), "%s",
+                      "tippen zum Senden");
         } else if (strcmp(setting_keys[i], "__voice_enroll") == 0) {
             snprintf(setting_values_buf[i], sizeof(setting_values_buf[0]), "%s",
                       voice_unlock_enrolled() ? "eingelernt" :
@@ -604,7 +714,9 @@ static void apply_setting_edit(int index, const char *value) {
  * Kein Loeschen/Umbenennen -- ein erster, sicherer Schritt (siehe
  * ui.c-Kommentar bei flux_ui_draw_files). */
 
-static char files_path[1024] = "/";
+/* Datei-Browser startet im Benutzer-Ordner (nicht im Root-Verzeichnis):
+ * hier liegen die Dateien, die der Nutzer bzw. die KI anlegt. */
+static char files_path[1024] = "/home/user/Dokumente";
 static char file_names_buf[FLUX_FILES_MAX][256];
 static char file_metas_buf[FLUX_FILES_MAX][32];
 static int  file_is_dir[FLUX_FILES_MAX];
@@ -1511,6 +1623,16 @@ int main(void) {
         return 1;
     }
 
+    /* Logging + Fehler-Hook: Fehler erscheinen als Toast und im
+     * Benachrichtigungs-Overlay, statt still zu bleiben. */
+    flux_log_init("flux-shell");
+    flux_log_set_error_hook(shell_error_hook);
+
+    /* Benutzer-Ordner sicherstellen: hier startet der Datei-Browser und
+     * hier legt die KI (file_create) standardmaessig Dateien an. */
+    mkdir("/home/user", 0755);
+    mkdir("/home/user/Dokumente", 0755);
+
     /* Farbthema vor dem ersten Zeichnen laden */
     apply_theme();
     flux_ui_set_setting_icons(setting_icons);   /* Symbole fuer Einstellungen */
@@ -1563,6 +1685,18 @@ int main(void) {
     flux_ui_draw_lock(&fb);
 
     while (1) {
+        /* Anstehenden Fehler-Toast an einem sicheren Punkt zeigen. Auf
+         * Lock/PIN, im Sprach- oder KI-Overlay nicht (wuerde stoeren) --
+         * der Eintrag bleibt im Benachrichtigungs-Overlay sichtbar. */
+        if (g_error_pending) {
+            g_error_pending = 0;
+            if (screen != FLUX_SCREEN_LOCK && screen != FLUX_SCREEN_PIN &&
+                !voice_active && !ai_ovl_active) {
+                animate_error_toast(&fb, g_error_msg);
+                redraw_current_screen(&fb, screen, last_q, input_buf, answer_buf);
+            }
+        }
+
         fd_set rfds;
         FD_ZERO(&rfds);
         int maxfd = have_input ? flux_input_add_fds(&in, &rfds) : -1;
@@ -1867,6 +2001,15 @@ int main(void) {
                 flux_ui_draw_edit_body(&fb, edit_buf);
                 animate_slide_in(&fb, old);
                 free(old);
+            } else if (hit == FLUX_CONFIRM_SEND &&
+                       pending_action.type == FLUX_ACTION_FLIGHT) {
+                /* Flugmodus: feldlose Aktion -- direkt ausfuehren, ehrliche
+                 * Rueckmeldung des Daemons anzeigen (kein Sende-Symbol). */
+                char req[FLUX_MAX_LINE];
+                flux_action_build_request(&pending_action, req, sizeof(req));
+                flux_ipc_send_raw(req, answer_buf, sizeof(answer_buf));
+                screen = FLUX_SCREEN_ASSISTANT;
+                flux_ui_draw_assistant(&fb, last_q, input_buf, answer_buf, 0);
             } else if (hit == FLUX_CONFIRM_SEND) {
                 /* Anruf: Vollbild-Anruf-Screen (annehmen/auflegen) statt
                  * Textmeldung. Der eigentliche X:-Request geht erst beim
@@ -2096,6 +2239,31 @@ int main(void) {
                 uint32_t *old = capture_frame(&fb);
                 screen = FLUX_SCREEN_EDIT_BODY;
                 flux_ui_draw_edit_body(&fb, edit_buf);
+                animate_slide_in(&fb, old);
+                free(old);
+            } else if (strcmp(setting_keys[idx], "log_report") == 0) {
+                /* Auto-Fehlerbericht per Tap umschalten (0/1). */
+                char cur[8] = {0};
+                flux_config_get("log_report", cur, sizeof(cur));
+                flux_config_set("log_report", (cur[0] == '1') ? "0" : "1");
+                load_settings_values();
+                flux_ui_draw_settings(&fb, setting_labels, setting_values, FLUX_SETTINGS_N);
+            } else if (strcmp(setting_keys[idx], "__send_logs") == 0) {
+                /* Gesammelte Logs jetzt ans Backend senden (fluxaid hat das
+                 * Netz). Ergebnis ehrlich im Assistenten anzeigen. */
+                char url[8] = {0};
+                int has_url = flux_config_get("log_backend_url", url, sizeof(url)) && url[0];
+                if (!has_url) {
+                    snprintf(answer_buf, sizeof(answer_buf),
+                        "Kein Fehler-Backend gesetzt. Trage zuerst unter "
+                        "\"Fehler-Backend (URL)\" eine Adresse ein.");
+                } else {
+                    flux_ipc_send_raw("X:logs\nTO:\nSUBJECT:\nBODY:\n", answer_buf, sizeof(answer_buf));
+                }
+                snprintf(last_q, sizeof(last_q), "%s", "Logs an Backend senden");
+                uint32_t *old = capture_frame(&fb);
+                screen = FLUX_SCREEN_ASSISTANT;
+                flux_ui_draw_assistant(&fb, last_q, input_buf, answer_buf, 0);
                 animate_slide_in(&fb, old);
                 free(old);
             } else {

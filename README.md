@@ -88,6 +88,34 @@ eine Hardware-Tastatur funktioniert parallel weiter.
 | **Benachrichtigungen** | Eigener Systemdienst in `fluxaid`: prüft Kalender/Memory/Akku/Proaktiv alle 15 Min |
 | **UI** | Direkt auf den Framebuffer gezeichnet, Double-Buffering + Dirty-Row-Tracking, echte Lucide-Vektor-Icons |
 
+## Flugmodus per KI ("aktivier Flugmodus")
+
+Der Assistent kann den Flugmodus ueber natuerliche Sprache steuern
+("aktivier Flugmodus", "Funk wieder an", "ist Flugmodus an?"). Backend
+ist die Linux-`rfkill`-Schnittstelle (`fluxai/src/radio.c`): ein einzelnes
+`RFKILL_OP_CHANGE_ALL`-Event blockt bzw. entsperrt alle Funkmodule
+(WLAN/Bluetooth/Mobilfunk) auf einmal.
+
+**Schalten geht immer ueber den Bestaetigungs-Dialog** -- Funk kappen hat
+Aussenwirkung, also fuehrt die KI das nie direkt aus: erkennt `fluxaid`
+den Wunsch, antwortet es mit `ACTION:flight` / `STATE:an|aus`, und
+`flux-shell` zeigt erst den Bestaetigen/Abbrechen-Dialog (gleiches Prinzip
+wie bei Mail/SMS/Anruf). Nur das reine **Abfragen** des Status laeuft
+ohne Bestaetigung ueber das read-only-Tool `flight_mode`.
+
+Ehrlich: QEMU `virt` hat **keine Funkhardware** und damit kein
+`/dev/rfkill` -- dort meldet das Tool wahrheitsgemaess "Keine Funkhardware
+erkannt" statt einen Erfolg zu erfinden (gleiches Prinzip wie beim
+Modem-Stub und beim fehlenden Akku-Sensor). Auf echter Hardware mit
+rfkill-faehigen Funkmodulen schaltet derselbe Code real -- `radio.c` ist
+als austauschbares Backend geschnitten, das spaeter z.B. gegen
+NetworkManager/ofono getauscht werden kann, ohne Tool oder UI zu aendern.
+Verifiziert ist bisher der ehrliche Fallback-Pfad (Host ohne `/dev/rfkill`)
+und der Host-Compile-Test; die Parse-/Bau-/Ausfuehr-Kette
+(`ACTION:flight` -> `X:flight` -> `radio.c`) ist per Laufzeit-Test
+abgedeckt. Der echte rfkill-Schaltpfad und der gezeichnete Bestaetigungs-
+Dialog sind erst auf Hardware/QEMU mit Framebuffer visuell verifizierbar.
+
 ---
 
 ## Architektur
@@ -385,6 +413,54 @@ baut wie Android, postmarketOS und SailfishOS auf dem Linux-Kernel auf),
 GPU-Compositing, ein App-Sandbox-Sicherheitsmodell und Modem-/Mikrofon-Hardware
 in der VM. Stellen, an denen Hardware fehlt (Akku, Modem, Mikrofon), melden das
 wahrheitsgemäß statt zu simulieren.
+
+### Fehler werden sichtbar (Logging + Benachrichtigung)
+
+Damit Fehler -- gerade solche, die im Hintergrund passieren -- nicht still
+bleiben, ist das zentrale Logging (`common/flux_log.c`) jetzt in beiden
+Prozessen aktiv (`flux-shell`, `fluxaid`) und an vielen echten Fehlerquellen
+verdrahtet (IPC-Verbindung, SMTP-Versand, KI-Netzwerk/HTTP, Socket-Aufbau
+usw.). Jeder Eintrag ab Level `ERROR` loest ueber einen entkoppelten Hook
+(`flux_log_set_error_hook`) zwei Dinge aus:
+
+- In der **Shell**: ein **Fehler-Toast faehrt von unten herein** ("Es gab
+  einen Fehler" + Kurztext) und der Fehler landet als Eintrag im
+  **Benachrichtigungs-Overlay** (Wisch nach unten, rote "Fehler"-Karte,
+  neueste zuerst) -- die in-system-Variante einer Push-Benachrichtigung.
+  Ehrlich: einen echten OS-Push-Dienst (APNs/FCM) gibt es in diesem
+  Prototyp nicht; das ist bewusst eine gerätelokale Anzeige.
+- Im **Daemon**: optionaler Auto-Report ans Backend (siehe unten).
+
+### Fehler-/Log-Backend (optional, opt-in)
+
+Flux protokolliert intern nach `/var/log/flux/flux.log` (mit Rotation,
+`common/flux_log.c`). Damit man Fehler -- auch solche, die im Hintergrund
+passieren und die der Nutzer nicht direkt sieht -- zentral anschauen kann,
+lassen sich die Logs an ein **selbst gehostetes Backend** senden. Wie bei
+SearXNG ist das eine **konfigurierbare URL**, kein an einen Dienst
+gebundenes Feature.
+
+**Privacy: strikt opt-in.** Solange unter **Einstellungen → „Fehler-Backend
+(URL)"** nichts eingetragen ist, verlaesst kein Log das Geraet. Den Upload
+macht `fluxaid` (es besitzt den Netz-Zugang), nicht die Shell.
+
+- **„Logs an Backend senden"** (Einstellungen): schickt den aktuellen
+  Logfile-Inhalt sofort an `<url>/ingest`. Ehrliche Rueckmeldung bei Erfolg
+  (Byte-Zahl) oder Fehler (Backend nicht erreichbar, falsche URL ...).
+- **„Auto-Fehlerbericht"** (Einstellungen, an/aus): meldet einzelne Fehler
+  beim Auftreten an `<url>/report`, damit das Backend immer aktuell ist.
+
+Ein minimaler **Referenz-Server** liegt im Repo (`tools/flux-log-server.py`,
+nur Python-Standardbibliothek, kein Setup):
+```bash
+python3 tools/flux-log-server.py 8899
+# Ansicht im Browser:  http://localhost:8899/
+```
+Dann in Flux unter „Fehler-Backend (URL)" z.B. `http://macbook.local:8899`
+eintragen (oder direkt `log_backend_url=...` in `/etc/flux/flux.conf`).
+Der Server zeigt alle empfangenen Logs/Fehler im Browser an (neueste
+zuerst). Ehrlich: bewusst ohne Auth/TLS -- ein Diagnose-Helfer fuers eigene
+Netz, kein Produktions-Dienst.
 
 ---
 
