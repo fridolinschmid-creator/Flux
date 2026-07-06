@@ -7,4 +7,5 @@ build/overlay-pi5/usr/bin/flux-shell
 build/overlay-pi5/usr/bin/fluxaid
 build/raspberrypi5/flux-bootlogo.ppm
 *.o
-.claude/
+.claude/*
+!.claude/skills/
