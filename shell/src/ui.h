@@ -267,7 +267,17 @@ typedef struct {
     int segment;  /* 0/1/2: Segment Jahre/Monate/Alle, sonst -1   */
     int search;   /* 1: Such-Knopf                                */
     int camera;   /* 1: Kamera-Knopf (Header links)               */
+    /* --- nur im Such-Modus gesetzt --- */
+    int back;       /* 1: Zurueck-Pfeil (Such-Modus verlassen)    */
+    int ki;         /* 1: "KI"-Knopf (semantische Suche starten)  */
+    char ch;        /* Tastatur-Zeichen (sonst 0)                 */
+    int backspace;  /* 1: Ruecktaste                              */
+    int enter;      /* 1: Eingabe-/OK-Taste                       */
 } flux_gallery_hit_t;
+
+/* Such-Modus der Galerie (Lupe): Suchleiste + Tastatur statt Header/Leiste.
+ * active=1 schaltet ihn ein; query ist der aktuelle Suchtext (Anzeige). */
+void flux_ui_gallery_set_search(int active, const char *query);
 
 /* Hit-Test, exakt spiegelbildlich zu flux_ui_draw_gallery (gleiche
  * Geometrie-Helfer). Gibt 1 zurueck, wenn irgendetwas getroffen wurde;

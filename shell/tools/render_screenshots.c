@@ -75,13 +75,22 @@ static uint32_t *demo_load_ppm_thumb(const char *path, int tile) {
     int crop = (int)(tile / scale);
     int cw = crop > W ? W : crop, ch = crop > H ? H : crop;
     int sx0 = (W - cw) / 2, sy0 = (H - ch) / 2;
+    /* Box-Filter (Flaechenmittel) -- identisch zu load_ppm_thumb() in main.c. */
     for (int ty = 0; ty < tile; ty++) {
-        int sy = sy0 + (int)(ty / scale); if (sy >= H) sy = H - 1;
+        int ay0 = sy0 + (int)(ty       * ch / tile);
+        int ay1 = sy0 + (int)((ty + 1) * ch / tile);
+        if (ay1 <= ay0) ay1 = ay0 + 1; if (ay1 > H) ay1 = H;
         for (int tx = 0; tx < tile; tx++) {
-            int sx = sx0 + (int)(tx / scale); if (sx >= W) sx = W - 1;
-            int idx = (sy * W + sx) * 3;
-            out[ty * tile + tx] = ((uint32_t)rgb[idx] << 16)
-                                 | ((uint32_t)rgb[idx+1] << 8) | (uint32_t)rgb[idx+2];
+            int ax0 = sx0 + (int)(tx       * cw / tile);
+            int ax1 = sx0 + (int)((tx + 1) * cw / tile);
+            if (ax1 <= ax0) ax1 = ax0 + 1; if (ax1 > W) ax1 = W;
+            uint32_t r = 0, g = 0, b = 0, c = 0;
+            for (int sy = ay0; sy < ay1; sy++) {
+                const unsigned char *p = rgb + ((size_t)sy * W + ax0) * 3;
+                for (int sx = ax0; sx < ax1; sx++) { r += p[0]; g += p[1]; b += p[2]; p += 3; c++; }
+            }
+            if (!c) c = 1;
+            out[ty * tile + tx] = ((r / c) << 16) | ((g / c) << 8) | (b / c);
         }
     }
     free(rgb);

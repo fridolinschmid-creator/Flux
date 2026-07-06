@@ -1833,6 +1833,8 @@ void flux_ui_draw_wifi(flux_fb_t *fb, const char *current, const char **names,
 
 #define FILES_DELETE_BTN_H  56
 #define FILES_DELETE_BTN_W  120
+#define NEWBTN_W            108   /* "+ Ordner"-Knopf -- Draw UND Hit teilen sich diese Masse */
+#define NEWBTN_H            36
 
 void flux_ui_draw_files(flux_fb_t *fb, const char *path, const char **names,
                          const char **metas, int n, int truncated, int selected_idx) {
@@ -1849,16 +1851,19 @@ void flux_ui_draw_files(flux_fb_t *fb, const char *path, const char **names,
                      "(+ weitere Eintraege)", COL_DIM, 1);
     }
 
-    /* "Neuer Ordner"-Knopf oben rechts */
+    /* "Neuer Ordner"-Knopf oben rechts: saubere Pille mit Plus-Icon + Label,
+     * kein Akzent-Strich mehr (der wirkte wie ein verirrter Querstrich). */
     {
-        int bw = 104, bh = 34;
+        int bw = NEWBTN_W, bh = NEWBTN_H;
         int bx = fb->width - bw - 10;
         int by = STATUSBAR_H + 8;
-        fill_round_rect(fb, bx, by, bw, bh, 8, COL_SURFACE3);
-        flux_fb_hline(fb, bx, by, bw, COL_ACCENT);
-        const char *nl = "+ Ordner";
-        int nlw = flux_fb_text_width(nl, 2);
-        flux_fb_text(fb, bx + (bw - nlw) / 2, by + (bh - 16) / 2, nl, COL_ACCENT, 2);
+        fill_round_rect(fb, bx, by, bw, bh, bh / 2, COL_SURFACE3);
+        const char *nl = "Ordner";
+        int icon_w = 16, gap = 6, nlw = flux_fb_text_width(nl, 2);
+        int total = icon_w + gap + nlw;
+        int sx = bx + (bw - total) / 2, mid = by + bh / 2;
+        flux_icon_draw(fb, FLUX_ICON_PLUS, sx + icon_w / 2, mid, icon_w, COL_ACCENT);
+        flux_fb_text(fb, sx + icon_w + gap, mid - 8, nl, COL_ACCENT, 2);
     }
 
     if (n == 0) {
@@ -1876,14 +1881,19 @@ void flux_ui_draw_files(flux_fb_t *fb, const char *path, const char **names,
                 flux_fb_fill_rect(fb, rows[i].x + 6, rows[i].y + 2,
                                   3, rows[i].h - 4, COL_ACCENT);
 
-            /* File/folder icon dot */
-            int is_dir = (names[i][0] && metas[i] && metas[i][0] == 'd');
-            uint32_t icon_col = is_dir ? COL_ACCENT : COL_TEXT_MUTED;
-            fill_circle(fb, rows[i].x + 22, rows[i].y + rows[i].h / 2, 6, icon_col);
+            /* Echtes Ordner-/Datei-Icon (icon-first). Ordner traegt die Meta
+             * "Ordner" (siehe load_files); alles andere ist eine Datei. */
+            int is_dir = (metas && metas[i] && strcmp(metas[i], "Ordner") == 0);
+            flux_icon_draw(fb, is_dir ? FLUX_ICON_FOLDER : FLUX_ICON_FILE,
+                           rows[i].x + 28, rows[i].y + rows[i].h / 2, 22,
+                           is_dir ? COL_ACCENT : COL_TEXT_MUTED);
 
-            flux_fb_text(fb, rows[i].x + 36, rows[i].y + 10, names[i], COL_TEXT, 2);
+            /* Name + Meta eng zentriert (wie die Einstellungs-Karten) statt
+             * an Ober-/Unterkante verteilt. */
+            flux_fb_text(fb, rows[i].x + 52, rows[i].y + rows[i].h / 2 - 16,
+                         names[i], COL_TEXT, 2);
             if (metas && metas[i])
-                flux_fb_text(fb, rows[i].x + 36, rows[i].y + rows[i].h - 22,
+                flux_fb_text(fb, rows[i].x + 52, rows[i].y + rows[i].h / 2 + 4,
                              metas[i], COL_DIM, 2);
         }
     }
@@ -1892,12 +1902,16 @@ void flux_ui_draw_files(flux_fb_t *fb, const char *path, const char **names,
     if (selected_idx >= 0 && selected_idx < n) {
         int del_y = fb->height - LIST_BACK_H - FILES_DELETE_BTN_H - 8;
         int del_x = fb->width - FILES_DELETE_BTN_W - 10;
-        fill_round_rect(fb, del_x, del_y, FILES_DELETE_BTN_W, FILES_DELETE_BTN_H, 8, 0x7F1D1D);
-        flux_fb_hline(fb, del_x, del_y, FILES_DELETE_BTN_W, COL_DANGER);
+        /* Klar gefuellter roter Knopf mit Papierkorb-Icon (statt blassem
+         * Block) -- liest sich eindeutig als Aktion. */
+        fill_round_rect(fb, del_x, del_y, FILES_DELETE_BTN_W, FILES_DELETE_BTN_H, 14, COL_DANGER);
         const char *dlabel = "Löschen";
-        int dlw = flux_fb_text_width(dlabel, 2);
-        flux_fb_text(fb, del_x + (FILES_DELETE_BTN_W - dlw) / 2,
-                     del_y + (FILES_DELETE_BTN_H - 16) / 2, dlabel, COL_DANGER, 2);
+        int icon_w = 20, gap = 7, dlw = flux_fb_text_width(dlabel, 2);
+        int total = icon_w + gap + dlw;
+        int sx = del_x + (FILES_DELETE_BTN_W - total) / 2;
+        int mid = del_y + FILES_DELETE_BTN_H / 2;
+        flux_icon_draw(fb, FLUX_ICON_TRASH, sx + icon_w / 2, mid, icon_w, 0xFFFFFF);
+        flux_fb_text(fb, sx + icon_w + gap, mid - 8, dlabel, 0xFFFFFF, 2);
     }
 
     draw_back_bar(fb, "Zurück");
@@ -1905,9 +1919,9 @@ void flux_ui_draw_files(flux_fb_t *fb, const char *path, const char **names,
 }
 
 int flux_ui_files_new_btn_hit(const flux_fb_t *fb, int x, int y) {
-    int bw = 100, bh = 32;
-    int bx = fb->width - bw - 8;
-    int by = STATUSBAR_H + (TITLE_AREA_H - bh) / 2;
+    int bw = NEWBTN_W, bh = NEWBTN_H;
+    int bx = fb->width - bw - 10;
+    int by = STATUSBAR_H + 8;
     return (x >= bx && x < bx + bw && y >= by && y < by + bh);
 }
 
@@ -2624,9 +2638,30 @@ int flux_ui_notify_hit(const flux_fb_t *fb, int x, int y) {
 #define GAL_HDR_LINE_H 22                          /* Hoehe einer Datums-Trennueberschrift */
 #define GAL_BOTTOM_H   72                          /* fixer Bereich fuer schwebende Leiste */
 
-/* Sichtbare Rasterhoehe (zwischen Header und schwebender Leiste). */
+/* Such-Modus (Lupe): Suchleiste oben + Tastatur unten, Raster filtert live. */
+static int  s_gal_search = 0;
+static char s_gal_query[64] = "";
+void flux_ui_gallery_set_search(int active, const char *query) {
+    s_gal_search = active ? 1 : 0;
+    snprintf(s_gal_query, sizeof(s_gal_query), "%s", query ? query : "");
+}
+
+/* Such-Leiste im Header-Band: Zurueck-Pfeil | Suchfeld | KI-Knopf. */
+static void gal_search_geom(const flux_fb_t *fb, cal_rect *back,
+                            cal_rect *field, cal_rect *ki) {
+    int h = 40, by = STATUSBAR_H + (GAL_HEADER_H - h) / 2;
+    back->x = 8; back->y = by; back->w = 40; back->h = h;
+    int kiw = flux_fb_text_width("KI", 2) + 30;
+    ki->w = kiw; ki->h = h; ki->x = fb->width - 10 - kiw; ki->y = by;
+    field->x = back->x + back->w + 6; field->y = by;
+    field->w = ki->x - 8 - field->x; field->h = h;
+}
+
+/* Sichtbare Rasterhoehe (zwischen Header und schwebender Leiste bzw. der
+ * Tastatur im Such-Modus). */
 static int gal_grid_h(const flux_fb_t *fb) {
-    return fb->height - GAL_GRID_TOP - GAL_BOTTOM_H;
+    int bottom = s_gal_search ? (fb->height - flux_ui_kbd_top(fb)) : GAL_BOTTOM_H;
+    return fb->height - GAL_GRID_TOP - bottom;
 }
 
 /* Zerlegt ein Datum "TT.MM.JJJJ" in y/m. Gibt 1 bei Erfolg. */
@@ -2775,18 +2810,82 @@ static void gal_bottom_geom(const flux_fb_t *fb, cal_rect *pill,
 
 /* Zeichnet eine echte Thumbnail-Kachel: center-gecroppter Puffer (vom
  * Aufrufer geliefert, genau TILE*TILE) oder ehrliche Platzhalter-Kachel. */
+/* Erkennt Video-Dateien an der Endung (Foto-Galerie zeigt beides). */
+static int gal_name_is_video(const char *name) {
+    if (!name) return 0;
+    size_t L = strlen(name);
+    const char *exts[] = { ".mov", ".mp4", ".m4v", ".avi", ".mkv", ".webm" };
+    for (size_t e = 0; e < sizeof(exts)/sizeof(exts[0]); e++) {
+        size_t el = strlen(exts[e]);
+        if (L > el) {
+            int eq = 1;
+            for (size_t k = 0; k < el; k++) {
+                char a = name[L-el+k], b = exts[e][k];
+                if (a >= 'A' && a <= 'Z') a += 32;
+                if (a != b) { eq = 0; break; }
+            }
+            if (eq) return 1;
+        }
+    }
+    return 0;
+}
+
+/* Alpha-Blending eines einzelnen Pixels (Deckung a in 0..255). */
+static void blend_px(flux_fb_t *fb, int x, int y, uint32_t col, int a) {
+    if (a <= 0 || x < 0 || y < 0 || x >= fb->width || y >= fb->height) return;
+    if (a >= 255) { flux_fb_set_px(fb, x, y, col); return; }
+    uint32_t bg = fb->back[y * fb->stride_px + x];
+    int br = (bg >> 16) & 0xff, bgc = (bg >> 8) & 0xff, bb = bg & 0xff;
+    int cr = (col >> 16) & 0xff, cg = (col >> 8) & 0xff, cb = col & 0xff;
+    int rr = (cr * a + br  * (255 - a)) / 255;
+    int rg = (cg * a + bgc * (255 - a)) / 255;
+    int rb = (cb * a + bb  * (255 - a)) / 255;
+    fb->back[y * fb->stride_px + x] = ((uint32_t)rr << 16) | ((uint32_t)rg << 8) | rb;
+}
+
+/* Play-Badge fuer Video-Kacheln: dunkler Kreis + weisses Play-Dreieck.
+ * Anti-aliased per 4x4-Supersampling -- so glatt wie der TrueType-Text,
+ * nicht mehr die harten Pixelkanten der einfachen Primitive. */
+static void gal_draw_play_badge(flux_fb_t *fb, int cx, int cy) {
+    const float R = 16.5f, RW = 2.0f;        /* Kreisradius + Ringbreite */
+    const float bx = cx - 4, ax = cx + 8, h = 9; /* Dreieck: Basis links, Spitze rechts */
+    const float v0x = bx, v0y = cy - h, v1x = ax, v1y = cy, v2x = bx, v2y = cy + h;
+    const int SS = 4; const float inv = 1.0f / SS, tot = SS * SS;
+    int r = (int)R + 2;
+    for (int y = cy - r; y <= cy + r; y++) {
+        for (int x = cx - r; x <= cx + r; x++) {
+            int disc = 0, ring = 0, tri = 0;
+            for (int sj = 0; sj < SS; sj++) for (int si = 0; si < SS; si++) {
+                float px = x + (si + 0.5f) * inv, py = y + (sj + 0.5f) * inv;
+                float dx = px - cx, dy = py - cy, d = dx*dx + dy*dy;
+                if (d <= R*R) { disc++; if (d >= (R-RW)*(R-RW)) ring++; }
+                float e0 = (v1x-v0x)*(py-v0y) - (v1y-v0y)*(px-v0x);
+                float e1 = (v2x-v1x)*(py-v1y) - (v2y-v1y)*(px-v1x);
+                float e2 = (v0x-v2x)*(py-v2y) - (v0y-v2y)*(px-v2x);
+                if ((e0>=0&&e1>=0&&e2>=0) || (e0<=0&&e1<=0&&e2<=0)) tri++;
+            }
+            if (disc) blend_px(fb, x, y, 0x0B0D14, (int)(205 * disc / tot));
+            if (ring) blend_px(fb, x, y, 0xFFFFFF, (int)(255 * ring / tot));
+            if (tri)  blend_px(fb, x, y, 0xFFFFFF, (int)(255 * tri  / tot));
+        }
+    }
+}
+
 static void gal_draw_tile(flux_fb_t *fb, const cal_rect *r,
-                          const uint32_t *thumb, int sel, int select_mode) {
+                          const uint32_t *thumb, int sel, int select_mode,
+                          int is_video) {
     if (thumb) {
         for (int j = 0; j < r->h; j++)
             for (int i = 0; i < r->w; i++)
                 flux_fb_set_px(fb, r->x + i, r->y + j, thumb[j * r->w + i]);
     } else {
-        /* Ehrliche Platzhalter-Kachel: dezente Oberflaeche + Bild-Icon. */
+        /* Ehrliche Platzhalter-Kachel: dezente Oberflaeche + Bild-/Video-Icon. */
         flux_fb_fill_rect(fb, r->x, r->y, r->w, r->h, COL_SURFACE2);
-        flux_icon_draw(fb, FLUX_ICON_IMAGE, r->x + r->w / 2, r->y + r->h / 2,
-                       40, COL_DIM);
+        flux_icon_draw(fb, is_video ? FLUX_ICON_FILE : FLUX_ICON_IMAGE,
+                       r->x + r->w / 2, r->y + r->h / 2, 40, COL_DIM);
     }
+    if (is_video)
+        gal_draw_play_badge(fb, r->x + r->w / 2, r->y + r->h / 2);
     if (select_mode) {
         /* Auswahl-Stub: Markierungskreis oben rechts */
         int cx = r->x + r->w - 16, cy = r->y + 16;
@@ -2841,6 +2940,7 @@ void flux_ui_draw_gallery(flux_fb_t *fb, const char **names, const char **dates,
                         /* teilweise sichtbar: per-Pixel clippen */
                         cal_rect r = { it->x, sy, it->w, it->h };
                         const uint32_t *thumb = thumb_fn ? thumb_fn(names[it->idx], user) : NULL;
+                        int is_video = gal_name_is_video(names[it->idx]);
                         for (int j = 0; j < r.h; j++) {
                             int py = r.y + j;
                             if (py < grid_top || py >= grid_bot) continue;
@@ -2850,12 +2950,16 @@ void flux_ui_draw_gallery(flux_fb_t *fb, const char **names, const char **dates,
                             }
                         }
                         if (!thumb && sy + it->h/2 >= grid_top && sy + it->h/2 < grid_bot)
-                            flux_icon_draw(fb, FLUX_ICON_IMAGE, r.x + r.w/2, sy + r.h/2, 40, COL_DIM);
+                            flux_icon_draw(fb, is_video ? FLUX_ICON_FILE : FLUX_ICON_IMAGE,
+                                           r.x + r.w/2, sy + r.h/2, 40, COL_DIM);
+                        if (is_video && sy + it->h/2 >= grid_top && sy + it->h/2 < grid_bot)
+                            gal_draw_play_badge(fb, r.x + r.w/2, sy + r.h/2);
                     } else {
                         cal_rect r = { it->x, sy, it->w, it->h };
                         const uint32_t *thumb = thumb_fn ? thumb_fn(names[it->idx], user) : NULL;
                         int sel = (it->idx == selected_idx);
-                        gal_draw_tile(fb, &r, thumb, sel, select_mode);
+                        gal_draw_tile(fb, &r, thumb, sel, select_mode,
+                                      gal_name_is_video(names[it->idx]));
                     }
                 }
             }
@@ -2865,6 +2969,26 @@ void flux_ui_draw_gallery(flux_fb_t *fb, const char **names, const char **dates,
 
     /* --- Fixer Header (zuletzt, deckt drunterscrollende Kacheln ab) ---- */
     flux_fb_fill_rect(fb, 0, STATUSBAR_H, fb->width, GAL_HEADER_H, COL_BG);
+
+    if (s_gal_search) {
+        /* Such-Modus: Suchleiste oben, Tastatur unten. */
+        cal_rect bk, fld, ki;
+        gal_search_geom(fb, &bk, &fld, &ki);
+        flux_icon_draw(fb, FLUX_ICON_CHEVRON_LEFT, bk.x + bk.w / 2, bk.y + bk.h / 2, 26, COL_ACCENT);
+        fill_round_rect(fb, fld.x, fld.y, fld.w, fld.h, fld.h / 2, COL_SURFACE2);
+        flux_icon_draw(fb, FLUX_ICON_SEARCH, fld.x + 18, fld.y + fld.h / 2, 16, COL_DIM);
+        if (s_gal_query[0])
+            flux_fb_text(fb, fld.x + 34, fld.y + (fld.h - 16) / 2, s_gal_query, COL_TEXT, 2);
+        else
+            flux_fb_text(fb, fld.x + 34, fld.y + (fld.h - 16) / 2, "Fotos durchsuchen", COL_DIM, 2);
+        flux_fb_fill_gradient_v_rounded(fb, ki.x, ki.y, ki.w, ki.h, ki.h / 2, COL_ACCENT, COL_ACCENT2);
+        int tw = flux_fb_text_width("KI", 2);
+        flux_fb_text(fb, ki.x + (ki.w - tw) / 2, ki.y + (ki.h - 16) / 2, "KI", 0xFFFFFF, 2);
+        draw_keyboard(fb);
+        flux_fb_present(fb);
+        return;
+    }
+
     flux_fb_text(fb, 16, STATUSBAR_H + 14, "Fotos", COL_TEXT, 4);
     fill_round_rect(fb, sbtn.x, sbtn.y, sbtn.w, sbtn.h, sbtn.h / 2,
                     select_mode ? COL_ACCENT : COL_SURFACE2);
@@ -2920,21 +3044,36 @@ int flux_ui_gallery_hit(const flux_fb_t *fb, int x, int y, const char **dates,
                         int n, int scroll, int filter, flux_gallery_hit_t *out) {
     out->tile = -1; out->filter = 0; out->select = 0;
     out->segment = -1; out->search = 0; out->camera = 0;
+    out->back = 0; out->ki = 0; out->ch = 0; out->backspace = 0; out->enter = 0;
 
-    /* Header-Knoepfe */
-    cal_rect cam, fbtn, sbtn;
-    gal_header_geom(fb, &cam, &fbtn, &sbtn);
-    if (cal_pt_in(x, y, sbtn)) { out->select = 1; return 1; }
-    if (cal_pt_in(x, y, fbtn)) { out->filter = 1; return 1; }
+    if (s_gal_search) {
+        /* Such-Modus: Zurueck | KI | Tastatur | Kacheln (Raster unten). */
+        cal_rect bk, fld, ki;
+        gal_search_geom(fb, &bk, &fld, &ki);
+        if (cal_pt_in(x, y, bk)) { out->back = 1; return 1; }
+        if (cal_pt_in(x, y, ki)) { out->ki = 1; return 1; }
+        char c; int bs, en;
+        if (flux_ui_kbd_hit(fb, x, y, &c, &bs, &en)) {
+            if (bs) out->backspace = 1; else if (en) out->enter = 1; else out->ch = c;
+            return 1;
+        }
+        /* sonst faellt es unten zur Raster-Pruefung durch */
+    } else {
+        /* Header-Knoepfe */
+        cal_rect cam, fbtn, sbtn;
+        gal_header_geom(fb, &cam, &fbtn, &sbtn);
+        if (cal_pt_in(x, y, sbtn)) { out->select = 1; return 1; }
+        if (cal_pt_in(x, y, fbtn)) { out->filter = 1; return 1; }
 
-    /* Untere Leiste: Kamera, Segmente, Suche */
-    cal_rect kam; gal_camera_geom(fb, &kam);
-    if (cal_pt_in(x, y, kam)) { out->camera = 1; return 1; }
-    cal_rect pill, seg[3], search;
-    gal_bottom_geom(fb, &pill, seg, &search);
-    if (cal_pt_in(x, y, search)) { out->search = 1; return 1; }
-    for (int i = 0; i < 3; i++)
-        if (cal_pt_in(x, y, seg[i])) { out->segment = i; return 1; }
+        /* Untere Leiste: Kamera, Segmente, Suche */
+        cal_rect kam; gal_camera_geom(fb, &kam);
+        if (cal_pt_in(x, y, kam)) { out->camera = 1; return 1; }
+        cal_rect pill, seg[3], search;
+        gal_bottom_geom(fb, &pill, seg, &search);
+        if (cal_pt_in(x, y, search)) { out->search = 1; return 1; }
+        for (int i = 0; i < 3; i++)
+            if (cal_pt_in(x, y, seg[i])) { out->segment = i; return 1; }
+    }
 
     /* Raster -- nur im sichtbaren Bereich, mit gleicher Layout-Berechnung */
     int grid_top = GAL_GRID_TOP;
