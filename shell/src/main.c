@@ -752,7 +752,7 @@ static void load_alarm_app(void) {
                 e->is_timer  = 0;
                 e->timer_ts  = 0;
                 snprintf(e->sub,   sizeof(e->sub),   "%02d:%02d", hh, mm);
-                snprintf(e->label, sizeof(e->label),  "%s", l > 17 ? line + 17 : "");
+                snprintf(e->label, sizeof(e->label),  "%.60s", l > 17 ? line + 17 : "");
                 snprintf(e->key,   sizeof(e->key),    "%04d-%02d-%02d %02d:%02d",
                          yr, mo, dy, hh, mm);
             }
