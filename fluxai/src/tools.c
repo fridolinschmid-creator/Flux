@@ -152,11 +152,28 @@ static int tool_weather(const char *arg, char *out, size_t cap) {
 static int path_read_allowed(const char *path) {
     /* Pfad-Traversal mit ".." grundsaetzlich ablehnen */
     if (strstr(path, "..")) return 0;
+
+    /* Kanonischen Pfad aufloesen und ERST DANN gegen die erlaubten
+     * Praefixe pruefen. Ohne das laesst sich der Schutz von flux.conf
+     * (API-Keys, SMTP-Passwort) ueber die /proc-Magic-Symlinks umgehen,
+     * z.B. "/proc/self/root/etc/flux/flux.conf". realpath() folgt allen
+     * Symlinks; die Datei muss existieren (file_read oeffnet sie ohnehin). */
+    char resolved[PATH_MAX];
+    if (!realpath(path, resolved)) return 0;
+
+    /* Prozess-Umgebungen nie herausgeben -- /proc/<pid>/environ enthaelt
+     * u.a. den per Umgebungsvariable gesetzten API-Key. Nur unter /proc
+     * sperren, damit eine echte Nutzerdatei namens "environ" lesbar bleibt. */
+    if (strncmp(resolved, "/proc/", 6) == 0) {
+        const char *base = strrchr(resolved, '/');
+        if (base && strcmp(base, "/environ") == 0) return 0;
+    }
+
     static const char *ok_prefixes[] = {
         "/home/user/", "/tmp/", "/proc/", "/sys/", NULL
     };
     for (int i = 0; ok_prefixes[i]; i++)
-        if (strncmp(path, ok_prefixes[i], strlen(ok_prefixes[i])) == 0) return 1;
+        if (strncmp(resolved, ok_prefixes[i], strlen(ok_prefixes[i])) == 0) return 1;
     return 0;
 }
 
@@ -670,13 +687,13 @@ static int tool_brightness_get(const char *arg, char *out, size_t cap) {
 
     long cur = 0, max = 0;
     FILE *f = fopen(path_cur, "r");
-    if (f) { fscanf(f, "%ld", &cur); fclose(f); }
+    if (f) { if (fscanf(f, "%ld", &cur) != 1) cur = 0; fclose(f); }
     else {
         snprintf(out, cap, "Fehler: brightness-Datei nicht lesbar (%s)", path_cur);
         return 1;
     }
     f = fopen(path_max, "r");
-    if (f) { fscanf(f, "%ld", &max); fclose(f); }
+    if (f) { if (fscanf(f, "%ld", &max) != 1) max = 0; fclose(f); }
 
     if (max <= 0) {
         snprintf(out, cap, "Aktuelle Helligkeit: %ld (max unbekannt)", cur);
@@ -712,7 +729,7 @@ static int tool_brightness_set(const char *arg, char *out, size_t cap) {
 
     long max = 0;
     FILE *f = fopen(path_max, "r");
-    if (f) { fscanf(f, "%ld", &max); fclose(f); }
+    if (f) { if (fscanf(f, "%ld", &max) != 1) max = 0; fclose(f); }
     if (max <= 0) {
         snprintf(out, cap, "Fehler: max_brightness nicht lesbar (%s)", path_max);
         return 1;
@@ -1092,16 +1109,21 @@ static void search_files_walk(const char *base, const char *pattern,
         snprintf(full, sizeof(full), "%s/%s", base, e->d_name);
         struct stat st;
         if (stat(full, &st) != 0) continue;
-        /* Case-insensitive name match */
+        /* Case-insensitive name match. Terminatoren an den TATSAECHLICH
+         * kopierten Zaehlern setzen -- strlen() koennte groesser als die
+         * Puffergroesse sein (Muster bis 1024 Zeichen) und schriebe sonst
+         * ausserhalb von lower_pat/lower_name. */
         char lower_name[256], lower_pat[128];
-        for (int i = 0; e->d_name[i] && i < 255; i++)
-            lower_name[i] = (e->d_name[i] >= 'A' && e->d_name[i] <= 'Z')
-                           ? e->d_name[i] + 32 : e->d_name[i];
-        lower_name[strlen(e->d_name)] = '\0';
-        for (int i = 0; pattern[i] && i < 127; i++)
-            lower_pat[i] = (pattern[i] >= 'A' && pattern[i] <= 'Z')
-                          ? pattern[i] + 32 : pattern[i];
-        lower_pat[strlen(pattern)] = '\0';
+        int ni = 0;
+        for (; e->d_name[ni] && ni < 255; ni++)
+            lower_name[ni] = (e->d_name[ni] >= 'A' && e->d_name[ni] <= 'Z')
+                           ? e->d_name[ni] + 32 : e->d_name[ni];
+        lower_name[ni] = '\0';
+        int pi = 0;
+        for (; pattern[pi] && pi < 127; pi++)
+            lower_pat[pi] = (pattern[pi] >= 'A' && pattern[pi] <= 'Z')
+                          ? pattern[pi] + 32 : pattern[pi];
+        lower_pat[pi] = '\0';
         if (strstr(lower_name, lower_pat)) {
             size_t ol = strlen(out);
             snprintf(out + ol, cap - ol, "  %s\n", full);
@@ -1452,8 +1474,8 @@ static int tool_journal_read(const char *arg, char *out, size_t cap) {
         /* arg is a date like 2026-06-18 */
         snprintf(path, sizeof(path), "/home/user/Journal/%s.txt", arg);
     }
-    /* path traversal guard */
-    char real[256];
+    /* path traversal guard -- realpath schreibt bis zu PATH_MAX Bytes */
+    char real[PATH_MAX];
     if (!realpath(path, real) || strncmp(real, "/home/user/Journal/", 19) != 0) {
         snprintf(out, cap, "Fehler: ungueltiger Pfad."); return 1;
     }
@@ -1521,7 +1543,7 @@ static int tool_meeting_read(const char *arg, char *out, size_t cap) {
     } else {
         snprintf(path, sizeof(path), "/home/user/Meetings/%s.txt", arg);
     }
-    char real[256];
+    char real[PATH_MAX];
     if (!realpath(path, real) || strncmp(real, "/home/user/Meetings/", 20) != 0) {
         snprintf(out, cap, "Fehler: ungueltiger Pfad."); return 1;
     }
@@ -1536,7 +1558,7 @@ static int tool_meeting_read(const char *arg, char *out, size_t cap) {
 /* ---- doc_analyze ----------------------------------------------------- */
 static int tool_doc_analyze(const char *arg, char *out, size_t cap) {
     if (!arg || !*arg) { snprintf(out, cap, "Fehler: Dateipfad angeben."); return 1; }
-    char real[256];
+    char real[PATH_MAX];
     if (!realpath(arg, real)) { snprintf(out, cap, "Datei nicht gefunden: %s", arg); return 1; }
     /* Allow access only within /home/user/ and /etc/flux/ */
     if (strncmp(real, "/home/user/", 11) != 0 && strncmp(real, "/etc/flux/", 10) != 0) {
