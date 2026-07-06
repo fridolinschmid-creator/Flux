@@ -184,6 +184,41 @@ void flux_provider_init(void) {
     ctx_load();
 }
 
+/* --- Deterministischer Mock-Provider (Tests/CI) ----------------------------
+ * Aktiv per FLUX_PROVIDER=mock. Ersetzt nur den HTTP-Aufruf (api_call) durch
+ * reproduzierbare "Modellantworten" -- der restliche Pfad (Tool-Parsing,
+ * Tool-Ausfuehrung, Followup, Gespraechsverlauf) bleibt der echte Code und
+ * wird so testbar, ohne Netzwerk oder API-Key.
+ *
+ * Konventionen fuer die "Modellantwort":
+ *   - Frage "tool:<name>|<arg>"  -> Mock fordert genau dieses Tool an
+ *     (gibt "TOOL:<name>\nARG:<arg>" zurueck). So laesst sich der echte
+ *     Dispatch inkl. der Sicherheits-Guards (file_read/Traversal) pruefen.
+ *   - sonstige Frage             -> "[mock] <frage>" (deterministisch).
+ *   - Followup-Prompt (enthaelt das Tool-Ergebnis) -> wird zurueckgespiegelt,
+ *     sodass das Tool-Ergebnis in der Endantwort sichtbar ist. */
+int flux_provider_is_mock(void) {
+    const char *p = getenv("FLUX_PROVIDER");
+    return p && strcmp(p, "mock") == 0;
+}
+
+static int mock_api_call(const char *final_q, char *out, size_t out_cap) {
+    if (strncmp(final_q, "tool:", 5) == 0) {
+        const char *rest = final_q + 5;
+        const char *bar  = strchr(rest, '|');
+        char name[64];
+        size_t nlen = bar ? (size_t)(bar - rest) : strlen(rest);
+        if (nlen >= sizeof(name)) nlen = sizeof(name) - 1;
+        memcpy(name, rest, nlen);
+        name[nlen] = '\0';
+        if (bar) snprintf(out, out_cap, "TOOL:%s\nARG:%s", name, bar + 1);
+        else     snprintf(out, out_cap, "TOOL:%s\nARG:", name);
+        return 1;
+    }
+    snprintf(out, out_cap, "[mock] %s", final_q);
+    return 1;
+}
+
 static void json_escape_append(char *out, size_t cap, const char *s) {
     size_t len = strlen(out);
     for (; *s && len + 2 < cap; s++) {
@@ -277,6 +312,11 @@ static int extract_text(const char *json, api_format_t fmt, char *out, size_t ou
 static int api_call(const flux_provider_def_t *prov, const char *api_key,
                     const char *model, const char *system_prompt,
                     const char *final_q, char *out, size_t out_cap, int use_ctx) {
+    if (flux_provider_is_mock()) {
+        (void)prov; (void)api_key; (void)model; (void)system_prompt; (void)use_ctx;
+        return mock_api_call(final_q, out, out_cap);
+    }
+
     char body[24576];
 
     if (prov->format == FMT_ANTHROPIC) {
@@ -496,7 +536,8 @@ static void provider_ask_impl(const char *question, char *out, size_t out_cap,
     const flux_provider_def_t *prov =
         resolve_provider(api_key, sizeof(api_key), model, sizeof(model));
 
-    if (!api_key[0]) {
+    /* Im Mock-Betrieb (FLUX_PROVIDER=mock) wird kein echter Key gebraucht. */
+    if (!flux_provider_is_mock() && !api_key[0]) {
         snprintf(out, out_cap,
             "Kein Cloud-Zugang fuer %s konfiguriert. Trage in den Einstellungen "
             "einen API-Key fuer den gewaehlten Anbieter ein (oder waehle einen "
