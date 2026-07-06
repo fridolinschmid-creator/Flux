@@ -101,7 +101,7 @@ static int read_battery_pct(void) {
         FILE *f = fopen(paths[i], "r");
         if (!f) continue;
         int pct = -1;
-        fscanf(f, "%d", &pct);
+        if (fscanf(f, "%d", &pct) != 1) pct = -1;
         fclose(f);
         if (pct >= 0) return pct;
     }
@@ -114,8 +114,11 @@ static int read_wifi_quality(void) {
     FILE *f = fopen("/proc/net/wireless", "r");
     if (!f) return -1;
     char line[128];
-    fgets(line, sizeof(line), f); /* Header 1 */
-    fgets(line, sizeof(line), f); /* Header 2 */
+    /* Zwei Kopfzeilen ueberspringen -- fehlen sie, gibt es kein WLAN. */
+    if (!fgets(line, sizeof(line), f) || !fgets(line, sizeof(line), f)) {
+        fclose(f);
+        return -1;
+    }
     int quality = -1;
     if (fgets(line, sizeof(line), f)) {
         char iface[64];
@@ -971,6 +974,7 @@ static int measure_wrapped_height(int max_w, const char *s, int scale, int line_
 static int draw_bubble(flux_fb_t *fb, const char *text, int y,
                         int max_w, uint32_t col, int scale, int line_h,
                         int right_align) {
+    (void)col;   /* Blasenfarbe ist pro Rolle festgelegt (siehe unten) */
     int margin = 14;
     int text_w = max_w - 2 * BUBBLE_PAD_X;
     int text_h = measure_wrapped_height(text_w, text, scale, line_h);
