@@ -18,9 +18,9 @@ static const char *wifi_iface(void) {
     while ((e = readdir(d)) != NULL) {
         if (e->d_name[0] == '.') continue;
         char probe[128];
-        snprintf(probe, sizeof(probe), "/sys/class/net/%s/wireless", e->d_name);
+        snprintf(probe, sizeof(probe), "/sys/class/net/%.100s/wireless", e->d_name);
         if (access(probe, F_OK) == 0) {
-            snprintf(iface, sizeof(iface), "%s", e->d_name);
+            snprintf(iface, sizeof(iface), "%.31s", e->d_name);
             closedir(d);
             return iface;
         }
@@ -30,6 +30,12 @@ static const char *wifi_iface(void) {
 }
 
 static int have_cmd(const char *path) { return access(path, X_OK) == 0; }
+
+/* system() mit bewusst ignoriertem Ergebnis -- wpa_cli/dhcp-Schritte werden
+ * am Ende ueber flux_wifi_current() verifiziert, nicht per Exit-Code. */
+static void run_cmd(const char *cmd) {
+    if (system(cmd) != 0) { /* Fehler wird ueber den Verbindungs-Check erkannt */ }
+}
 
 int flux_wifi_available(void) {
     if (!wifi_iface()) return 0;
@@ -132,7 +138,7 @@ void flux_wifi_scan_trigger(void) {
     if (!iface) return;
     char cmd[256];
     snprintf(cmd, sizeof(cmd), "wpa_cli -i %s scan >/dev/null 2>&1", iface);
-    if (system(cmd) != 0) { /* trotzdem versuchen, Ergebnisse zu lesen */ }
+    run_cmd(cmd); /* trotzdem versuchen, Ergebnisse zu lesen */
 }
 
 int flux_wifi_scan_results(flux_wifi_net_t *out, int max) {
@@ -182,31 +188,31 @@ int flux_wifi_connect(const char *ssid, const char *pass, char *msg, size_t msgc
 
     snprintf(cmd, sizeof(cmd), "wpa_cli -i %s set_network %d ssid %s >/dev/null 2>&1",
              iface, netid, qssid);
-    system(cmd);
+    run_cmd(cmd);
 
     if (pass && pass[0]) {
         snprintf(wrapped, sizeof(wrapped), "\"%s\"", pass);
         shquote(wrapped, qpass, sizeof(qpass));
         snprintf(cmd, sizeof(cmd), "wpa_cli -i %s set_network %d psk %s >/dev/null 2>&1",
                  iface, netid, qpass);
-        system(cmd);
+        run_cmd(cmd);
     } else {
         snprintf(cmd, sizeof(cmd), "wpa_cli -i %s set_network %d key_mgmt NONE >/dev/null 2>&1",
                  iface, netid);
-        system(cmd);
+        run_cmd(cmd);
     }
 
     snprintf(cmd, sizeof(cmd), "wpa_cli -i %s enable_network %d >/dev/null 2>&1", iface, netid);
-    system(cmd);
+    run_cmd(cmd);
     snprintf(cmd, sizeof(cmd), "wpa_cli -i %s save_config >/dev/null 2>&1", iface);
-    system(cmd);
+    run_cmd(cmd);
 
     /* IP per DHCP holen (udhcpc bevorzugt, sonst dhclient) */
     if (have_cmd("/sbin/udhcpc") || have_cmd("/usr/sbin/udhcpc"))
         snprintf(cmd, sizeof(cmd), "udhcpc -i %s -n -q >/dev/null 2>&1", iface);
     else
         snprintf(cmd, sizeof(cmd), "dhclient %s >/dev/null 2>&1", iface);
-    system(cmd);
+    run_cmd(cmd);
 
     /* Verbindung pruefen */
     sleep(2);
@@ -234,7 +240,7 @@ void flux_wifi_current(char *out, size_t cap) {
     char ssid[64] = {0}; int completed = 0;
     while (fgets(line, sizeof(line), f)) {
         if (strncmp(line, "ssid=", 5) == 0) {
-            snprintf(ssid, sizeof(ssid), "%s", line + 5);
+            snprintf(ssid, sizeof(ssid), "%.63s", line + 5);
             size_t l = strlen(ssid);
             while (l > 0 && (ssid[l-1] == '\n' || ssid[l-1] == '\r')) ssid[--l] = '\0';
         }

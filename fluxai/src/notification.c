@@ -47,7 +47,9 @@ static void timestamp(char *buf, size_t cap) {
 static int battery_level(void) {
     FILE *f = fopen(BATTERY_SYS, "r");
     if (!f) return -1;
-    int v = -1; fscanf(f, "%d", &v); fclose(f);
+    int v = -1;
+    if (fscanf(f, "%d", &v) != 1) v = -1;
+    fclose(f);
     return v;
 }
 
@@ -68,7 +70,7 @@ static void write_notification(const char *msg) {
             if (line[0] == '\n') continue;
             size_t l = strlen(line);
             while (l > 0 && (line[l-1] == '\n' || line[l-1] == '\r')) line[--l] = '\0';
-            strncpy(lines[n], line, 255); lines[n][255] = '\0'; n++;
+            snprintf(lines[n], sizeof(lines[n]), "%s", line); n++;
         }
         fclose(f);
     }
@@ -102,8 +104,9 @@ static void check_battery(void) {
 static void check_proactive(void) {
     FILE *f = fopen(PROACTIVE_FILE, "r");
     if (!f) return;
-    char line[256]; line[0] = '\0';
-    fgets(line, sizeof(line), f); fclose(f);
+    char line[256];
+    if (!fgets(line, sizeof(line), f)) line[0] = '\0';
+    fclose(f);
     size_t l = strlen(line);
     while (l > 0 && (line[l-1] == '\n' || line[l-1] == '\r')) line[--l] = '\0';
     if (l > 0) {
@@ -193,12 +196,12 @@ static void check_alarms(void) {
             /* Ausloesen wenn Alarm faellig (bis 10 Minuten Toleranz) */
             if (diff >= 0 && diff < 600) {
                 if (nring < 8)
-                    snprintf(ring[nring++], 255, "%02d:%02d %s", h, mi, desc);
+                    snprintf(ring[nring++], sizeof(ring[0]), "%02d:%02d %s", h, mi, desc);
                 continue;
             }
         }
         if (nkept < 64) {
-            strncpy(kept[nkept], line, 255); kept[nkept][255] = '\0'; nkept++;
+            snprintf(kept[nkept], sizeof(kept[nkept]), "%s", line); nkept++;
         }
     }
     fclose(f);
@@ -213,7 +216,7 @@ static void check_alarms(void) {
         /* Auch als normale Benachrichtigung pushen */
         for (int i = 0; i < nring; i++) {
             char msg[280];
-            snprintf(msg, sizeof(msg), "Wecker: %s", ring[i]);
+            snprintf(msg, sizeof(msg), "Wecker: %.255s", ring[i]);
             write_notification(msg);
         }
         /* Ausgeloeste Alarme aus der Datei entfernen */

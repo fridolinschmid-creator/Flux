@@ -47,7 +47,7 @@ static int record_wav(void) {
     pid_t pid = fork();
     if (pid < 0) return 0;
     if (pid == 0) {
-        /* Unterdrücke Ausgaben des Recorders */
+        /* Unterdruecke Ausgaben des Recorders */
         int null = open("/dev/null", O_WRONLY);
         if (null >= 0) { dup2(null, 1); dup2(null, 2); close(null); }
         if (strstr(rec, "arecord")) {

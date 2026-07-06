@@ -117,13 +117,14 @@ static int tool_weather(const char *arg, char *out, size_t cap) {
         if (c == '\x1b') {
             /* ANSI Escape: ueberspringen bis 'm' */
             while (respbuf[i] && respbuf[i] != 'm') i++;
+            if (!respbuf[i]) break; /* Sequenz ohne 'm' am String-Ende */
         } else if (c < 0x20 && c != '\n') {
             continue;
         } else if (c >= 0x80) {
             /* Multi-Byte UTF-8 (Emoji etc.): ueberspringen */
             if (c >= 0xC0) {
                 int extra = (c >= 0xF0) ? 3 : (c >= 0xE0) ? 2 : 1;
-                i += extra;
+                while (extra-- > 0 && respbuf[i + 1]) i++;
             }
         } else {
             clean[ci++] = respbuf[i];
@@ -594,12 +595,13 @@ static int tool_contacts_search(const char *arg, char *out, size_t cap) {
     while (fgets(line, sizeof(line), f) && pos + 2 < sizeof(tmp)) {
         /* Gross-Klein-unabhaengige Suche durch manuellen Vergleich */
         char lower_line[256], lower_arg[128];
-        for (int i = 0; line[i] && i < 255; i++)
-            lower_line[i] = (line[i] >= 'A' && line[i] <= 'Z') ? line[i] + 32 : line[i];
-        lower_line[255] = '\0';
-        for (int i = 0; arg[i] && i < 127; i++)
-            lower_arg[i] = (arg[i] >= 'A' && arg[i] <= 'Z') ? arg[i] + 32 : arg[i];
-        lower_arg[127] = '\0';
+        int li = 0, ai = 0;
+        for (; line[li] && li < 255; li++)
+            lower_line[li] = (line[li] >= 'A' && line[li] <= 'Z') ? line[li] + 32 : line[li];
+        lower_line[li] = '\0';
+        for (; arg[ai] && ai < 127; ai++)
+            lower_arg[ai] = (arg[ai] >= 'A' && arg[ai] <= 'Z') ? arg[ai] + 32 : arg[ai];
+        lower_arg[ai] = '\0';
         if (strstr(lower_line, lower_arg)) {
             size_t ll = strlen(line);
             if (pos + ll + 1 < sizeof(tmp)) {
@@ -649,7 +651,7 @@ static int find_backlight_dir(char *buf, size_t cap) {
     struct dirent *e;
     while ((e = readdir(d)) != NULL) {
         if (e->d_name[0] == '.') continue;
-        snprintf(buf, cap, "/sys/class/backlight/%s", e->d_name);
+        snprintf(buf, cap, "/sys/class/backlight/%.200s", e->d_name);
         closedir(d);
         return 1;
     }
@@ -670,13 +672,13 @@ static int tool_brightness_get(const char *arg, char *out, size_t cap) {
 
     long cur = 0, max = 0;
     FILE *f = fopen(path_cur, "r");
-    if (f) { fscanf(f, "%ld", &cur); fclose(f); }
+    if (f) { if (fscanf(f, "%ld", &cur) != 1) cur = 0; fclose(f); }
     else {
         snprintf(out, cap, "Fehler: brightness-Datei nicht lesbar (%s)", path_cur);
         return 1;
     }
     f = fopen(path_max, "r");
-    if (f) { fscanf(f, "%ld", &max); fclose(f); }
+    if (f) { if (fscanf(f, "%ld", &max) != 1) max = 0; fclose(f); }
 
     if (max <= 0) {
         snprintf(out, cap, "Aktuelle Helligkeit: %ld (max unbekannt)", cur);
@@ -712,7 +714,7 @@ static int tool_brightness_set(const char *arg, char *out, size_t cap) {
 
     long max = 0;
     FILE *f = fopen(path_max, "r");
-    if (f) { fscanf(f, "%ld", &max); fclose(f); }
+    if (f) { if (fscanf(f, "%ld", &max) != 1) max = 0; fclose(f); }
     if (max <= 0) {
         snprintf(out, cap, "Fehler: max_brightness nicht lesbar (%s)", path_max);
         return 1;
@@ -1094,14 +1096,15 @@ static void search_files_walk(const char *base, const char *pattern,
         if (stat(full, &st) != 0) continue;
         /* Case-insensitive name match */
         char lower_name[256], lower_pat[128];
-        for (int i = 0; e->d_name[i] && i < 255; i++)
-            lower_name[i] = (e->d_name[i] >= 'A' && e->d_name[i] <= 'Z')
-                           ? e->d_name[i] + 32 : e->d_name[i];
-        lower_name[strlen(e->d_name)] = '\0';
-        for (int i = 0; pattern[i] && i < 127; i++)
-            lower_pat[i] = (pattern[i] >= 'A' && pattern[i] <= 'Z')
-                          ? pattern[i] + 32 : pattern[i];
-        lower_pat[strlen(pattern)] = '\0';
+        int ni = 0, pi = 0;
+        for (; e->d_name[ni] && ni < 255; ni++)
+            lower_name[ni] = (e->d_name[ni] >= 'A' && e->d_name[ni] <= 'Z')
+                           ? e->d_name[ni] + 32 : e->d_name[ni];
+        lower_name[ni] = '\0';
+        for (; pattern[pi] && pi < 127; pi++)
+            lower_pat[pi] = (pattern[pi] >= 'A' && pattern[pi] <= 'Z')
+                          ? pattern[pi] + 32 : pattern[pi];
+        lower_pat[pi] = '\0';
         if (strstr(lower_name, lower_pat)) {
             size_t ol = strlen(out);
             snprintf(out + ol, cap - ol, "  %s\n", full);
@@ -1183,7 +1186,7 @@ static int tool_image_analyze(const char *arg, char *out, size_t cap) {
         snprintf(out, cap, "Fehler: kein Bildpfad angegeben.");
         return 1;
     }
-    /* Relativen Pfad in /home/user/Pictures/ auflösen */
+    /* Relativen Pfad in /home/user/Pictures/ aufloesen */
     char full[512];
     if (arg[0] == '/') {
         snprintf(full, sizeof(full), "%s", arg);
@@ -1453,7 +1456,7 @@ static int tool_journal_read(const char *arg, char *out, size_t cap) {
         snprintf(path, sizeof(path), "/home/user/Journal/%s.txt", arg);
     }
     /* path traversal guard */
-    char real[256];
+    char real[PATH_MAX];
     if (!realpath(path, real) || strncmp(real, "/home/user/Journal/", 19) != 0) {
         snprintf(out, cap, "Fehler: ungueltiger Pfad."); return 1;
     }
@@ -1521,7 +1524,7 @@ static int tool_meeting_read(const char *arg, char *out, size_t cap) {
     } else {
         snprintf(path, sizeof(path), "/home/user/Meetings/%s.txt", arg);
     }
-    char real[256];
+    char real[PATH_MAX];
     if (!realpath(path, real) || strncmp(real, "/home/user/Meetings/", 20) != 0) {
         snprintf(out, cap, "Fehler: ungueltiger Pfad."); return 1;
     }
@@ -1536,11 +1539,17 @@ static int tool_meeting_read(const char *arg, char *out, size_t cap) {
 /* ---- doc_analyze ----------------------------------------------------- */
 static int tool_doc_analyze(const char *arg, char *out, size_t cap) {
     if (!arg || !*arg) { snprintf(out, cap, "Fehler: Dateipfad angeben."); return 1; }
-    char real[256];
+    char real[PATH_MAX];
     if (!realpath(arg, real)) { snprintf(out, cap, "Datei nicht gefunden: %s", arg); return 1; }
     /* Allow access only within /home/user/ and /etc/flux/ */
     if (strncmp(real, "/home/user/", 11) != 0 && strncmp(real, "/etc/flux/", 10) != 0) {
         snprintf(out, cap, "Zugriff verweigert: nur /home/user/ und /etc/flux/ erlaubt.");
+        return 1;
+    }
+    /* flux.conf enthaelt API-Keys und SMTP-Passwort -- wie bei file_read
+     * vor Zugriff durch die KI schuetzen. */
+    if (strcmp(real, FLUX_CONFIG_PATH) == 0) {
+        snprintf(out, cap, "Zugriff verweigert: %s enthaelt Zugangsdaten.", FLUX_CONFIG_PATH);
         return 1;
     }
     FILE *f = fopen(real, "r");

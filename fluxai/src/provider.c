@@ -138,10 +138,10 @@ static void ctx_load(void) {
         while (l > 0 && (line[l-1] == '\n' || line[l-1] == '\r')) line[--l] = '\0';
         if (strncmp(line, "Q:", 2) == 0 && ctx_n < CTX_MAX) {
             cur = &ctx_history[ctx_n++];
-            snprintf(cur->q, sizeof(cur->q), "%s", line + 2);
+            snprintf(cur->q, sizeof(cur->q), "%.255s", line + 2);
             cur->a[0] = '\0';
         } else if (strncmp(line, "A:", 2) == 0 && cur) {
-            snprintf(cur->a, sizeof(cur->a), "%s", line + 2);
+            snprintf(cur->a, sizeof(cur->a), "%.511s", line + 2);
         } else if (strcmp(line, "---") == 0) {
             cur = NULL;
         }
@@ -342,7 +342,7 @@ static int api_call(const flux_provider_def_t *prov, const char *api_key,
     }
     headers = curl_slist_append(headers, "content-type: application/json");
 
-    /* Bis zu 2 Versuche bei Rate-Limit (HTTP 429), z.B. NVIDIA NIM. */
+    /* Bis zu 2 Wiederholungen bei Rate-Limit (HTTP 429), z.B. NVIDIA NIM. */
     int ok = 0;
     for (int attempt = 0; attempt < 3; attempt++) {
         CURL *curl = curl_easy_init();

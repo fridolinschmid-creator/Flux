@@ -399,6 +399,9 @@ void flux_fb_text_shadow(flux_fb_t *fb, int x, int y, const char *s, uint32_t co
 void flux_fb_present(flux_fb_t *fb) {
     if (!fb->mmio) return; /* Mock-Framebuffer (flux_fb_open_null) -- nichts zu kopieren */
     int row_bytes = fb->width * (fb->bpp / 8);
+    /* Zeilenoffset im mmio anhand des Geraete-Strides (line_length), nicht
+     * der sichtbaren Breite -- manche Framebuffer padden ihre Zeilen. */
+    size_t mmio_stride = (size_t)fb->stride_px * (fb->bpp / 8);
     for (int y = 0; y < fb->height; y++) {
         uint32_t *back_row = fb->back + (size_t)y * fb->stride_px;
         uint32_t *prev_row = fb->prev + (size_t)y * fb->stride_px;
@@ -406,9 +409,9 @@ void flux_fb_present(flux_fb_t *fb) {
             continue; /* Zeile unveraendert -> ueberspringen */
 
         if (fb->bpp == 32) {
-            memcpy(fb->mmio + (size_t)y * row_bytes, back_row, row_bytes);
+            memcpy(fb->mmio + (size_t)y * mmio_stride, back_row, row_bytes);
         } else { /* 16-bit RGB565 Fallback */
-            uint16_t *dst = (uint16_t *)(fb->mmio + (size_t)y * row_bytes);
+            uint16_t *dst = (uint16_t *)(fb->mmio + (size_t)y * mmio_stride);
             for (int x = 0; x < fb->width; x++) {
                 uint32_t p = back_row[x];
                 uint16_t r = (p >> 19) & 0x1F, g = (p >> 10) & 0x3F, b = (p >> 3) & 0x1F;

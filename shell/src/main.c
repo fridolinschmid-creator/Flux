@@ -870,7 +870,7 @@ static void wifi_rescan(flux_fb_t *fb) {
     wifi_n = flux_wifi_scan_results(wifi_nets, WIFI_MAX);
     if (wifi_n < 0) wifi_n = 0;
     for (int i = 0; i < wifi_n; i++) {
-        snprintf(wifi_names_buf[i], sizeof(wifi_names_buf[0]), "%s", wifi_nets[i].ssid);
+        snprintf(wifi_names_buf[i], sizeof(wifi_names_buf[0]), "%.63s", wifi_nets[i].ssid);
         snprintf(wifi_metas_buf[i], sizeof(wifi_metas_buf[0]), "Signal %d%% - %s",
                  wifi_nets[i].signal_pct, wifi_nets[i].secured ? "gesichert" : "offen");
         wifi_names_p[i] = wifi_names_buf[i];
@@ -1243,10 +1243,11 @@ static void build_ai_overlay_context(flux_screen_t screen,
                      "Inhalt (ggf. gekuerzt):\n%.6000s",
                      viewer_path, viewer_content);
             /* Speicherpfad: gleiche Datei + _Zusammenfassung.txt */
-            char base[256]; snprintf(base, sizeof(base), "%s", viewer_path);
+            char base[256]; snprintf(base, sizeof(base), "%.255s", viewer_path);
             char *dot = strrchr(base, '.'); if (dot) *dot = '\0';
+            /* Suffix darf bei langen Pfaden nicht abgeschnitten werden */
             snprintf(ai_ovl_save_path, sizeof(ai_ovl_save_path),
-                     "%s_KI-Zusammenfassung.txt", base);
+                     "%.230s_KI-Zusammenfassung.txt", base);
             break;
         }
         case FLUX_SCREEN_IMAGE_VIEWER: {
@@ -1259,7 +1260,7 @@ static void build_ai_overlay_context(flux_screen_t screen,
                      image_path,
                      image_caption[0] ? image_caption : "(noch nicht analysiert -- frage per image_analyze-Tool)");
             snprintf(ai_ovl_save_path, sizeof(ai_ovl_save_path),
-                     "%s.beschreibung.txt", image_path);
+                     "%.230s.beschreibung.txt", image_path);
             break;
         }
         case FLUX_SCREEN_CALENDAR: {
@@ -2547,7 +2548,7 @@ int main(void) {
                             fprintf(mf, "*(Keine Transkription verfuegbar -- Whisper.cpp fehlt)*\n");
                         fclose(mf);
                         snprintf(meeting_status, sizeof(meeting_status),
-                                 "Gespeichert: %s", mpath);
+                                 "Gespeichert: %.100s", mpath);
                     }
                 }
             }

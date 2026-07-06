@@ -30,7 +30,7 @@ static int load_entries(flux_cfg_entry_t *entries, int max_entries) {
         const char *key = line;
         const char *value = eq + 1;
 
-        snprintf(entries[n].key, sizeof(entries[n].key), "%s", key);
+        snprintf(entries[n].key, sizeof(entries[n].key), "%.63s", key);
         snprintf(entries[n].value, sizeof(entries[n].value), "%s", value);
         n++;
     }
@@ -65,7 +65,7 @@ int flux_config_set(const char *key, const char *value) {
     }
     if (!found) {
         if (n >= FLUX_CFG_MAX_ENTRIES) return -1;
-        snprintf(entries[n].key, sizeof(entries[n].key), "%s", key);
+        snprintf(entries[n].key, sizeof(entries[n].key), "%.63s", key);
         snprintf(entries[n].value, sizeof(entries[n].value), "%s", value);
         n++;
     }

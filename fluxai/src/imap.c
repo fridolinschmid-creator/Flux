@@ -159,11 +159,9 @@ void flux_imap_fetch_unread(char *out, size_t out_cap) {
     /* 2. Die juengsten bis zu IMAP_MAX_UNREAD Kopfzeilen holen */
     int start = n > IMAP_MAX_UNREAD ? n - IMAP_MAX_UNREAD : 0;
     int shown = n - start;
-    out[0] = '\0';
-    size_t ol = (size_t)snprintf(out, out_cap,
+    snprintf(out, out_cap,
         "%d ungelesene Mail(s)%s -- juengste %d:\n", n,
         n > shown ? " (Auszug)" : "", shown);
-    (void)ol;
 
     for (int i = start; i < n; i++) {
         char req[128];

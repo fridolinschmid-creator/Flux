@@ -101,7 +101,7 @@ static int read_battery_pct(void) {
         FILE *f = fopen(paths[i], "r");
         if (!f) continue;
         int pct = -1;
-        fscanf(f, "%d", &pct);
+        if (fscanf(f, "%d", &pct) != 1) pct = -1;
         fclose(f);
         if (pct >= 0) return pct;
     }
@@ -114,9 +114,12 @@ static int read_wifi_quality(void) {
     FILE *f = fopen("/proc/net/wireless", "r");
     if (!f) return -1;
     char line[128];
-    fgets(line, sizeof(line), f); /* Header 1 */
-    fgets(line, sizeof(line), f); /* Header 2 */
     int quality = -1;
+    /* Zwei Header-Zeilen ueberspringen */
+    if (!fgets(line, sizeof(line), f) || !fgets(line, sizeof(line), f)) {
+        fclose(f);
+        return -1;
+    }
     if (fgets(line, sizeof(line), f)) {
         char iface[64];
         int status, link;
@@ -187,7 +190,7 @@ static void draw_statusbar(flux_fb_t *fb) {
     int bat = read_battery_pct();
     if (bat >= 0) {
         /* Prozentsatz */
-        char pbuf[6];
+        char pbuf[12];
         snprintf(pbuf, sizeof(pbuf), "%d", bat);
         int pw = flux_fb_text_width(pbuf, 2);
         rx -= pw;
@@ -422,7 +425,7 @@ void flux_ui_draw_lock(flux_fb_t *fb) {
             fclose(nf);
         }
         if (cnt > 0) {
-            char badge[8]; snprintf(badge, sizeof(badge), "%d", cnt);
+            char badge[12]; snprintf(badge, sizeof(badge), "%d", cnt);
             int bx = fb->width - 32, by = 8;
             fill_circle(fb, bx, by + 10, 10, 0xEF4444);
             int tw = flux_fb_text_width(badge, 2);
@@ -741,7 +744,6 @@ int flux_ui_quickrow_hit(const flux_fb_t *fb, int x, int y) {
 
 /* ---- Wetter-Widget ---------------------------------------------------- */
 
-#define WEATHER_BAR_H  52
 #define WEATHER_CACHE  "/tmp/flux_weather.txt"
 
 /* Pixel-Art-Ikone (28x28) fuer verschiedene Wetterbedingungen */
@@ -853,36 +855,6 @@ static void draw_weather_icon(flux_fb_t *fb, int ox, int oy, weather_cond_t cond
     }
 }
 
-/* Liest den Wetter-Cache und zeichnet die Leiste.
- * Gibt die y-Koordinate unterhalb der Leiste zurueck. */
-static int draw_weather_bar(flux_fb_t *fb, int y) {
-    char line[256];
-    line[0] = '\0';
-
-    FILE *f = fopen(WEATHER_CACHE, "r");
-    if (f) {
-        if (!fgets(line, sizeof(line), f)) line[0] = '\0';
-        /* trailing newline entfernen */
-        size_t l = strlen(line);
-        while (l > 0 && (line[l-1] == '\n' || line[l-1] == '\r')) { line[--l] = '\0'; }
-        fclose(f);
-    }
-
-    if (!line[0]) return y; /* kein Cache -- Leiste weglassen */
-
-    flux_fb_fill_rect(fb, 0, y, fb->width, WEATHER_BAR_H, 0x0D1420);
-    /* Trennlinie oben */
-    flux_fb_fill_rect(fb, 0, y, fb->width, 1, COL_DIVIDER);
-
-    weather_cond_t cond = classify_weather(line);
-    draw_weather_icon(fb, 6, y + (WEATHER_BAR_H - 28) / 2, cond);
-
-    /* Text rechts neben Ikone */
-    flux_fb_text(fb, 42, y + (WEATHER_BAR_H - 16) / 2, line, COL_DIM, 2);
-
-    return y + WEATHER_BAR_H;
-}
-
 /* ---- Assistenten-Bildschirm ------------------------------------------ */
 
 static int draw_wrapped(flux_fb_t *fb, int x, int y, int max_w, const char *s,
@@ -971,6 +943,7 @@ static int measure_wrapped_height(int max_w, const char *s, int scale, int line_
 static int draw_bubble(flux_fb_t *fb, const char *text, int y,
                         int max_w, uint32_t col, int scale, int line_h,
                         int right_align) {
+    (void)col;  /* Blasen-Stil haengt an right_align (Gradient bzw. KI-Streifen) */
     int margin = 14;
     int text_w = max_w - 2 * BUBBLE_PAD_X;
     int text_h = measure_wrapped_height(text_w, text, scale, line_h);
@@ -1251,7 +1224,7 @@ void flux_ui_draw_assistant(flux_fb_t *fb, const char *last_q,
     {
         int bat = read_battery_pct();
         if (bat >= 0) {
-            char pbuf[6]; snprintf(pbuf, sizeof(pbuf), "%d", bat);
+            char pbuf[12]; snprintf(pbuf, sizeof(pbuf), "%d", bat);
             int pw = flux_fb_text_width(pbuf, 2);
             int rx = fb->width - 10 - pw;
             flux_fb_text(fb, rx, (STATUSBAR_H - 14) / 2, pbuf, COL_DIM, 2);
@@ -2078,7 +2051,7 @@ void flux_ui_draw_notify(flux_fb_t *fb) {
         int iy = y + 8;
         if (bat >= 0) {
             draw_battery_icon(fb, 26, iy + 6, bat);
-            char pbuf[20];
+            char pbuf[32];
             snprintf(pbuf, sizeof(pbuf), "Batterie: %d%%", bat);
             flux_fb_text(fb, 58, iy + 4, pbuf, COL_TEXT, 2);
             iy += 32;
@@ -2473,7 +2446,7 @@ void flux_ui_draw_calendar(flux_fb_t *fb, int year, int month,
             fill_round_rect(fb, cx2 + 3, cy + 3, cw - 6, CAL_CELL_H - 6, 8, COL_SURFACE3);
 
         /* Tageszahl -- "Heute" als gefuellter Akzent-Kreis */
-        char daystr[4]; snprintf(daystr, sizeof(daystr), "%d", day);
+        char daystr[12]; snprintf(daystr, sizeof(daystr), "%d", day);
         int dw = flux_fb_text_width(daystr, 2);
         int num_cx = cx2 + cw / 2;
         int num_cy = cy + 15;
@@ -2510,7 +2483,7 @@ void flux_ui_draw_calendar(flux_fb_t *fb, int year, int month,
             pill_y += pill_h + 2;
         }
         if (ecount > 2) {
-            char more[8]; snprintf(more, sizeof(more), "+%d", ecount - 2);
+            char more[16]; snprintf(more, sizeof(more), "+%d", ecount - 2);
             flux_fb_text(fb, pill_x + 2, pill_y + 1, more, COL_TEXT_MUTED, 1);
         }
     }

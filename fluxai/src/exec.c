@@ -54,11 +54,11 @@ static int resolve_contact(const char *name, int want_email,
             namelo[ni++] = (char)tolower((unsigned char)*q);
         namelo[ni] = '\0';
         if (!strstr(namelo, want)) continue;
+        if (!c1) continue; /* Zeile ohne Felder -> nichts zum Aufloesen */
 
         /* passendes Feld suchen: mit '@' (Mail) bzw. mit Ziffer (Telefon) */
-        char *tok = c1 ? c1 + 1 : NULL;
         char *save;
-        for (tok = strtok_r(c1 ? c1 + 1 : NULL, ",", &save);
+        for (char *tok = strtok_r(c1 + 1, ",", &save);
              tok; tok = strtok_r(NULL, ",", &save)) {
             while (*tok == ' ') tok++;
             int has_at = strchr(tok, '@') != NULL;
