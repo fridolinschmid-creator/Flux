@@ -10,21 +10,36 @@
  *   calculate        -- Mathematischen Ausdruck auswerten, ARG: Ausdruck
  *   note_save        -- Notiz speichern, ARG: Text
  *   note_list        -- Gespeicherte Notizen anzeigen, ARG: (leer)
+ *   note_search      -- Notizen durchsuchen, ARG: Suchbegriff
+ *   note_delete      -- Notizen loeschen (alle mit Suchbegriff), ARG: Suchbegriff
  *   sys_info         -- Systeminfo (Speicher, OS), ARG: (leer)
  *   brightness_get   -- Bildschirmhelligkeit lesen, ARG: (leer)
  *   brightness_set   -- Bildschirmhelligkeit setzen, ARG: 0-100 (Prozent)
  *   wifi_info        -- WLAN-Signalstaerke und Interface, ARG: (leer)
+ *   wifi_on          -- WLAN einschalten (rfkill unblock wifi), ARG: (leer)
+ *   wifi_off         -- WLAN ausschalten (rfkill block wifi), ARG: (leer)
+ *   flight_mode_on   -- Flugmodus aktivieren (rfkill block all), ARG: (leer)
+ *   flight_mode_off  -- Flugmodus deaktivieren (rfkill unblock all), ARG: (leer)
+ *   pin_set          -- Geraete-PIN aendern, ARG: neuer PIN (4-8 Ziffern)
  *   vibrate          -- Geraet vibrieren lassen, ARG: Dauer in ms (z.B. 300)
  *   memory_save      -- Personliche Info dauerhaft merken, ARG: Text
  *   memory_list      -- Alle KI-Erinnerungen anzeigen, ARG: (leer)
  *   memory_search    -- KI-Erinnerungen durchsuchen, ARG: Suchbegriff
  *   memory_delete    -- Erinnerungen loeschen, ARG: Suchbegriff
+ *   alarm_list       -- Gesetzte Alarme anzeigen, ARG: (leer)
+ *   alarm_delete     -- Alarm loeschen (alle mit Suchbegriff), ARG: Suchbegriff
+ *   timer_set        -- Countdown-Timer starten, ARG: Dauer (z.B. "5 Minuten")
+ *   timer_list       -- Aktive Timer mit Restzeit anzeigen, ARG: (leer)
+ *   timer_delete     -- Timer loeschen (alle mit Suchbegriff), ARG: Suchbegriff
+ *   reminder_list    -- Gesetzte Erinnerungen anzeigen, ARG: (leer)
+ *   reminder_delete  -- Erinnerung loeschen (alle mit Suchbegriff), ARG: Suchbegriff
  */
 #include "tools.h"
 #include "vision.h"
 #include "imap.h"
 #include "radio.h"
 #include "../../common/flux_config.h"
+#include "../../common/flux_sha256.h"
 
 #include <curl/curl.h>
 #include <stdio.h>
@@ -606,6 +621,87 @@ static int tool_note_list(const char *arg, char *out, size_t cap) {
     return 1;
 }
 
+/* ---- note_search ----------------------------------------------------- */
+
+static int tool_note_search(const char *arg, char *out, size_t cap) {
+    if (!arg || !*arg) {
+        snprintf(out, cap, "Fehler: kein Suchbegriff angegeben");
+        return 1;
+    }
+    const char *paths[] = { NOTES_PATH, "/tmp/flux_notes.txt" };
+    for (int i = 0; i < 2; i++) {
+        FILE *f = fopen(paths[i], "r");
+        if (!f) continue;
+        char line[512];
+        size_t pos = 0;
+        int found = 0;
+        while (fgets(line, sizeof(line), f)) {
+            if (strcasestr(line, arg) == NULL) continue;
+            if (!found) {
+                pos += snprintf(out + pos, cap - pos, "Notizen mit \"%s\":\n", arg);
+                found++;
+            }
+            size_t ll = strlen(line);
+            if (pos + ll + 1 < cap) {
+                memcpy(out + pos, line, ll);
+                pos += ll;
+                out[pos] = '\0';
+            }
+        }
+        fclose(f);
+        if (!found)
+            snprintf(out, cap, "Keine Notiz enthaelt \"%s\".", arg);
+        return 1;
+    }
+    snprintf(out, cap, "Keine Notizen vorhanden.");
+    return 1;
+}
+
+/* ---- note_delete ----------------------------------------------------- */
+
+static int tool_note_delete(const char *arg, char *out, size_t cap) {
+    if (!arg || !*arg) {
+        snprintf(out, cap, "Fehler: kein Suchbegriff angegeben (loescht alle Notizen, die den Begriff enthalten)");
+        return 1;
+    }
+    const char *path = NOTES_PATH;
+    FILE *f = fopen(path, "r");
+    if (!f) f = fopen("/tmp/flux_notes.txt", "r");
+    if (!f) {
+        snprintf(out, cap, "Keine Notizen vorhanden.");
+        return 1;
+    }
+    char tmppath[256];
+    snprintf(tmppath, sizeof(tmppath), "%s.tmp", path);
+    FILE *tmp_f = fopen(tmppath, "w");
+    if (!tmp_f) {
+        fclose(f);
+        snprintf(out, cap, "Fehler: temporaere Datei nicht schreibbar.");
+        return 1;
+    }
+    char line[512];
+    int deleted = 0;
+    while (fgets(line, sizeof(line), f)) {
+        if (strcasestr(line, arg)) {
+            deleted++;
+        } else {
+            fputs(line, tmp_f);
+        }
+    }
+    fclose(f);
+    fclose(tmp_f);
+    if (rename(tmppath, path) != 0) {
+        remove(tmppath);
+        snprintf(out, cap, "Fehler: Datei konnte nicht aktualisiert werden.");
+        return 1;
+    }
+    if (deleted == 0)
+        snprintf(out, cap, "Keine Notiz mit \"%s\" gefunden.", arg);
+    else
+        snprintf(out, cap, "%d Notiz(en) mit \"%s\" geloescht.", deleted, arg);
+    return 1;
+}
+
 /* ---- sys_info -------------------------------------------------------- */
 
 static int tool_sys_info(const char *arg, char *out, size_t cap) {
@@ -657,6 +753,85 @@ static int tool_sys_info(const char *arg, char *out, size_t cap) {
         fclose(f);
     }
 
+    /* CPU-Auslastung: zwei /proc/stat-Schnappschuesse, 200 ms Abstand */
+    {
+        unsigned long long u1=0, n1=0, s1=0, i1=0, w1=0, ir1=0, si1=0;
+        unsigned long long u2=0, n2=0, s2=0, i2=0, w2=0, ir2=0, si2=0;
+        FILE *sf = fopen("/proc/stat", "r");
+        if (sf) {
+            int _r1 = fscanf(sf, "cpu %llu %llu %llu %llu %llu %llu %llu",
+                             &u1, &n1, &s1, &i1, &w1, &ir1, &si1);
+            fclose(sf);
+            (void)_r1;
+            struct timespec ts = {0, 200000000L}; /* 200 ms */
+            nanosleep(&ts, NULL);
+            sf = fopen("/proc/stat", "r");
+            if (sf) {
+                int _r2 = fscanf(sf, "cpu %llu %llu %llu %llu %llu %llu %llu",
+                                 &u2, &n2, &s2, &i2, &w2, &ir2, &si2);
+                fclose(sf);
+                (void)_r2;
+                unsigned long long busy  = (u2+n2+s2+w2+ir2+si2) - (u1+n1+s1+w1+ir1+si1);
+                unsigned long long total = busy + (i2 - i1);
+                if (total > 0)
+                    pos += snprintf(tmp + pos, sizeof(tmp) - pos,
+                                    "CPU-Last: %llu%%\n", busy * 100 / total);
+            }
+        }
+    }
+
+    /* CPU-Temperatur aus /sys/class/thermal/thermal_zone*/
+    {
+        char best_path[128] = {0};
+        DIR *td = opendir("/sys/class/thermal");
+        if (td) {
+            struct dirent *te;
+            while ((te = readdir(td)) != NULL) {
+                if (strncmp(te->d_name, "thermal_zone", 12) != 0) continue;
+                char tpath[128];
+                snprintf(tpath, sizeof(tpath), "/sys/class/thermal/%.80s/temp", te->d_name);
+                if (!best_path[0]) snprintf(best_path, sizeof(best_path), "%s", tpath);
+            }
+            closedir(td);
+        }
+        if (best_path[0]) {
+            FILE *tf = fopen(best_path, "r");
+            if (tf) {
+                long milli = 0;
+                if (fscanf(tf, "%ld", &milli) == 1)
+                    pos += snprintf(tmp + pos, sizeof(tmp) - pos,
+                                    "CPU-Temperatur: %.1f degC\n", milli / 1000.0);
+                fclose(tf);
+            }
+        } else {
+            pos += snprintf(tmp + pos, sizeof(tmp) - pos,
+                            "CPU-Temperatur: nicht lesbar (kein thermal_zone)\n");
+        }
+    }
+
+    /* Netzwerk-IO: erstes Non-Loopback-Interface aus /proc/net/dev */
+    {
+        FILE *nf = fopen("/proc/net/dev", "r");
+        if (nf) {
+            char line[256];
+            int lineno = 0;
+            while (fgets(line, sizeof(line), nf)) {
+                if (++lineno <= 2) continue; /* Header */
+                char iface[64]; unsigned long long rx=0, tx=0;
+                /* Format: "  eth0: <rx_bytes> ... <tx_bytes> ..." */
+                if (sscanf(line, " %63[^:]: %llu %*u %*u %*u %*u %*u %*u %*u %llu",
+                           iface, &rx, &tx) == 3) {
+                    if (strcmp(iface, "lo") == 0) continue;
+                    pos += snprintf(tmp + pos, sizeof(tmp) - pos,
+                                    "Netz (%s): RX %llu KB / TX %llu KB\n",
+                                    iface, rx / 1024, tx / 1024);
+                    break;
+                }
+            }
+            fclose(nf);
+        }
+    }
+
     snprintf(out, cap, "%s", tmp);
     return 1;
 }
@@ -684,6 +859,180 @@ static int tool_alarm_set(const char *arg, char *out, size_t cap) {
     return 1;
 }
 
+/* ---- alarm_list / alarm_delete --------------------------------------- */
+
+static int tool_alarm_list(const char *arg, char *out, size_t cap) {
+    (void)arg;
+    FILE *f = fopen("/tmp/flux_alarms.txt", "r");
+    if (!f) { snprintf(out, cap, "Keine Alarme gesetzt."); return 1; }
+    size_t pos = snprintf(out, cap, "Gesetzte Alarme:\n");
+    char line[256]; int n = 0;
+    while (fgets(line, sizeof(line), f) && pos + 2 < cap) {
+        size_t ll = strlen(line);
+        if (pos + ll + 1 < cap) { memcpy(out + pos, line, ll); pos += ll; out[pos] = '\0'; }
+        n++;
+    }
+    fclose(f);
+    if (!n) snprintf(out, cap, "Keine Alarme gesetzt.");
+    return 1;
+}
+
+static int tool_alarm_delete(const char *arg, char *out, size_t cap) {
+    if (!arg || !*arg) {
+        snprintf(out, cap, "Fehler: kein Suchbegriff angegeben");
+        return 1;
+    }
+    const char *path = "/tmp/flux_alarms.txt";
+    FILE *f = fopen(path, "r");
+    if (!f) { snprintf(out, cap, "Keine Alarme gesetzt."); return 1; }
+    char tmppath[128]; snprintf(tmppath, sizeof(tmppath), "%s.tmp", path);
+    FILE *tf = fopen(tmppath, "w");
+    if (!tf) { fclose(f); snprintf(out, cap, "Fehler: Datei nicht schreibbar."); return 1; }
+    char line[256]; int deleted = 0;
+    while (fgets(line, sizeof(line), f)) {
+        if (strcasestr(line, arg)) deleted++;
+        else fputs(line, tf);
+    }
+    fclose(f); fclose(tf);
+    if (rename(tmppath, path) != 0) { remove(tmppath); snprintf(out, cap, "Fehler beim Speichern."); return 1; }
+    if (!deleted) snprintf(out, cap, "Kein Alarm mit \"%s\" gefunden.", arg);
+    else          snprintf(out, cap, "%d Alarm(e) mit \"%s\" geloescht.", deleted, arg);
+    return 1;
+}
+
+/* ---- timer_set / timer_list / timer_delete --------------------------- */
+
+/* Parst eine Zeitdauer aus einem deutschen/englischen Ausdruck.
+ * Gibt die Dauer in Sekunden zurueck (0 bei Fehler).
+ * Beispiele: "5 Minuten", "30 Sekunden", "1 Stunde 30 Minuten",
+ *            "5m", "30s", "1h30m", "90" (= 90 Sekunden). */
+static int parse_duration_secs(const char *arg) {
+    if (!arg || !*arg) return 0;
+    int total = 0;
+    const char *p = arg;
+    while (*p) {
+        /* Weiter bis zur naechsten Ziffer */
+        while (*p && (*p < '0' || *p > '9')) p++;
+        if (!*p) break;
+        int val = 0;
+        while (*p >= '0' && *p <= '9') { val = val * 10 + (*p - '0'); p++; }
+        while (*p == ' ' || *p == '\t') p++;
+        /* Einheit bestimmen (laengste Variante zuerst) */
+        if      (strncasecmp(p, "stunden", 7) == 0 || strncasecmp(p, "stunde", 6) == 0 ||
+                 strncasecmp(p, "hours",   5) == 0 || strncasecmp(p, "hour",   4) == 0) {
+            total += val * 3600;
+        } else if (strncasecmp(p, "minuten",  7) == 0 || strncasecmp(p, "minute",  6) == 0 ||
+                   strncasecmp(p, "minutes",  7) == 0 || strncasecmp(p, "min",     3) == 0) {
+            total += val * 60;
+        } else if (strncasecmp(p, "sekunden", 8) == 0 || strncasecmp(p, "sekunde", 7) == 0 ||
+                   strncasecmp(p, "seconds",  7) == 0 || strncasecmp(p, "second",  6) == 0 ||
+                   strncasecmp(p, "sek",      3) == 0 || strncasecmp(p, "sec",     3) == 0) {
+            total += val;
+        } else if (*p == 'h' || *p == 'H') {
+            total += val * 3600;
+        } else if (*p == 'm' || *p == 'M') {
+            total += val * 60;
+        } else if (*p == 's' || *p == 'S') {
+            total += val;
+        } else {
+            total += val; /* keine Einheit -> Sekunden */
+        }
+        /* Rest des aktuellen Tokens ueberspringen */
+        while (*p && (*p < '0' || *p > '9')) p++;
+    }
+    return total;
+}
+
+static int tool_timer_set(const char *arg, char *out, size_t cap) {
+    if (!arg || !*arg) {
+        snprintf(out, cap,
+            "Fehler: keine Dauer angegeben. "
+            "Beispiele: '5 Minuten', '30 Sekunden', '1 Stunde 30 Minuten'");
+        return 1;
+    }
+    int secs = parse_duration_secs(arg);
+    if (secs <= 0) {
+        snprintf(out, cap,
+            "Fehler: Dauer nicht erkannt. "
+            "Beispiele: '5 Minuten', '30s', '1h30m'");
+        return 1;
+    }
+    if (secs > 86400 * 7) {
+        snprintf(out, cap, "Fehler: Dauer zu lang (max. 7 Tage).");
+        return 1;
+    }
+    time_t trigger_t = time(NULL) + (time_t)secs;
+    FILE *f = fopen("/tmp/flux_timers.txt", "a");
+    if (!f) { snprintf(out, cap, "Fehler: Timer konnte nicht gesetzt werden."); return 1; }
+    fprintf(f, "%lld %s\n", (long long)trigger_t, arg);
+    fclose(f);
+    struct tm tm; localtime_r(&trigger_t, &tm);
+    char ts[32]; strftime(ts, sizeof(ts), "%H:%M:%S", &tm);
+    if      (secs >= 3600)
+        snprintf(out, cap, "Timer gesetzt (%dh%02dm) -- loest aus um %s.",
+                 secs/3600, (secs%3600)/60, ts);
+    else if (secs >= 60)
+        snprintf(out, cap, "Timer gesetzt (%d Minuten %ds) -- loest aus um %s.",
+                 secs/60, secs%60, ts);
+    else
+        snprintf(out, cap, "Timer gesetzt (%d Sekunden) -- loest aus um %s.", secs, ts);
+    return 1;
+}
+
+static int tool_timer_list(const char *arg, char *out, size_t cap) {
+    (void)arg;
+    FILE *f = fopen("/tmp/flux_timers.txt", "r");
+    if (!f) { snprintf(out, cap, "Keine aktiven Timer."); return 1; }
+    size_t pos = snprintf(out, cap, "Aktive Timer:\n");
+    char line[256]; int n = 0; time_t now = time(NULL);
+    while (fgets(line, sizeof(line), f) && pos + 4 < cap) {
+        size_t l = strlen(line);
+        while (l > 0 && (line[l-1] == '\n' || line[l-1] == '\r')) line[--l] = '\0';
+        if (!line[0]) continue;
+        long long ts = 0; int sc = 0;
+        sscanf(line, "%lld%n", &ts, &sc);
+        long long rem = (long long)ts - (long long)now;
+        const char *desc = (sc > 0 && l > (size_t)sc + 1) ? line + sc + 1 : "Timer";
+        char entry[160];
+        if (rem <= 0)
+            snprintf(entry, sizeof(entry), "  %s (faellig)\n", desc);
+        else if (rem >= 3600)
+            snprintf(entry, sizeof(entry), "  %s (noch %lluh%02llum)\n",
+                     desc, rem/3600, (rem%3600)/60);
+        else if (rem >= 60)
+            snprintf(entry, sizeof(entry), "  %s (noch %llum%02llus)\n",
+                     desc, rem/60, rem%60);
+        else
+            snprintf(entry, sizeof(entry), "  %s (noch %llus)\n", desc, rem);
+        size_t el = strlen(entry);
+        if (pos + el + 1 < cap) { memcpy(out + pos, entry, el); pos += el; out[pos] = '\0'; }
+        n++;
+    }
+    fclose(f);
+    if (!n) snprintf(out, cap, "Keine aktiven Timer.");
+    return 1;
+}
+
+static int tool_timer_delete(const char *arg, char *out, size_t cap) {
+    if (!arg || !*arg) { snprintf(out, cap, "Fehler: kein Suchbegriff angegeben"); return 1; }
+    const char *path = "/tmp/flux_timers.txt";
+    FILE *f = fopen(path, "r");
+    if (!f) { snprintf(out, cap, "Keine aktiven Timer."); return 1; }
+    char tmppath[128]; snprintf(tmppath, sizeof(tmppath), "%s.tmp", path);
+    FILE *tf = fopen(tmppath, "w");
+    if (!tf) { fclose(f); snprintf(out, cap, "Fehler: Datei nicht schreibbar."); return 1; }
+    char line[256]; int deleted = 0;
+    while (fgets(line, sizeof(line), f)) {
+        if (strcasestr(line, arg)) deleted++;
+        else fputs(line, tf);
+    }
+    fclose(f); fclose(tf);
+    if (rename(tmppath, path) != 0) { remove(tmppath); snprintf(out, cap, "Fehler beim Speichern."); return 1; }
+    if (!deleted) snprintf(out, cap, "Kein Timer mit \"%s\" gefunden.", arg);
+    else          snprintf(out, cap, "%d Timer mit \"%s\" geloescht.", deleted, arg);
+    return 1;
+}
+
 /* ---- reminder_set ---------------------------------------------------- */
 
 static int tool_reminder_set(const char *arg, char *out, size_t cap) {
@@ -704,6 +1053,47 @@ static int tool_reminder_set(const char *arg, char *out, size_t cap) {
     fprintf(f, "[%s] %s\n", ts, arg);
     fclose(f);
     snprintf(out, cap, "Erinnerung gesetzt: \"%s\"", arg);
+    return 1;
+}
+
+/* ---- reminder_list / reminder_delete --------------------------------- */
+
+static int tool_reminder_list(const char *arg, char *out, size_t cap) {
+    (void)arg;
+    FILE *f = fopen("/tmp/flux_reminders.txt", "r");
+    if (!f) { snprintf(out, cap, "Keine Erinnerungen gesetzt."); return 1; }
+    size_t pos = snprintf(out, cap, "Gesetzte Erinnerungen:\n");
+    char line[256]; int n = 0;
+    while (fgets(line, sizeof(line), f) && pos + 2 < cap) {
+        size_t ll = strlen(line);
+        if (pos + ll + 1 < cap) { memcpy(out + pos, line, ll); pos += ll; out[pos] = '\0'; }
+        n++;
+    }
+    fclose(f);
+    if (!n) snprintf(out, cap, "Keine Erinnerungen gesetzt.");
+    return 1;
+}
+
+static int tool_reminder_delete(const char *arg, char *out, size_t cap) {
+    if (!arg || !*arg) {
+        snprintf(out, cap, "Fehler: kein Suchbegriff angegeben");
+        return 1;
+    }
+    const char *path = "/tmp/flux_reminders.txt";
+    FILE *f = fopen(path, "r");
+    if (!f) { snprintf(out, cap, "Keine Erinnerungen gesetzt."); return 1; }
+    char tmppath[128]; snprintf(tmppath, sizeof(tmppath), "%s.tmp", path);
+    FILE *tf = fopen(tmppath, "w");
+    if (!tf) { fclose(f); snprintf(out, cap, "Fehler: Datei nicht schreibbar."); return 1; }
+    char line[256]; int deleted = 0;
+    while (fgets(line, sizeof(line), f)) {
+        if (strcasestr(line, arg)) deleted++;
+        else fputs(line, tf);
+    }
+    fclose(f); fclose(tf);
+    if (rename(tmppath, path) != 0) { remove(tmppath); snprintf(out, cap, "Fehler beim Speichern."); return 1; }
+    if (!deleted) snprintf(out, cap, "Keine Erinnerung mit \"%s\" gefunden.", arg);
+    else          snprintf(out, cap, "%d Erinnerung(en) mit \"%s\" geloescht.", deleted, arg);
     return 1;
 }
 
@@ -899,6 +1289,136 @@ static int tool_wifi_info(const char *arg, char *out, size_t cap) {
         tmp[pos > 0 ? pos - 1 : 0] = '\0'; /* letztes \n entfernen */
         snprintf(out, cap, "%s", tmp);
     }
+    return 1;
+}
+
+/* ---- wifi_on / wifi_off ---------------------------------------------- */
+
+static const char *find_rfkill(void) {
+    static const char *paths[] = {
+        "/usr/sbin/rfkill", "/sbin/rfkill",
+        "/usr/bin/rfkill",  "/usr/local/sbin/rfkill",
+        NULL
+    };
+    for (int i = 0; paths[i]; i++)
+        if (access(paths[i], X_OK) == 0) return paths[i];
+    return NULL;
+}
+
+static int tool_wifi_on(const char *arg, char *out, size_t cap) {
+    (void)arg;
+    const char *rfkill = find_rfkill();
+    if (!rfkill) {
+        snprintf(out, cap,
+            "WLAN-Steuerung nicht verfuegbar: 'rfkill' nicht gefunden "
+            "(auf QEMU ohne WLAN-Hardware kein rfkill vorhanden).");
+        return 1;
+    }
+    char cmd[256];
+    snprintf(cmd, sizeof(cmd), "%s unblock wifi 2>/dev/null", rfkill);
+    int rc = system(cmd);
+    if (rc == 0)
+        snprintf(out, cap, "WLAN eingeschaltet.");
+    else
+        snprintf(out, cap,
+            "Fehler beim Einschalten des WLANs (rfkill Rueckgabewert %d). "
+            "Kein WLAN-Hardware vorhanden?", rc);
+    return 1;
+}
+
+static int tool_wifi_off(const char *arg, char *out, size_t cap) {
+    (void)arg;
+    const char *rfkill = find_rfkill();
+    if (!rfkill) {
+        snprintf(out, cap,
+            "WLAN-Steuerung nicht verfuegbar: 'rfkill' nicht gefunden "
+            "(auf QEMU ohne WLAN-Hardware kein rfkill vorhanden).");
+        return 1;
+    }
+    char cmd[256];
+    snprintf(cmd, sizeof(cmd), "%s block wifi 2>/dev/null", rfkill);
+    int rc = system(cmd);
+    if (rc == 0)
+        snprintf(out, cap, "WLAN ausgeschaltet.");
+    else
+        snprintf(out, cap,
+            "Fehler beim Ausschalten des WLANs (rfkill Rueckgabewert %d). "
+            "Kein WLAN-Hardware vorhanden?", rc);
+    return 1;
+}
+
+/* ---- flight_mode_on / flight_mode_off -------------------------------- */
+
+static int tool_flight_mode_on(const char *arg, char *out, size_t cap) {
+    (void)arg;
+    const char *rfkill = find_rfkill();
+    if (!rfkill) {
+        snprintf(out, cap,
+            "Flugmodus nicht verfuegbar: 'rfkill' nicht gefunden "
+            "(auf QEMU ohne Funk-Hardware kein rfkill vorhanden).");
+        return 1;
+    }
+    char cmd[256];
+    snprintf(cmd, sizeof(cmd), "%s block all 2>/dev/null", rfkill);
+    int rc = system(cmd);
+    if (rc == 0)
+        snprintf(out, cap,
+            "Flugmodus aktiviert (alle Funkschnittstellen gesperrt: WLAN, Bluetooth, Mobilfunk).");
+    else
+        snprintf(out, cap,
+            "Fehler beim Aktivieren des Flugmodus (rfkill Rueckgabewert %d).", rc);
+    return 1;
+}
+
+static int tool_flight_mode_off(const char *arg, char *out, size_t cap) {
+    (void)arg;
+    const char *rfkill = find_rfkill();
+    if (!rfkill) {
+        snprintf(out, cap,
+            "Flugmodus nicht verfuegbar: 'rfkill' nicht gefunden "
+            "(auf QEMU ohne Funk-Hardware kein rfkill vorhanden).");
+        return 1;
+    }
+    char cmd[256];
+    snprintf(cmd, sizeof(cmd), "%s unblock all 2>/dev/null", rfkill);
+    int rc = system(cmd);
+    if (rc == 0)
+        snprintf(out, cap,
+            "Flugmodus deaktiviert (alle Funkschnittstellen freigegeben).");
+    else
+        snprintf(out, cap,
+            "Fehler beim Deaktivieren des Flugmodus (rfkill Rueckgabewert %d).", rc);
+    return 1;
+}
+
+/* ---- pin_set --------------------------------------------------------- */
+
+static int tool_pin_set(const char *arg, char *out, size_t cap) {
+    if (!arg || !*arg) {
+        snprintf(out, cap, "Fehler: Kein PIN angegeben. Bitte 4-8 Ziffern angeben.");
+        return 1;
+    }
+    /* Nur Ziffern, Laenge 4-8 */
+    size_t len = strlen(arg);
+    if (len < 4 || len > 8) {
+        snprintf(out, cap,
+            "Fehler: PIN muss 4 bis 8 Ziffern lang sein (angegeben: %zu Zeichen).", len);
+        return 1;
+    }
+    for (size_t i = 0; i < len; i++) {
+        if (arg[i] < '0' || arg[i] > '9') {
+            snprintf(out, cap, "Fehler: PIN darf nur Ziffern enthalten.");
+            return 1;
+        }
+    }
+    char hash[65];
+    flux_sha256_hex(arg, hash);
+    if (flux_config_set("pin_hash", hash) != 0) {
+        snprintf(out, cap,
+            "Fehler: PIN konnte nicht gespeichert werden (/etc/flux/flux.conf nicht schreibbar).");
+        return 1;
+    }
+    snprintf(out, cap, "PIN wurde geaendert. Der neue PIN ist sofort aktiv.");
     return 1;
 }
 
@@ -1199,6 +1719,51 @@ static int tool_calendar_list(const char *arg, char *out, size_t cap) {
     fclose(f);
     if (!n) { snprintf(out, cap, "Keine bevorstehenden Termine."); }
     else    { snprintf(out, cap, "%s", tmp); }
+    return 1;
+}
+
+/* ---- calendar_delete ------------------------------------------------- */
+static int tool_calendar_delete(const char *arg, char *out, size_t cap) {
+    if (!arg || !*arg) {
+        snprintf(out, cap,
+            "Fehler: kein Suchbegriff angegeben (loescht alle Termine, die den Begriff enthalten)");
+        return 1;
+    }
+    const char *path = "/etc/flux/calendar.txt";
+    FILE *f = fopen(path, "r");
+    if (!f) {
+        snprintf(out, cap, "Keine Termine gespeichert.");
+        return 1;
+    }
+    char tmppath[256];
+    snprintf(tmppath, sizeof(tmppath), "%s.tmp", path);
+    FILE *tmp_f = fopen(tmppath, "w");
+    if (!tmp_f) {
+        fclose(f);
+        snprintf(out, cap, "Fehler: temporaere Datei nicht schreibbar.");
+        return 1;
+    }
+    char line[512];
+    int deleted = 0;
+    while (fgets(line, sizeof(line), f)) {
+        if (line[0] == '#') { fputs(line, tmp_f); continue; } /* Kommentare behalten */
+        if (strcasestr(line, arg)) {
+            deleted++;
+        } else {
+            fputs(line, tmp_f);
+        }
+    }
+    fclose(f);
+    fclose(tmp_f);
+    if (rename(tmppath, path) != 0) {
+        remove(tmppath);
+        snprintf(out, cap, "Fehler: Kalender-Datei konnte nicht aktualisiert werden.");
+        return 1;
+    }
+    if (deleted == 0)
+        snprintf(out, cap, "Kein Termin mit \"%s\" gefunden.", arg);
+    else
+        snprintf(out, cap, "%d Termin(e) mit \"%s\" geloescht.", deleted, arg);
     return 1;
 }
 
@@ -1691,19 +2256,34 @@ int flux_tool_exec(const char *name, const char *arg,
     if (strcmp(name, "calculate")        == 0) return tool_calculate(arg, out, out_cap);
     if (strcmp(name, "note_save")        == 0) return tool_note_save(arg, out, out_cap);
     if (strcmp(name, "note_list")        == 0) return tool_note_list(arg, out, out_cap);
+    if (strcmp(name, "note_search")      == 0) return tool_note_search(arg, out, out_cap);
+    if (strcmp(name, "note_delete")      == 0) return tool_note_delete(arg, out, out_cap);
     if (strcmp(name, "sys_info")         == 0) return tool_sys_info(arg, out, out_cap);
     if (strcmp(name, "alarm_set")        == 0) return tool_alarm_set(arg, out, out_cap);
+    if (strcmp(name, "alarm_list")       == 0) return tool_alarm_list(arg, out, out_cap);
+    if (strcmp(name, "alarm_delete")     == 0) return tool_alarm_delete(arg, out, out_cap);
+    if (strcmp(name, "timer_set")        == 0) return tool_timer_set(arg, out, out_cap);
+    if (strcmp(name, "timer_list")       == 0) return tool_timer_list(arg, out, out_cap);
+    if (strcmp(name, "timer_delete")     == 0) return tool_timer_delete(arg, out, out_cap);
     if (strcmp(name, "reminder_set")     == 0) return tool_reminder_set(arg, out, out_cap);
+    if (strcmp(name, "reminder_list")    == 0) return tool_reminder_list(arg, out, out_cap);
+    if (strcmp(name, "reminder_delete")  == 0) return tool_reminder_delete(arg, out, out_cap);
     if (strcmp(name, "contacts_search")  == 0) return tool_contacts_search(arg, out, out_cap);
     if (strcmp(name, "brightness_get")   == 0) return tool_brightness_get(arg, out, out_cap);
     if (strcmp(name, "brightness_set")   == 0) return tool_brightness_set(arg, out, out_cap);
     if (strcmp(name, "wifi_info")        == 0) return tool_wifi_info(arg, out, out_cap);
+    if (strcmp(name, "wifi_on")          == 0) return tool_wifi_on(arg, out, out_cap);
+    if (strcmp(name, "wifi_off")         == 0) return tool_wifi_off(arg, out, out_cap);
+    if (strcmp(name, "flight_mode_on")   == 0) return tool_flight_mode_on(arg, out, out_cap);
+    if (strcmp(name, "flight_mode_off")  == 0) return tool_flight_mode_off(arg, out, out_cap);
+    if (strcmp(name, "pin_set")          == 0) return tool_pin_set(arg, out, out_cap);
     if (strcmp(name, "vibrate")          == 0) return tool_vibrate(arg, out, out_cap);
     if (strcmp(name, "flight_mode")      == 0) return tool_flight_mode(arg, out, out_cap);
     if (strcmp(name, "contact_save")   == 0) return tool_contact_save(arg, out, out_cap);
     if (strcmp(name, "contacts_list")  == 0) return tool_contacts_list(arg, out, out_cap);
-    if (strcmp(name, "calendar_add")   == 0) return tool_calendar_add(arg, out, out_cap);
-    if (strcmp(name, "calendar_list")  == 0) return tool_calendar_list(arg, out, out_cap);
+    if (strcmp(name, "calendar_add")    == 0) return tool_calendar_add(arg, out, out_cap);
+    if (strcmp(name, "calendar_list")   == 0) return tool_calendar_list(arg, out, out_cap);
+    if (strcmp(name, "calendar_delete") == 0) return tool_calendar_delete(arg, out, out_cap);
     if (strcmp(name, "search_files")   == 0) return tool_search_files(arg, out, out_cap);
     if (strcmp(name, "prefs_set")      == 0) return tool_prefs_set(arg, out, out_cap);
     if (strcmp(name, "image_list")    == 0) return tool_image_list(arg, out, out_cap);
@@ -1740,14 +2320,30 @@ const char *flux_tools_description(void) {
         "  calculate        -- Rechenausdruck. ARG: z.B. '15 * 8 + 3.5'\n"
         "  note_save        -- Notiz speichern. ARG: Notiztext\n"
         "  note_list        -- Alle Notizen anzeigen. ARG: (leer)\n"
+        "  note_search      -- Notizen nach Stichwort durchsuchen. ARG: Suchbegriff\n"
+        "  note_delete      -- Notizen loeschen (alle die Suchbegriff enthalten). ARG: Suchbegriff\n"
         "  sys_info         -- Systeminfos. ARG: (leer)\n"
         "  alarm_set        -- Wecker/Alarm zu einer UHRZEIT. ARG: HH:MM Beschreibung "
         "(z.B. '07:00 Aufstehen'). Nutze dies bei 'Wecker', 'weck mich', 'Alarm um ...'.\n"
+        "  alarm_list       -- Alle gesetzten Alarme anzeigen. ARG: (leer)\n"
+        "  alarm_delete     -- Alarm loeschen (alle Zeilen die Suchbegriff enthalten). ARG: Suchbegriff\n"
+        "  timer_set        -- Countdown-Timer starten. ARG: Dauer (z.B. '5 Minuten', '30s', '1h30m'). "
+        "Nutze dies bei 'Timer', 'stell einen Timer', 'in X Minuten'.\n"
+        "  timer_list       -- Aktive Timer mit Restzeit anzeigen. ARG: (leer)\n"
+        "  timer_delete     -- Timer loeschen (alle Zeilen die Suchbegriff enthalten). ARG: Suchbegriff\n"
         "  reminder_set     -- Erinnerung OHNE feste Uhrzeit. ARG: Erinnerungstext\n"
+        "  reminder_list    -- Alle gesetzten Erinnerungen anzeigen. ARG: (leer)\n"
+        "  reminder_delete  -- Erinnerung loeschen (alle Zeilen die Suchbegriff enthalten). ARG: Suchbegriff\n"
         "  contacts_search  -- Kontakt suchen. ARG: Name oder Nummer\n"
         "  brightness_get   -- Bildschirmhelligkeit lesen. ARG: (leer)\n"
         "  brightness_set   -- Bildschirmhelligkeit setzen. ARG: 0-100 (Prozent)\n"
         "  wifi_info        -- WLAN-Signalstaerke und Interface. ARG: (leer)\n"
+        "  wifi_on          -- WLAN einschalten. ARG: (leer)\n"
+        "  wifi_off         -- WLAN ausschalten. ARG: (leer)\n"
+        "  flight_mode_on   -- Flugmodus aktivieren (alle Funkschnittstellen sperren). ARG: (leer)\n"
+        "  flight_mode_off  -- Flugmodus deaktivieren (alle Funkschnittstellen freigeben). ARG: (leer)\n"
+        "  pin_set          -- Geraete-PIN aendern. ARG: neuer PIN (nur 4-8 Ziffern, sofort aktiv). "
+        "Nur aufrufen wenn der Nutzer explizit die PIN aendern moechte.\n"
         "  vibrate          -- Geraet vibrieren lassen. ARG: Dauer in ms (z.B. 300)\n"
         "  flight_mode      -- Flugmodus-STATUS abfragen (read-only, ob Funk an/aus). ARG: (leer). "
         "Zum SCHALTEN nicht dieses Tool nutzen, sondern den ACTION:flight-Block (Bestaetigungs-Dialog).\n"
@@ -1755,6 +2351,7 @@ const char *flux_tools_description(void) {
         "  contacts_list   -- Alle Kontakte anzeigen. ARG: (leer)\n"
         "  calendar_add    -- Termin eintragen. ARG: YYYY-MM-DD HH:MM Beschreibung\n"
         "  calendar_list   -- Bevorstehende Termine. ARG: (leer)\n"
+        "  calendar_delete -- Termin loeschen (alle die Suchbegriff enthalten). ARG: Suchbegriff\n"
         "  search_files    -- Dateien suchen. ARG: Suchbegriff (in /home/user/)\n"
         "  prefs_set       -- Nutzerpraeferenz merken (fuer spaetere Kontextnutzung). ARG: Praeferenztext\n"
         "  image_list      -- Fotos in /home/user/Pictures/ auflisten. ARG: (leer)\n"

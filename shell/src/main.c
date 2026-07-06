@@ -497,9 +497,9 @@ static char email_pending[256] = {0};
  * Key/Modell-Eintrag passt immer zum gewaehlten Anbieter. */
 static const char *setting_keys[FLUX_SETTINGS_N] = {
     "pin_hash",
-    "ai_provider",      /* anthropic|deepseek|nvidia -- per Tap durchschalten */
-    "__active_key",     /* -> api_key | deepseek_key | nvidia_key */
-    "__active_model",   /* -> anthropic_model | deepseek_model | nvidia_model */
+    "ai_provider",      /* anthropic|deepseek|nvidia|llama -- per Tap durchschalten */
+    "__active_key",     /* -> api_key | deepseek_key | nvidia_key | llama_key */
+    "__active_model",   /* -> anthropic_model | deepseek_model | nvidia_model | llama_model */
     "__email",          /* E-Mail-Adresse + App-Passwort (leitet SMTP/IMAP ab) */
     "__wifi",           /* oeffnet den WLAN-Screen (Scan + Verbinden) */
     "searxng_url",      /* Web-Suche ueber eigene SearXNG-Instanz (z.B. MacBook) */
@@ -512,7 +512,7 @@ static const char *setting_keys[FLUX_SETTINGS_N] = {
 };
 static const char *setting_labels[FLUX_SETTINGS_N] = {
     "PIN-Code",
-    "KI-Anbieter",          /* tippen schaltet anthropic/deepseek/nvidia */
+    "KI-Anbieter",          /* tippen schaltet anthropic/deepseek/nvidia/llama */
     "API-Key (Anbieter)",
     "Modell (Anbieter)",
     "E-Mail Einstellungen", /* Adresse + App-Passwort, Rest automatisch */
@@ -569,11 +569,13 @@ static const char *resolve_setting_key(const char *key) {
     if (!strcmp(key, "__active_key")) {
         if (!strcmp(prov, "deepseek")) return "deepseek_key";
         if (!strcmp(prov, "nvidia"))   return "nvidia_key";
+        if (!strcmp(prov, "llama"))    return "llama_key";
         return "api_key";
     }
     if (!strcmp(key, "__active_model")) {
         if (!strcmp(prov, "deepseek")) return "deepseek_model";
         if (!strcmp(prov, "nvidia"))   return "nvidia_model";
+        if (!strcmp(prov, "llama"))    return "llama_model";
         return "anthropic_model";
     }
     /* E-Mail-Eintrag zeigt die konfigurierte Absenderadresse an */
@@ -643,6 +645,7 @@ static const char *active_default_model(void) {
     char prov[64]; get_active_provider(prov, sizeof(prov));
     if (!strcmp(prov, "deepseek")) return "deepseek-chat";
     if (!strcmp(prov, "nvidia"))   return "meta/llama-3.1-8b-instruct";
+    if (!strcmp(prov, "llama"))    return "local";
     return "claude-haiku-4-5-20251001";
 }
 
@@ -661,6 +664,7 @@ static void load_settings_values(void) {
             const char *p = raw[0] ? raw : "anthropic";
             const char *nice = !strcmp(p, "deepseek") ? "DeepSeek"
                              : !strcmp(p, "nvidia")   ? "NVIDIA NIM"
+                             : !strcmp(p, "llama")    ? "llama.cpp (lokal)"
                                                       : "Anthropic Claude";
             snprintf(setting_values_buf[i], sizeof(setting_values_buf[0]), "%s", nice);
         } else if (strcmp(setting_keys[i], "__active_model") == 0) {
@@ -725,6 +729,77 @@ static const char *file_metas[FLUX_FILES_MAX];
 static int  file_n = 0;
 static int  file_truncated = 0;
 static int  file_selected = -1;   /* markierter Eintrag im Dateibrowser */
+
+/* Wecker/Timer-App */
+static alarm_app_entry_t alarm_app_entries[ALARM_APP_ENTRY_MAX * 2];
+static int alarm_app_n_alarms = 0;
+static int alarm_app_n_timers = 0;
+
+static void load_alarm_app(void) {
+    alarm_app_n_alarms = 0;
+    alarm_app_n_timers = 0;
+
+    FILE *f = fopen("/tmp/flux_alarms.txt", "r");
+    if (f) {
+        char line[256];
+        while (fgets(line, sizeof(line), f) && alarm_app_n_alarms < ALARM_APP_ENTRY_MAX) {
+            size_t l = strlen(line);
+            while (l > 0 && (line[l-1]=='\n'||line[l-1]=='\r')) line[--l] = '\0';
+            if (!line[0]) continue;
+            int yr=0,mo=0,dy=0,hh=0,mm=0;
+            if (sscanf(line, "%d-%d-%d %d:%d", &yr,&mo,&dy,&hh,&mm) == 5) {
+                alarm_app_entry_t *e = &alarm_app_entries[alarm_app_n_alarms++];
+                e->is_timer  = 0;
+                e->timer_ts  = 0;
+                snprintf(e->sub,   sizeof(e->sub),   "%02d:%02d", hh, mm);
+                snprintf(e->label, sizeof(e->label),  "%s", l > 17 ? line + 17 : "");
+                snprintf(e->key,   sizeof(e->key),    "%04d-%02d-%02d %02d:%02d",
+                         yr, mo, dy, hh, mm);
+            }
+        }
+        fclose(f);
+    }
+
+    FILE *tf = fopen("/tmp/flux_timers.txt", "r");
+    if (tf) {
+        char line[256]; time_t now = time(NULL);
+        while (fgets(line, sizeof(line), tf) && alarm_app_n_timers < ALARM_APP_ENTRY_MAX) {
+            size_t l = strlen(line);
+            while (l > 0 && (line[l-1]=='\n'||line[l-1]=='\r')) line[--l] = '\0';
+            if (!line[0]) continue;
+            long long ts = 0; int sc = 0;
+            if (sscanf(line, "%lld%n", &ts, &sc) == 1 && sc > 0) {
+                alarm_app_entry_t *e = &alarm_app_entries[ALARM_APP_ENTRY_MAX + alarm_app_n_timers++];
+                e->is_timer  = 1;
+                e->timer_ts  = ts;
+                long long rem = ts - (long long)now;
+                if      (rem <= 0)     snprintf(e->sub, sizeof(e->sub), "faellig");
+                else if (rem >= 3600)  snprintf(e->sub, sizeof(e->sub), "%lluh%02llum", rem/3600, (rem%3600)/60);
+                else if (rem >= 60)    snprintf(e->sub, sizeof(e->sub), "%llum%02llus", rem/60, rem%60);
+                else                   snprintf(e->sub, sizeof(e->sub), "%llus", rem);
+                snprintf(e->label, sizeof(e->label), "%s",
+                         (sc > 0 && l > (size_t)sc + 1) ? line + sc + 1 : "Timer");
+                snprintf(e->key,   sizeof(e->key),   "%lld", ts);
+            }
+        }
+        fclose(tf);
+    }
+}
+
+/* Loescht einen Eintrag aus seiner Quelldatei anhand des key-Felds. */
+static void delete_alarm_app_entry(const alarm_app_entry_t *e) {
+    const char *path = e->is_timer ? "/tmp/flux_timers.txt" : "/tmp/flux_alarms.txt";
+    char tmppath[128]; snprintf(tmppath, sizeof(tmppath), "%s.tmp", path);
+    FILE *f = fopen(path, "r"), *tf = fopen(tmppath, "w");
+    if (!f || !tf) { if (f) fclose(f); if (tf) fclose(tf); return; }
+    char line[256]; int deleted = 0;
+    while (fgets(line, sizeof(line), f)) {
+        if (!deleted && strstr(line, e->key)) { deleted++; continue; }
+        fputs(line, tf);
+    }
+    fclose(f); fclose(tf);
+    rename(tmppath, path);
+}
 
 /* Kalender */
 static int cal_year  = 2026;
@@ -1757,6 +1832,24 @@ int main(void) {
             }
             /* Zombie-Kinder (TTS-Prozesse) aufraumen */
             while (waitpid(-1, NULL, WNOHANG) > 0) {}
+            /* Alarm/Timer-Trigger pruefen (jede Sekunde) */
+            if (screen != FLUX_SCREEN_ALARM) {
+                FILE *atf = fopen("/tmp/flux_alarm_trigger.txt", "r");
+                if (atf) {
+                    char alarm_msg[256] = {0};
+                    size_t an = fread(alarm_msg, 1, sizeof(alarm_msg)-1, atf);
+                    fclose(atf);
+                    alarm_msg[an] = '\0';
+                    /* Zeilenumbruch am Ende entfernen */
+                    while (an > 0 && (alarm_msg[an-1] == '\n' || alarm_msg[an-1] == '\r' ||
+                                      alarm_msg[an-1] == ' ')) alarm_msg[--an] = '\0';
+                    if (alarm_msg[0]) {
+                        pre_notify_screen = screen;
+                        screen = FLUX_SCREEN_ALARM;
+                        flux_ui_draw_alarm_alert(&fb, alarm_msg);
+                    }
+                }
+            }
             continue;
         }
         /* Jedes verarbeitete Event setzt den Inaktivitaets-Timer zurueck */
@@ -2209,8 +2302,9 @@ int main(void) {
                 char cur[64] = {0};
                 flux_config_get("ai_provider", cur, sizeof(cur));
                 const char *next = "deepseek";
-                if (!strcmp(cur, "deepseek")) next = "nvidia";
-                else if (!strcmp(cur, "nvidia")) next = "anthropic";
+                if (!strcmp(cur, "deepseek"))  next = "nvidia";
+                else if (!strcmp(cur, "nvidia"))   next = "llama";
+                else if (!strcmp(cur, "llama"))    next = "anthropic";
                 else next = "deepseek"; /* von anthropic/leer aus */
                 flux_config_set("ai_provider", next);
                 load_settings_values();
@@ -2327,6 +2421,71 @@ int main(void) {
                     flux_ui_draw_wifi(&fb, wifi_current, wifi_names_p, wifi_metas_p,
                                       wifi_n, 0, !flux_wifi_available());
                 }
+            }
+            continue;
+        }
+
+        if (screen == FLUX_SCREEN_ALARM_APP) {
+            /* Wisch links = zurueck zum Assistenten */
+            if (ev.type == FLUX_EV_SWIPE_LEFT) {
+                uint32_t *old = capture_frame(&fb);
+                screen = FLUX_SCREEN_ASSISTANT;
+                flux_ui_draw_assistant(&fb, last_q, input_buf, answer_buf, 0);
+                animate_slide_from_left(&fb, old); free(old);
+                continue;
+            }
+            if (ev.type != FLUX_EV_TAP) continue;
+
+            /* Loesch-Button */
+            int na = alarm_app_n_alarms, nt = alarm_app_n_timers;
+            alarm_app_entry_t unified[ALARM_APP_ENTRY_MAX * 2];
+            for (int i = 0; i < na; i++) unified[i] = alarm_app_entries[i];
+            for (int i = 0; i < nt; i++) unified[na + i] = alarm_app_entries[ALARM_APP_ENTRY_MAX + i];
+
+            int del = flux_ui_alarm_app_delete_hit(&fb, na, nt, ev.x, ev.y);
+            if (del >= 0 && del < na + nt) {
+                delete_alarm_app_entry(&unified[del]);
+                load_alarm_app();
+                na = alarm_app_n_alarms; nt = alarm_app_n_timers;
+                for (int i = 0; i < na; i++) unified[i] = alarm_app_entries[i];
+                for (int i = 0; i < nt; i++) unified[na + i] = alarm_app_entries[ALARM_APP_ENTRY_MAX + i];
+                flux_ui_draw_alarm_app(&fb, unified, na, nt);
+                continue;
+            }
+
+            /* Schnell-Timer-Preset */
+            int secs = flux_ui_alarm_app_preset_hit(&fb, na, ev.x, ev.y);
+            if (secs > 0) {
+                time_t trigger_t = time(NULL) + (time_t)secs;
+                static const char *pnames[] = {"5 Minuten", "10 Minuten", "30 Minuten", "1 Stunde"};
+                static const int psecs[]    = {300, 600, 1800, 3600};
+                const char *pname = pnames[3];
+                for (int i = 0; i < 4; i++) { if (psecs[i] == secs) { pname = pnames[i]; break; } }
+                FILE *tf = fopen("/tmp/flux_timers.txt", "a");
+                if (tf) { fprintf(tf, "%lld %s\n", (long long)trigger_t, pname); fclose(tf); }
+                load_alarm_app();
+                na = alarm_app_n_alarms; nt = alarm_app_n_timers;
+                for (int i = 0; i < na; i++) unified[i] = alarm_app_entries[i];
+                for (int i = 0; i < nt; i++) unified[na + i] = alarm_app_entries[ALARM_APP_ENTRY_MAX + i];
+                flux_ui_draw_alarm_app(&fb, unified, na, nt);
+                continue;
+            }
+            continue;
+        }
+
+        if (screen == FLUX_SCREEN_ALARM) {
+            /* Jeder Tap bestaetigt den Alarm und loescht die Trigger-Datei */
+            if (ev.type == FLUX_EV_TAP || ev.type == FLUX_EV_SWIPE_UP ||
+                ev.type == FLUX_EV_SWIPE_DOWN) {
+                unlink("/tmp/flux_alarm_trigger.txt");
+                screen = pre_notify_screen;
+                /* Ziel-Screen neu zeichnen */
+                if (screen == FLUX_SCREEN_ASSISTANT)
+                    flux_ui_draw_assistant(&fb, last_q, input_buf, answer_buf, 0);
+                else if (screen == FLUX_SCREEN_LOCK)
+                    flux_ui_draw_lock(&fb);
+                else
+                    flux_ui_draw_assistant(&fb, last_q, input_buf, answer_buf, 0);
             }
             continue;
         }
@@ -3428,6 +3587,21 @@ int main(void) {
                 flux_ui_draw_notify(&fb);
                 animate_slide_in(&fb, old);
                 free(old);
+                continue;
+            }
+            if (strcasecmp(input_buf, "wecker")  == 0 || strcasecmp(input_buf, "timer")   == 0 ||
+                strcasecmp(input_buf, "alarme")  == 0 || strcasecmp(input_buf, "alarms")  == 0) {
+                input_buf[0] = '\0';
+                load_alarm_app();
+                /* Timer-Eintraege liegen ab Index ALARM_APP_ENTRY_MAX */
+                alarm_app_entry_t unified[ALARM_APP_ENTRY_MAX * 2];
+                int na = alarm_app_n_alarms, nt = alarm_app_n_timers;
+                for (int i = 0; i < na; i++) unified[i] = alarm_app_entries[i];
+                for (int i = 0; i < nt; i++) unified[na + i] = alarm_app_entries[ALARM_APP_ENTRY_MAX + i];
+                uint32_t *old = capture_frame(&fb);
+                screen = FLUX_SCREEN_ALARM_APP;
+                flux_ui_draw_alarm_app(&fb, unified, na, nt);
+                animate_slide_in(&fb, old); free(old);
                 continue;
             }
             if (strcasecmp(input_buf, "kalender") == 0 || strcasecmp(input_buf, "calendar") == 0) {
