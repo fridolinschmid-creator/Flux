@@ -153,11 +153,28 @@ static int tool_weather(const char *arg, char *out, size_t cap) {
 static int path_read_allowed(const char *path) {
     /* Pfad-Traversal mit ".." grundsaetzlich ablehnen */
     if (strstr(path, "..")) return 0;
+
+    /* Kanonischen Pfad aufloesen und ERST DANN gegen die erlaubten
+     * Praefixe pruefen. Ohne das laesst sich der Schutz von flux.conf
+     * (API-Keys, SMTP-Passwort) ueber die /proc-Magic-Symlinks umgehen,
+     * z.B. "/proc/self/root/etc/flux/flux.conf". realpath() folgt allen
+     * Symlinks; die Datei muss existieren (file_read oeffnet sie ohnehin). */
+    char resolved[PATH_MAX];
+    if (!realpath(path, resolved)) return 0;
+
+    /* Prozess-Umgebungen nie herausgeben -- /proc/<pid>/environ enthaelt
+     * u.a. den per Umgebungsvariable gesetzten API-Key. Nur unter /proc
+     * sperren, damit eine echte Nutzerdatei namens "environ" lesbar bleibt. */
+    if (strncmp(resolved, "/proc/", 6) == 0) {
+        const char *base = strrchr(resolved, '/');
+        if (base && strcmp(base, "/environ") == 0) return 0;
+    }
+
     static const char *ok_prefixes[] = {
         "/home/user/", "/tmp/", "/proc/", "/sys/", NULL
     };
     for (int i = 0; ok_prefixes[i]; i++)
-        if (strncmp(path, ok_prefixes[i], strlen(ok_prefixes[i])) == 0) return 1;
+        if (strncmp(resolved, ok_prefixes[i], strlen(ok_prefixes[i])) == 0) return 1;
     return 0;
 }
 
@@ -1094,7 +1111,10 @@ static void search_files_walk(const char *base, const char *pattern,
         snprintf(full, sizeof(full), "%s/%s", base, e->d_name);
         struct stat st;
         if (stat(full, &st) != 0) continue;
-        /* Case-insensitive name match */
+        /* Case-insensitive name match. Terminatoren an den TATSAECHLICH
+         * kopierten Zaehlern setzen -- strlen() koennte groesser als die
+         * Puffergroesse sein (Muster bis 1024 Zeichen) und schriebe sonst
+         * ausserhalb von lower_pat/lower_name. */
         char lower_name[256], lower_pat[128];
         int ni = 0, pi = 0;
         for (; e->d_name[ni] && ni < 255; ni++)
@@ -1455,7 +1475,7 @@ static int tool_journal_read(const char *arg, char *out, size_t cap) {
         /* arg is a date like 2026-06-18 */
         snprintf(path, sizeof(path), "/home/user/Journal/%s.txt", arg);
     }
-    /* path traversal guard */
+    /* path traversal guard -- realpath schreibt bis zu PATH_MAX Bytes */
     char real[PATH_MAX];
     if (!realpath(path, real) || strncmp(real, "/home/user/Journal/", 19) != 0) {
         snprintf(out, cap, "Fehler: ungueltiger Pfad."); return 1;
