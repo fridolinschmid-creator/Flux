@@ -349,8 +349,8 @@ static void draw_keyboard(flux_fb_t *fb) {
             /* Enter: Gradient-Fill mit Akzentfarbe */
             flux_fb_fill_gradient_v_rounded(fb, bx, by, bw, bh, 8, COL_ACCENT, COL_ACCENT2);
         } else if (keys[i].is_backspace) {
-            /* Backspace: Dunkelrot-Tonung */
-            fill_round_rect(fb, bx, by, bw, bh, 8, 0x450A0A);
+            /* Backspace: neutral wie Leertaste (kein eigener Akzent) */
+            fill_round_rect(fb, bx, by, bw, bh, 8, COL_KEY_SPEC);
         } else if (keys[i].ch == ' ') {
             /* Leertaste: etwas heller */
             fill_round_rect(fb, bx, by, bw, bh, 8, COL_KEY_SPEC);
