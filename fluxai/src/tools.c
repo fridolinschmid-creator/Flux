@@ -1647,8 +1647,10 @@ static int tool_calendar_add(const char *arg, char *out, size_t cap) {
     snprintf(entry, sizeof(entry), "%s", arg);
     size_t l = strlen(entry);
     while (l > 0 && (entry[l-1] == '\n' || entry[l-1] == '\r')) entry[--l] = '\0';
-    /* If no date prefix given, prepend today */
-    if (!(entry[4] == '-' && entry[7] == '-')) {
+    /* If no date prefix given, prepend today. l>=8 zuerst pruefen --
+     * sonst wuerden entry[4]/entry[7] bei kurzen Eintraegen unbelegten
+     * Stack-Inhalt hinter dem NUL-Terminator lesen. */
+    if (l < 8 || !(entry[4] == '-' && entry[7] == '-')) {
         time_t t = time(NULL); struct tm tm; localtime_r(&t, &tm);
         char dated[256];
         strftime(dated, sizeof(dated), "%Y-%m-%d ", &tm);
