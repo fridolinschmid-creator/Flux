@@ -36,10 +36,12 @@
  */
 #include "tools.h"
 #include "vision.h"
+#include "specialists.h"
 #include "imap.h"
 #include "radio.h"
 #include "../../common/flux_config.h"
 #include "../../common/flux_sha256.h"
+#include "../../common/flux_util.h"
 
 #include <curl/curl.h>
 #include <stdio.h>
@@ -60,19 +62,10 @@
 #define FILE_READ_MAX   8192
 #define NOTE_TEXT_MAX   512
 
-/* ---- Curl-Hilfspuffer ------------------------------------------------ */
-
-struct membuf { char *data; size_t len, cap; };
-
-static size_t curl_write_cb(void *ptr, size_t size, size_t nmemb, void *ud) {
-    struct membuf *mb = ud;
-    size_t add = size * nmemb;
-    if (mb->len + add + 1 > mb->cap) return 0;
-    memcpy(mb->data + mb->len, ptr, add);
-    mb->len += add;
-    mb->data[mb->len] = '\0';
-    return add;
-}
+/* Der HTTP-Antwortpuffer und der libcurl-Write-Callback liegen jetzt in
+ * common/flux_util (flux_http_buf / flux_http_write_cb). Die fruehere lokale
+ * membuf-Variante war fix-kapazitaet auf Stack-Puffern; die gemeinsame Version
+ * waechst per realloc und braucht daher heap-allozierte Puffer. */
 
 /* ---- Sicherheits-/Such-Hilfsfunktionen ------------------------------- */
 
@@ -151,20 +144,26 @@ static int tool_weather(const char *arg, char *out, size_t cap) {
              "https://wttr.in/%s?format=%%l:+%%C,+%%t,+%%h+Feuchte,+Wind+%%w",
              safe_city);
 
-    char respbuf[1024];
-    respbuf[0] = '\0';
-    struct membuf mb = { .data = respbuf, .len = 0, .cap = sizeof(respbuf) };
-
     CURL *curl = curl_easy_init();
     if (!curl) {
         snprintf(out, cap, "Fehler: curl nicht verfuegbar");
         return 1;
     }
+
+    /* Wachsender Heap-Antwortpuffer (gemeinsame flux_http_buf-Hilfe).
+     * Nicht auf einen Stack-Array zeigen lassen -- der Callback realloc't. */
+    flux_http_buf mb;
+    if (flux_http_buf_init(&mb, 1024) != 0) {
+        curl_easy_cleanup(curl);
+        snprintf(out, cap, "Fehler: kein Speicher");
+        return 1;
+    }
+
     struct curl_slist *hdrs = NULL;
     hdrs = curl_slist_append(hdrs, "Accept-Language: de");
     curl_easy_setopt(curl, CURLOPT_URL, url);
     curl_easy_setopt(curl, CURLOPT_HTTPHEADER, hdrs);
-    curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, curl_write_cb);
+    curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, flux_http_write_cb);
     curl_easy_setopt(curl, CURLOPT_WRITEDATA, &mb);
     curl_easy_setopt(curl, CURLOPT_TIMEOUT, 8L);
     curl_easy_setopt(curl, CURLOPT_USERAGENT, "curl/7.x (flux-os)");
@@ -174,9 +173,12 @@ static int tool_weather(const char *arg, char *out, size_t cap) {
     curl_easy_cleanup(curl);
 
     if (res != CURLE_OK) {
+        flux_http_buf_free(&mb);
         snprintf(out, cap, "Wetterdaten nicht verfuegbar: %s", curl_easy_strerror(res));
         return 1;
     }
+
+    const char *respbuf = mb.data;
 
     /* Steuerzeichen (Emoji, ANSI) aus Antwort entfernen -- das Terminal-Format
      * von wttr.in enthaelt manchmal Escape-Sequenzen. */
@@ -201,6 +203,7 @@ static int tool_weather(const char *arg, char *out, size_t cap) {
         }
     }
     clean[ci] = '\0';
+    flux_http_buf_free(&mb);
 
     /* Newlines durch Leerzeichen ersetzen */
     for (size_t i = 0; clean[i]; i++)
@@ -1489,10 +1492,8 @@ static int tool_memory_save(const char *arg, char *out, size_t cap) {
     fprintf(f, "[%s] %s\n", ts, entry);
     fclose(f);
     /* If birthday mentioned: auto-add a yearly calendar reminder */
-    char lower[512]; size_t li = 0;
-    for (const char *p = entry; *p && li < sizeof(lower)-1; p++, li++)
-        lower[li] = (*p >= 'A' && *p <= 'Z') ? *p + 32 : *p;
-    lower[li] = '\0';
+    char lower[512];
+    flux_str_tolower_ascii(lower, sizeof(lower), entry);
     if (strstr(lower, "geburtstag") || strstr(lower, "birthday")) {
         FILE *cf = fopen("/etc/flux/calendar.txt", "a");
         if (cf) {
@@ -1875,6 +1876,33 @@ static int tool_image_analyze(const char *arg, char *out, size_t cap) {
     return flux_vision_analyze(full, out, cap, NULL);
 }
 
+/* ---- plant_identify (Pl@ntNet) --------------------------------------- */
+static int tool_plant_identify(const char *arg, char *out, size_t cap) {
+    if (!arg || !*arg) {
+        snprintf(out, cap, "Fehler: kein Bildpfad angegeben.");
+        return 1;
+    }
+    /* Relativen Pfad in /home/user/Pictures/ aufloesen (wie image_analyze). */
+    char full[512];
+    if (arg[0] == '/') snprintf(full, sizeof(full), "%s", arg);
+    else               snprintf(full, sizeof(full), "/home/user/Pictures/%s", arg);
+    flux_plant_identify(full, out, cap);  /* setzt out immer (auch im Fehlerfall) */
+    return 1;
+}
+
+/* ---- logo_detect (Google Cloud Vision) ------------------------------- */
+static int tool_logo_detect(const char *arg, char *out, size_t cap) {
+    if (!arg || !*arg) {
+        snprintf(out, cap, "Fehler: kein Bildpfad angegeben.");
+        return 1;
+    }
+    char full[512];
+    if (arg[0] == '/') snprintf(full, sizeof(full), "%s", arg);
+    else               snprintf(full, sizeof(full), "/home/user/Pictures/%s", arg);
+    flux_logo_detect(full, out, cap);  /* setzt out immer (auch im Fehlerfall) */
+    return 1;
+}
+
 /* ---- image_take ------------------------------------------------------- */
 static int tool_image_take(const char *arg, char *out, size_t cap) {
     (void)arg;
@@ -2042,11 +2070,17 @@ static int tool_web_search(const char *arg, char *out, size_t cap) {
              base, q ? q : "");
     if (q) curl_free(q);
 
-    char respbuf[16384]; respbuf[0] = '\0';
-    struct membuf mb = { .data = respbuf, .len = 0, .cap = sizeof(respbuf) };
+    /* Wachsender Heap-Antwortpuffer (gemeinsame flux_http_buf-Hilfe).
+     * Nicht auf einen Stack-Array zeigen lassen -- der Callback realloc't. */
+    flux_http_buf mb;
+    if (flux_http_buf_init(&mb, 16384) != 0) {
+        curl_easy_cleanup(curl);
+        snprintf(out, cap, "Fehler: kein Speicher");
+        return 1;
+    }
 
     curl_easy_setopt(curl, CURLOPT_URL, url);
-    curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, curl_write_cb);
+    curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, flux_http_write_cb);
     curl_easy_setopt(curl, CURLOPT_WRITEDATA, &mb);
     curl_easy_setopt(curl, CURLOPT_TIMEOUT, 12L);
     curl_easy_setopt(curl, CURLOPT_USERAGENT, "flux-os/1.0");
@@ -2058,13 +2092,15 @@ static int tool_web_search(const char *arg, char *out, size_t cap) {
     curl_easy_cleanup(curl);
 
     if (res != CURLE_OK) {
+        flux_http_buf_free(&mb);
         snprintf(out, cap,
                  "SearXNG nicht erreichbar (%s). Laeuft die Instanz auf dem "
                  "MacBook und ist das Geraet im selben Netz?",
                  curl_easy_strerror(res));
         return 1;
     }
-    if (http == 403 || strstr(respbuf, "\"results\"") == NULL) {
+    if (http == 403 || strstr(mb.data, "\"results\"") == NULL) {
+        flux_http_buf_free(&mb);
         snprintf(out, cap,
                  "Keine Treffer oder JSON-Format nicht aktiviert. Erlaube in der "
                  "SearXNG-settings.yml 'formats: [html, json]' und starte neu.");
@@ -2074,7 +2110,8 @@ static int tool_web_search(const char *arg, char *out, size_t cap) {
     char header[300];
     snprintf(header, sizeof(header), "Web-Suchergebnisse fuer \"%s\":\n", arg);
     snprintf(out, cap, "%s", header);
-    int n = parse_searxng(respbuf, out, cap, 5);
+    int n = parse_searxng(mb.data, out, cap, 5);
+    flux_http_buf_free(&mb);
     if (n == 0) snprintf(out, cap, "Keine Treffer fuer \"%s\".", arg);
     return 1;
 }
@@ -2288,6 +2325,8 @@ int flux_tool_exec(const char *name, const char *arg,
     if (strcmp(name, "prefs_set")      == 0) return tool_prefs_set(arg, out, out_cap);
     if (strcmp(name, "image_list")    == 0) return tool_image_list(arg, out, out_cap);
     if (strcmp(name, "image_analyze") == 0) return tool_image_analyze(arg, out, out_cap);
+    if (strcmp(name, "plant_identify")== 0) return tool_plant_identify(arg, out, out_cap);
+    if (strcmp(name, "logo_detect")   == 0) return tool_logo_detect(arg, out, out_cap);
     if (strcmp(name, "image_take")    == 0) return tool_image_take(arg, out, out_cap);
     if (strcmp(name, "memory_save")   == 0) return tool_memory_save(arg, out, out_cap);
     if (strcmp(name, "memory_list")   == 0) return tool_memory_list(arg, out, out_cap);
@@ -2300,6 +2339,131 @@ int flux_tool_exec(const char *name, const char *arg,
     if (strcmp(name, "doc_analyze")   == 0) return tool_doc_analyze(arg, out, out_cap);
     return 0; /* unbekanntes Tool */
 }
+
+/* ---- Natives Tool-Schema (JSON) -------------------------------------- */
+
+/* Eine Tooldefinition fuer das native Tool-Calling. arg_desc beschreibt das
+ * (einzige) String-Argument; arg_required gibt an, ob "arg" zwingend ist. */
+typedef struct {
+    const char *name;
+    const char *desc;       /* JSON-sicher: keine " oder \ noetig hier */
+    const char *arg_desc;   /* Beschreibung des "arg"-Strings */
+    int         arg_required;
+} flux_tool_def_t;
+
+/* Reihenfolge stabil halten -- so bleibt das erzeugte JSON deterministisch
+ * und damit Prompt-Cache-faehig (gleiche Bytes bei jeder Anfrage). */
+static const flux_tool_def_t TOOL_DEFS[] = {
+    { "date_time",       "Aktuelles Datum und Uhrzeit.", "(leer, kein Argument noetig)", 0 },
+    { "weather",         "Aktuelles Wetter.", "Stadtname (leer = automatische Ortserkennung)", 0 },
+    { "file_read",       "Dateiinhalt lesen (nur /home/user/, /tmp/, /proc/, /sys/).", "Dateipfad", 1 },
+    { "file_list",       "Verzeichnis auflisten.", "Verzeichnispfad", 1 },
+    { "file_create",     "Datei erstellen.", "Format: /pfad/datei.txt|Inhalt (\\n fuer Zeilenumbruch)", 1 },
+    { "file_delete",     "Datei loeschen (nur /home/user/).", "Dateipfad", 1 },
+    { "calculate",       "Rechenausdruck auswerten.", "z.B. '15 * 8 + 3.5'", 1 },
+    { "note_save",       "Notiz speichern.", "Notiztext", 1 },
+    { "note_list",       "Alle Notizen anzeigen.", "(leer)", 0 },
+    { "sys_info",        "Systeminformationen (Speicher, Kernel, Laufzeit).", "(leer)", 0 },
+    { "alarm_set",       "Wecker/Alarm zu einer Uhrzeit stellen. Nutze dies bei 'Wecker', 'weck mich', 'Alarm um ...'.", "HH:MM Beschreibung (z.B. '07:00 Aufstehen')", 1 },
+    { "reminder_set",    "Erinnerung ohne feste Uhrzeit setzen.", "Erinnerungstext", 1 },
+    { "contacts_search", "Kontakt suchen.", "Name oder Nummer", 1 },
+    { "brightness_get",  "Bildschirmhelligkeit lesen.", "(leer)", 0 },
+    { "brightness_set",  "Bildschirmhelligkeit setzen.", "0-100 (Prozent)", 1 },
+    { "wifi_info",       "WLAN-Signalstaerke und Interface.", "(leer)", 0 },
+    { "vibrate",         "Geraet vibrieren lassen.", "Dauer in ms (z.B. 300)", 0 },
+    { "contact_save",    "Kontakt speichern.", "Name,Telefon,Email[,Geburtstag]", 1 },
+    { "contacts_list",   "Alle Kontakte anzeigen.", "(leer)", 0 },
+    { "calendar_add",    "Termin eintragen.", "YYYY-MM-DD HH:MM Beschreibung", 1 },
+    { "calendar_list",   "Bevorstehende Termine anzeigen.", "(leer)", 0 },
+    { "search_files",    "Dateien in /home/user/ suchen.", "Suchbegriff", 1 },
+    { "prefs_set",       "Nutzerpraeferenz merken (fuer spaetere Kontextnutzung).", "Praeferenztext", 1 },
+    { "image_list",      "Fotos in /home/user/Pictures/ auflisten.", "(leer)", 0 },
+    { "image_analyze",   "Bild per KI analysieren (Was ist drauf? Wo aufgenommen?).", "Dateiname oder Pfad", 1 },
+    { "plant_identify",  "Exakte Pflanzenart eines Fotos bestimmen (Pl@ntNet-Spezialist).", "Dateiname oder Pfad (in /home/user/Pictures)", 1 },
+    { "logo_detect",     "Logos/Marken und Text auf einem Foto erkennen (Google-Vision-Spezialist).", "Dateiname oder Pfad (in /home/user/Pictures)", 1 },
+    { "image_take",      "Neues Foto aufnehmen und speichern.", "(leer)", 0 },
+    { "memory_save",     "Persoenliche Info dauerhaft merken (Name, Geburtstag, Praeferenz usw.).", "Text", 1 },
+    { "memory_list",     "Alle gespeicherten Infos anzeigen.", "(leer)", 0 },
+    { "memory_search",   "Gespeicherte Infos durchsuchen.", "Suchbegriff", 1 },
+    { "memory_delete",   "Gespeicherte Info loeschen.", "Suchbegriff", 1 },
+    { "journal_list",    "Alle Tagesjournal-Eintraege auflisten.", "(leer)", 0 },
+    { "journal_read",    "Einen Journal-Eintrag lesen.", "YYYY-MM-DD oder 'heute' oder 'gestern'", 0 },
+    { "meeting_list",    "Alle Meeting-Protokolle auflisten.", "(leer)", 0 },
+    { "meeting_read",    "Ein Meeting-Protokoll lesen.", "YYYY-MM-DD_HHmm oder 'letztes'", 1 },
+    { "doc_analyze",     "Dateiinhalt lesen und der KI als Kontext uebergeben.", "Dateipfad", 1 },
+    { "mail_unread",     "Ungelesene E-Mails abrufen (Von/Betreff/Datum, fuer Zusammenfassungen).", "(leer)", 0 },
+    { "mail_read",       "Volltext einer E-Mail lesen.", "UID (aus mail_unread)", 1 },
+    { "web_search",      "Im Internet suchen (aktuelle Infos/News/Fakten).", "Suchbegriff", 1 },
+};
+static const int TOOL_DEFS_N = (int)(sizeof(TOOL_DEFS) / sizeof(TOOL_DEFS[0]));
+
+/* Haengt s JSON-escaped an buf an (begrenzt durch cap, *pos wird fortgeschrieben).
+ * Behandelt " und \ -- die Tool-Texte enthalten sonst nur ASCII. */
+static void json_append_escaped(char *buf, size_t cap, size_t *pos, const char *s) {
+    for (; *s && *pos + 2 < cap; s++) {
+        if (*s == '"' || *s == '\\') buf[(*pos)++] = '\\';
+        buf[(*pos)++] = *s;
+    }
+    buf[*pos] = '\0';
+}
+
+/* Haengt das JSON-Schema-Objekt fuer das Argument eines Tools an.
+ * Erzeugt: {"type":"object","properties":{"arg":{...}}[,"required":["arg"]]} */
+static void append_arg_schema(char *buf, size_t cap, size_t *pos,
+                              const flux_tool_def_t *t) {
+    *pos += (size_t)snprintf(buf + *pos, cap - *pos,
+        "{\"type\":\"object\",\"properties\":"
+        "{\"arg\":{\"type\":\"string\",\"description\":\"");
+    json_append_escaped(buf, cap, pos, t->arg_desc);
+    *pos += (size_t)snprintf(buf + *pos, cap - *pos, "\"}}");
+    if (t->arg_required)
+        *pos += (size_t)snprintf(buf + *pos, cap - *pos, ",\"required\":[\"arg\"]");
+    *pos += (size_t)snprintf(buf + *pos, cap - *pos, "}");
+}
+
+/* Gemeinsamer Aufbau. openai=1 -> OpenAI-Function-Format, sonst Anthropic.
+ * Das OpenAI-Format ist durch die zusaetzliche function-Verpackung groesser,
+ * daher reichlich Puffer. */
+#define FLUX_TOOLS_SCHEMA_CAP 12288
+static const char *build_tools_schema(int openai) {
+    static char anthropic_buf[FLUX_TOOLS_SCHEMA_CAP];
+    static char openai_buf[FLUX_TOOLS_SCHEMA_CAP];
+    static int  anthropic_built = 0, openai_built = 0;
+    char  *buf = openai ? openai_buf : anthropic_buf;
+    int   *built = openai ? &openai_built : &anthropic_built;
+    const size_t cap = FLUX_TOOLS_SCHEMA_CAP;
+    if (*built) return buf;
+
+    size_t pos = 0;
+    buf[pos++] = '[';
+    for (int i = 0; i < TOOL_DEFS_N; i++) {
+        const flux_tool_def_t *t = &TOOL_DEFS[i];
+        if (i) buf[pos++] = ',';
+        if (openai) {
+            pos += (size_t)snprintf(buf + pos, cap - pos,
+                "{\"type\":\"function\",\"function\":"
+                "{\"name\":\"%s\",\"description\":\"", t->name);
+            json_append_escaped(buf, cap, &pos, t->desc);
+            pos += (size_t)snprintf(buf + pos, cap - pos, "\",\"parameters\":");
+            append_arg_schema(buf, cap, &pos, t);
+            pos += (size_t)snprintf(buf + pos, cap - pos, "}}");
+        } else {
+            pos += (size_t)snprintf(buf + pos, cap - pos,
+                "{\"name\":\"%s\",\"description\":\"", t->name);
+            json_append_escaped(buf, cap, &pos, t->desc);
+            pos += (size_t)snprintf(buf + pos, cap - pos, "\",\"input_schema\":");
+            append_arg_schema(buf, cap, &pos, t);
+            pos += (size_t)snprintf(buf + pos, cap - pos, "}");
+        }
+    }
+    buf[pos++] = ']';
+    buf[pos] = '\0';
+    *built = 1;
+    return buf;
+}
+
+const char *flux_tools_json_schema(void)   { return build_tools_schema(0); }
+const char *flux_tools_openai_schema(void) { return build_tools_schema(1); }
 
 const char *flux_tools_description(void) {
     return
@@ -2356,6 +2520,8 @@ const char *flux_tools_description(void) {
         "  prefs_set       -- Nutzerpraeferenz merken (fuer spaetere Kontextnutzung). ARG: Praeferenztext\n"
         "  image_list      -- Fotos in /home/user/Pictures/ auflisten. ARG: (leer)\n"
         "  image_analyze   -- Bild per KI analysieren (Was ist drauf? Wo wurde es aufgenommen?). ARG: Dateiname oder Pfad\n"
+        "  plant_identify  -- Exakte Pflanzenart eines Fotos bestimmen (Pl@ntNet). ARG: Dateiname oder Pfad\n"
+        "  logo_detect     -- Logos/Marken und Text auf einem Foto erkennen (Google Vision). ARG: Dateiname oder Pfad\n"
         "  image_take      -- Neues Foto aufnehmen und speichern. ARG: (leer)\n"
         "  memory_save     -- Persoenliche Info dauerhaft merken (Name, Geburtstag, Praeferenz usw.). ARG: Text\n"
         "  memory_list     -- Alle gespeicherten Infos anzeigen. ARG: (leer)\n"
