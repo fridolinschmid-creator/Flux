@@ -21,6 +21,16 @@ int flux_provider_is_mock(void);
  * (letzte Runden werden als Kontext mitgesendet und gespeichert). */
 void flux_provider_ask(const char *question, char *out, size_t out_cap);
 
+/* Direkter Modell-Aufruf OHNE Tools und OHNE Gespraechsverlauf, ueber den
+ * AKTIV gewaehlten Anbieter (local-first, wenn der lokale llama.cpp-Anbieter
+ * gewaehlt ist). Gedacht fuer Tools, die selbst das Sprachmodell brauchen
+ * (z.B. translate) und aus der Agenten-Tool-Schleife heraus laufen -- es wird
+ * bewusst KEINE weitere Tool-Schleife angestossen (keine Rekursion).
+ * Gibt 1 bei Erfolg; 0 mit ehrlicher Meldung in out, wenn kein Anbieter
+ * nutzbar ist oder der Aufruf fehlschlaegt. system_prompt darf NULL sein. */
+int flux_provider_complete(const char *system_prompt, const char *user_prompt,
+                           char *out, size_t out_cap);
+
 /* 1, wenn der aktuell gewaehlte Anbieter einen nutzbaren API-Key hat. */
 int flux_provider_available(void);
 

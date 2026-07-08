@@ -54,6 +54,16 @@ typedef enum {
 
 void flux_ui_draw_lock(flux_fb_t *fb);
 
+/* Schaltet den Lockscreen-Mikrofon-Chip "Zum Entsperren sprechen" ein/aus.
+ * main.c setzt das nur, wenn eine Stimme eingelernt ist, der Toggle
+ * voice_unlock_lock aktiv ist UND KEINE PIN gesetzt ist -- die Stimme darf
+ * eine PIN nie ersetzen (Sicherheit vor Bequemlichkeit). */
+void flux_ui_set_lock_voice_hint(int on);
+
+/* Hit-Test fuer den Lockscreen-Mikrofon-Chip. Gibt 1 nur bei sichtbarem
+ * Chip und Treffer zurueck (sonst 0 -- der Wisch bleibt unberuehrt). */
+int flux_ui_lock_voice_hit(const flux_fb_t *fb, int x, int y);
+
 /* entered: Anzahl bereits eingegebener Ziffern (fuer die Punktanzeige).
  * error: 1, wenn der zuletzt eingegebene Code falsch war. */
 void flux_ui_draw_pin(flux_fb_t *fb, int entered, int error);
@@ -125,6 +135,13 @@ void flux_ui_draw_confirm(flux_fb_t *fb, const char *type_label,
 /* has_subject: 1 wenn eine Betreff-Zeile angezeigt wird (nur bei Mail) --
  * noetig, damit der Hit-Test die antippbaren Zeilen richtig zuordnet. */
 flux_confirm_hit_t flux_ui_confirm_hit(const flux_fb_t *fb, int x, int y, int has_subject);
+
+/* Bestaetigungs-Dialog fuer eine Einstellungsaenderung (KI will eine
+ * Systemeinstellung setzen). desc ist eine fertige deutsche Beschreibung
+ * (z.B. "Helligkeit -> 50%"), key/value die technischen Werte. */
+void flux_ui_draw_confirm_setting(flux_fb_t *fb, const char *desc,
+                                  const char *key, const char *value);
+flux_confirm_hit_t flux_ui_confirm_setting_hit(const flux_fb_t *fb, int x, int y);
 
 /* ---- Text bearbeiten (vor dem Senden einer Aktion) ---------------- */
 

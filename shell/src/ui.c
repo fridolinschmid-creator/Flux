@@ -22,6 +22,13 @@ void flux_ui_set_accent(uint32_t rgb) {
     g_accent2 = 0x8B5CF6;
 }
 
+/* Lockscreen-Stimm-Entsperrung: 1 = Mikrofon-Chip "Zum Entsperren sprechen"
+ * zusaetzlich zum Wisch-Hinweis anzeigen. main.c setzt das nur, wenn eine
+ * Stimme eingelernt UND der Toggle aktiv UND KEINE PIN gesetzt ist (Stimme
+ * darf eine PIN nie ersetzen -- Sicherheit vor Bequemlichkeit). */
+static int g_lock_voice_hint = 0;
+void flux_ui_set_lock_voice_hint(int on) { g_lock_voice_hint = on ? 1 : 0; }
+
 /* Premium Dark-Mode Palette "Deep Space" */
 #define COL_BG          0x07080D   /* Tiefstes Schwarz-Blau */
 #define COL_SURFACE     0x0F1117   /* Leicht erhoehte Oberflaeche */
@@ -370,6 +377,19 @@ static void draw_keyboard(flux_fb_t *fb) {
 
 /* ---- Lockscreen ----------------------------------------------------- */
 
+/* Geometrie des Lockscreen-Mikrofon-Chips "Zum Entsperren sprechen".
+ * Eine Funktion fuer Zeichnen UND Hit-Test, damit beide nie auseinanderlaufen
+ * (Touch-first-Konvention wie bei Tastatur/Listen). */
+static void lock_voice_chip_geom(const flux_fb_t *fb, int *x, int *y,
+                                 int *w, int *h) {
+    int cw = 260; if (cw > fb->width - 32) cw = fb->width - 32;
+    int ch = 48;
+    *w = cw; *h = ch;
+    *x = (fb->width - cw) / 2;
+    /* Knapp ueber dem Wisch-Indikator (der bei height-42 sitzt). */
+    *y = fb->height - 42 - 30 - ch;
+}
+
 void flux_ui_draw_lock(flux_fb_t *fb) {
     /* Hintergrund: vertikaler Verlauf von COL_BG nach leicht hellerem COL_SURFACE */
     flux_fb_fill_gradient_v(fb, 0, 0, fb->width, fb->height, COL_BG, 0x0B0D14);
@@ -572,6 +592,23 @@ void flux_ui_draw_lock(flux_fb_t *fb) {
         }
     }
 
+    /* Mikrofon-Chip "Zum Entsperren sprechen" -- nur wenn aktiviert
+     * (Stimme eingelernt + Toggle an + keine PIN gesetzt, siehe main.c).
+     * Der Wisch bleibt immer zusaetzlich verfuegbar -- die Stimme ist nur
+     * ein bequemer Zusatzweg, nie die einzige Schranke. */
+    if (g_lock_voice_hint) {
+        int cx2, cy2, cw2, ch2;
+        lock_voice_chip_geom(fb, &cx2, &cy2, &cw2, &ch2);
+        fill_round_rect(fb, cx2, cy2, cw2, ch2, ch2 / 2, COL_SURFACE2);
+        /* Mikrofon-Symbol links: Kapsel + Standfuss */
+        int mx = cx2 + 26, my = cy2 + ch2 / 2;
+        fill_round_rect(fb, mx - 5, my - 11, 10, 16, 5, COL_ACCENT);
+        draw_thick_line(fb, mx, my + 5, mx, my + 9, 2, COL_ACCENT);
+        draw_thick_line(fb, mx - 6, my + 9, mx + 6, my + 9, 2, COL_ACCENT);
+        const char *lbl = "Zum Entsperren sprechen";
+        flux_fb_text(fb, cx2 + 48, cy2 + (ch2 - 14) / 2, lbl, COL_TEXT, 2);
+    }
+
     /* Wisch-nach-oben Indikator -- stilisierte animierte Linie statt Text */
     {
         int ind_y = fb->height - 42;
@@ -590,6 +627,15 @@ void flux_ui_draw_lock(flux_fb_t *fb) {
     }
 
     flux_fb_present(fb);
+}
+
+/* Hit-Test fuer den Lockscreen-Mikrofon-Chip. Gibt 1 nur zurueck, wenn der
+ * Chip ueberhaupt angezeigt wird (g_lock_voice_hint) und getroffen wurde. */
+int flux_ui_lock_voice_hit(const flux_fb_t *fb, int x, int y) {
+    if (!g_lock_voice_hint) return 0;
+    int cx, cy, cw, ch;
+    lock_voice_chip_geom(fb, &cx, &cy, &cw, &ch);
+    return (x >= cx && x < cx + cw && y >= cy && y < cy + ch);
 }
 
 /* ---- PIN-Sperre -------------------------------------------------------
@@ -1622,6 +1668,90 @@ flux_confirm_hit_t flux_ui_confirm_hit(const flux_fb_t *fb, int x, int y, int ha
     if (y >= to_y - 8 && y < to_y + 28) return FLUX_CONFIRM_EDIT_TO;
     if (has_subject && y >= subj_y - 8 && y < subj_y + 28)
         return FLUX_CONFIRM_EDIT_SUBJECT;
+    if (y >= body_y - 8 && y < card_y + card_h) return FLUX_CONFIRM_EDIT_BODY;
+    return FLUX_CONFIRM_NONE;
+}
+
+/* ---- Bestaetigungs-Dialog: Einstellung aendern ----------------------
+ * Wiederverwendet die Karten-/Knopf-Geometrie des Aktions-Dialogs
+ * (confirm_layout/build_confirm_buttons), zeigt aber eine fuer
+ * Einstellungen verstaendliche Darstellung: "<Beschreibung>" gross,
+ * darunter Schluessel und neuer Wert. Tap auf den Wert -> bearbeiten. */
+void flux_ui_draw_confirm_setting(flux_fb_t *fb, const char *desc,
+                                   const char *key, const char *value) {
+    flux_fb_fill_gradient_v(fb, 0, 0, fb->width, fb->height, 0x040508, COL_BG);
+    draw_statusbar(fb);
+
+    const char *header = "Einstellung aendern?";
+    int hw = flux_fb_text_width(header, 3);
+    flux_fb_text(fb, (fb->width - hw) / 2, STATUSBAR_H + 16, header, COL_TEXT, 3);
+    const char *hint = "Tippe auf den Wert zum Ändern";
+    int hiw = flux_fb_text_width(hint, 2);
+    flux_fb_text(fb, (fb->width - hiw) / 2, STATUSBAR_H + 44, hint, COL_DIM, 2);
+
+    int card_x, card_y, card_w, card_h, to_y, subj_y, div_y, body_y;
+    confirm_layout(fb, 1, &card_x, &card_y, &card_w, &card_h,
+                   &to_y, &subj_y, &div_y, &body_y);
+
+    fill_round_rect(fb, card_x, card_y, card_w, card_h, 16, COL_SURFACE2);
+    for (int i = 0; i < 2; i++) {
+        flux_fb_hline(fb, card_x + 16, card_y + i, card_w - 32, 0x2A3354);
+        flux_fb_vline(fb, card_x + i, card_y + 16, card_h - 32, 0x2A3354);
+    }
+    flux_fb_fill_gradient_h(fb, card_x + 16, card_y, card_w - 32, 2, COL_ACCENT, COL_ACCENT2);
+
+    int cx = card_x + 18;
+
+    /* Beschreibung gross (vom Daemon/KI: z.B. "Helligkeit -> 50%") */
+    draw_wrapped(fb, cx, to_y, card_w - 36,
+                 (desc && desc[0]) ? desc : "Einstellung", COL_TEXT, 2, 24);
+
+    /* Schluessel-Zeile (technisch, gedimmt) */
+    flux_fb_hline(fb, cx, subj_y - 4, card_w - 36, COL_DIVIDER);
+    flux_fb_text(fb, cx, subj_y, "SCHLUESSEL", COL_DIM, 1);
+    flux_fb_text(fb, cx + 96, subj_y - 1, (key && key[0]) ? key : "-", COL_TEXT_MUTED, 2);
+
+    /* Neuer Wert (antippbar) */
+    flux_fb_hline(fb, cx, div_y - 4, card_w - 36, COL_DIVIDER);
+    flux_fb_text(fb, cx, body_y, "NEUER WERT", COL_DIM, 1);
+    flux_fb_text(fb, cx + 96, body_y - 1,
+                 (value && value[0]) ? value : "(tippen)",
+                 (value && value[0]) ? COL_ACCENT : COL_DIM, 2);
+
+    /* Knoepfe: [Abbruch] [Übernehmen] */
+    btn_geom_t btn[3];
+    build_confirm_buttons(fb, btn);
+    int b1x = btn[0].x + 6, b1y = btn[0].y + 10;
+    int b1w = btn[0].w - 12, b1h = btn[0].h - 20;
+    fill_round_rect(fb, b1x, b1y, b1w, b1h, 12, COL_SURFACE3);
+    flux_fb_hline(fb, b1x + 12, b1y, b1w - 24, 0x3D4A60);
+    {
+        int lw = flux_fb_text_width("Abbruch", 2);
+        flux_fb_text(fb, b1x + (b1w - lw) / 2, b1y + (b1h - 14) / 2, "Abbruch", COL_TEXT_MUTED, 2);
+    }
+    int b2x = btn[1].x + 6, b2y = btn[1].y + 10;
+    int b2w = btn[1].w - 12, b2h = btn[1].h - 20;
+    flux_fb_fill_gradient_v_rounded(fb, b2x, b2y, b2w, b2h, 12, 0x059669, 0x10B981);
+    {
+        const char *bl = "Übernehmen";
+        int lw = flux_fb_text_width(bl, 2);
+        flux_fb_text(fb, b2x + (b2w - lw) / 2, b2y + (b2h - 14) / 2, bl, 0xFFFFFF, 2);
+    }
+    flux_fb_present(fb);
+}
+
+/* Hit-Test fuer den Einstellungs-Dialog: CANCEL/SEND ueber die Knoepfe,
+ * EDIT_BODY (= den Wert bearbeiten) bei Tap auf die Wert-Zeile. */
+flux_confirm_hit_t flux_ui_confirm_setting_hit(const flux_fb_t *fb, int x, int y) {
+    btn_geom_t btn[3];
+    build_confirm_buttons(fb, btn);
+    if (y >= btn[0].y)
+        return (x < fb->width / 2) ? FLUX_CONFIRM_CANCEL : FLUX_CONFIRM_SEND;
+
+    int card_x, card_y, card_w, card_h, to_y, subj_y, div_y, body_y;
+    confirm_layout(fb, 1, &card_x, &card_y, &card_w, &card_h,
+                   &to_y, &subj_y, &div_y, &body_y);
+    if (x < card_x || x >= card_x + card_w) return FLUX_CONFIRM_NONE;
     if (y >= body_y - 8 && y < card_y + card_h) return FLUX_CONFIRM_EDIT_BODY;
     return FLUX_CONFIRM_NONE;
 }
