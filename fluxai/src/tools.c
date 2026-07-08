@@ -1308,90 +1308,65 @@ static const char *find_rfkill(void) {
     return NULL;
 }
 
-static int tool_wifi_on(const char *arg, char *out, size_t cap) {
-    (void)arg;
+/* Fuehrt "rfkill <rfkill_arg>" aus und formatiert das Ergebnis einheitlich.
+ * Gemeinsame Basis fuer wifi_on/off und flight_mode_on/off -- die vier
+ * Tools unterschieden sich zuvor nur in rfkill-Argument und Meldungstexten. */
+static int rfkill_run(const char *rfkill_arg, const char *unavailable_msg,
+                       const char *ok_msg, const char *err_fmt,
+                       char *out, size_t cap) {
     const char *rfkill = find_rfkill();
     if (!rfkill) {
-        snprintf(out, cap,
-            "WLAN-Steuerung nicht verfuegbar: 'rfkill' nicht gefunden "
-            "(auf QEMU ohne WLAN-Hardware kein rfkill vorhanden).");
+        snprintf(out, cap, "%s", unavailable_msg);
         return 1;
     }
     char cmd[256];
-    snprintf(cmd, sizeof(cmd), "%s unblock wifi 2>/dev/null", rfkill);
+    snprintf(cmd, sizeof(cmd), "%s %s 2>/dev/null", rfkill, rfkill_arg);
     int rc = system(cmd);
     if (rc == 0)
-        snprintf(out, cap, "WLAN eingeschaltet.");
+        snprintf(out, cap, "%s", ok_msg);
     else
-        snprintf(out, cap,
-            "Fehler beim Einschalten des WLANs (rfkill Rueckgabewert %d). "
-            "Kein WLAN-Hardware vorhanden?", rc);
+        snprintf(out, cap, err_fmt, rc);
     return 1;
+}
+
+static int tool_wifi_on(const char *arg, char *out, size_t cap) {
+    (void)arg;
+    return rfkill_run("unblock wifi",
+        "WLAN-Steuerung nicht verfuegbar: 'rfkill' nicht gefunden "
+        "(auf QEMU ohne WLAN-Hardware kein rfkill vorhanden).",
+        "WLAN eingeschaltet.",
+        "Fehler beim Einschalten des WLANs (rfkill Rueckgabewert %d). "
+        "Kein WLAN-Hardware vorhanden?", out, cap);
 }
 
 static int tool_wifi_off(const char *arg, char *out, size_t cap) {
     (void)arg;
-    const char *rfkill = find_rfkill();
-    if (!rfkill) {
-        snprintf(out, cap,
-            "WLAN-Steuerung nicht verfuegbar: 'rfkill' nicht gefunden "
-            "(auf QEMU ohne WLAN-Hardware kein rfkill vorhanden).");
-        return 1;
-    }
-    char cmd[256];
-    snprintf(cmd, sizeof(cmd), "%s block wifi 2>/dev/null", rfkill);
-    int rc = system(cmd);
-    if (rc == 0)
-        snprintf(out, cap, "WLAN ausgeschaltet.");
-    else
-        snprintf(out, cap,
-            "Fehler beim Ausschalten des WLANs (rfkill Rueckgabewert %d). "
-            "Kein WLAN-Hardware vorhanden?", rc);
-    return 1;
+    return rfkill_run("block wifi",
+        "WLAN-Steuerung nicht verfuegbar: 'rfkill' nicht gefunden "
+        "(auf QEMU ohne WLAN-Hardware kein rfkill vorhanden).",
+        "WLAN ausgeschaltet.",
+        "Fehler beim Ausschalten des WLANs (rfkill Rueckgabewert %d). "
+        "Kein WLAN-Hardware vorhanden?", out, cap);
 }
 
 /* ---- flight_mode_on / flight_mode_off -------------------------------- */
 
 static int tool_flight_mode_on(const char *arg, char *out, size_t cap) {
     (void)arg;
-    const char *rfkill = find_rfkill();
-    if (!rfkill) {
-        snprintf(out, cap,
-            "Flugmodus nicht verfuegbar: 'rfkill' nicht gefunden "
-            "(auf QEMU ohne Funk-Hardware kein rfkill vorhanden).");
-        return 1;
-    }
-    char cmd[256];
-    snprintf(cmd, sizeof(cmd), "%s block all 2>/dev/null", rfkill);
-    int rc = system(cmd);
-    if (rc == 0)
-        snprintf(out, cap,
-            "Flugmodus aktiviert (alle Funkschnittstellen gesperrt: WLAN, Bluetooth, Mobilfunk).");
-    else
-        snprintf(out, cap,
-            "Fehler beim Aktivieren des Flugmodus (rfkill Rueckgabewert %d).", rc);
-    return 1;
+    return rfkill_run("block all",
+        "Flugmodus nicht verfuegbar: 'rfkill' nicht gefunden "
+        "(auf QEMU ohne Funk-Hardware kein rfkill vorhanden).",
+        "Flugmodus aktiviert (alle Funkschnittstellen gesperrt: WLAN, Bluetooth, Mobilfunk).",
+        "Fehler beim Aktivieren des Flugmodus (rfkill Rueckgabewert %d).", out, cap);
 }
 
 static int tool_flight_mode_off(const char *arg, char *out, size_t cap) {
     (void)arg;
-    const char *rfkill = find_rfkill();
-    if (!rfkill) {
-        snprintf(out, cap,
-            "Flugmodus nicht verfuegbar: 'rfkill' nicht gefunden "
-            "(auf QEMU ohne Funk-Hardware kein rfkill vorhanden).");
-        return 1;
-    }
-    char cmd[256];
-    snprintf(cmd, sizeof(cmd), "%s unblock all 2>/dev/null", rfkill);
-    int rc = system(cmd);
-    if (rc == 0)
-        snprintf(out, cap,
-            "Flugmodus deaktiviert (alle Funkschnittstellen freigegeben).");
-    else
-        snprintf(out, cap,
-            "Fehler beim Deaktivieren des Flugmodus (rfkill Rueckgabewert %d).", rc);
-    return 1;
+    return rfkill_run("unblock all",
+        "Flugmodus nicht verfuegbar: 'rfkill' nicht gefunden "
+        "(auf QEMU ohne Funk-Hardware kein rfkill vorhanden).",
+        "Flugmodus deaktiviert (alle Funkschnittstellen freigegeben).",
+        "Fehler beim Deaktivieren des Flugmodus (rfkill Rueckgabewert %d).", out, cap);
 }
 
 /* ---- pin_set --------------------------------------------------------- */
