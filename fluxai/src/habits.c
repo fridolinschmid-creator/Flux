@@ -12,6 +12,7 @@
  */
 #include "habits.h"
 #include "provider.h"
+#include "proactive.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -158,21 +159,8 @@ void flux_habits_morning_briefing(const char *api_key, const char *model) {
     }
 
     /* Heutige Termine */
-    char cal_today[1024] = {0};
-    FILE *cf = fopen("/etc/flux/calendar.txt", "r");
-    if (cf) {
-        char line[256];
-        while (fgets(line, sizeof(line), cf)) {
-            if (line[0] == '#' || line[0] == '\n') continue;
-            if (strncmp(line, today, 10) == 0) {
-                size_t l = strlen(line);
-                while (l > 0 && (line[l-1]=='\n'||line[l-1]=='\r')) line[--l]='\0';
-                size_t cl = strlen(cal_today);
-                snprintf(cal_today + cl, sizeof(cal_today) - cl, "- %s\n", line + 11);
-            }
-        }
-        fclose(cf);
-    }
+    char cal_today[1024];
+    flux_calendar_today(today, cal_today, sizeof(cal_today));
 
     /* Gedaechtnis-Auszug (max 600 Zeichen) */
     char memory[640] = {0};
@@ -180,11 +168,8 @@ void flux_habits_morning_briefing(const char *api_key, const char *model) {
     if (mf) { size_t n = fread(memory, 1, sizeof(memory)-1, mf); memory[n]='\0'; fclose(mf); }
 
     /* Wetter */
-    char weather[120] = {0};
-    FILE *wf = fopen("/tmp/flux_weather.txt", "r");
-    if (wf) { if (!fgets(weather, sizeof(weather), wf)) weather[0]='\0'; fclose(wf); }
-    size_t wl = strlen(weather);
-    while (wl > 0 && (weather[wl-1]=='\n'||weather[wl-1]=='\r')) weather[--wl]='\0';
+    char weather[120];
+    flux_weather_read(weather, sizeof(weather));
 
     /* KI-Anfrage */
     char question[4096];

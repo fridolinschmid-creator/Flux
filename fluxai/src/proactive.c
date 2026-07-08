@@ -116,6 +116,34 @@ const char *flux_proactive_weather_hint(const char *weather) {
     return NULL;
 }
 
+/* ---- Geteilte Kontext-Helfer (auch von habits.c/journal.c genutzt) --- */
+
+void flux_calendar_today(const char *today, char *out, size_t out_cap) {
+    out[0] = '\0';
+    FILE *cf = fopen(CALENDAR_PATH, "r");
+    if (!cf) return;
+    char line[256];
+    while (fgets(line, sizeof(line), cf)) {
+        if (line[0] == '#' || line[0] == '\n') continue;
+        if (strncmp(line, today, 10) != 0) continue;
+        size_t l = strlen(line);
+        while (l > 0 && (line[l-1] == '\n' || line[l-1] == '\r')) line[--l] = '\0';
+        size_t cl = strlen(out);
+        snprintf(out + cl, out_cap - cl, "- %s\n", line + 11);
+    }
+    fclose(cf);
+}
+
+void flux_weather_read(char *out, size_t out_cap) {
+    out[0] = '\0';
+    FILE *wf = fopen(WEATHER_CACHE, "r");
+    if (!wf) return;
+    if (!fgets(out, out_cap, wf)) out[0] = '\0';
+    fclose(wf);
+    size_t l = strlen(out);
+    while (l > 0 && (out[l-1] == '\n' || out[l-1] == '\r')) out[--l] = '\0';
+}
+
 void flux_proactive_check(const char *api_key, const char *model) {
     (void)model;
 
