@@ -4140,6 +4140,21 @@ static int tri_wave(int x, int period, int amp) {
 
 #define JOURNAL_ENTRY_H  72
 
+/* Geteilte Klemmlogik fuer den Journal-Scroll (Draw und main.c's
+ * journal_scroll muessen dieselbe Grenze verwenden -- siehe ui.h). */
+static int journal_clamp_scroll(const flux_fb_t *fb, int n, int scroll) {
+    int list_y = STATUSBAR_H + TITLE_AREA_H;
+    int list_h = fb->height - list_y - LIST_BACK_H;
+    int max_visible = list_h / JOURNAL_ENTRY_H;
+    if (scroll < 0) scroll = 0;
+    if (scroll > n - max_visible && n > max_visible) scroll = n - max_visible;
+    return scroll;
+}
+
+int flux_ui_journal_clamp_scroll(const flux_fb_t *fb, int n, int scroll) {
+    return journal_clamp_scroll(fb, n, scroll);
+}
+
 void flux_ui_draw_journal(flux_fb_t *fb, const char **names, int n,
                            int scroll, int selected) {
     flux_fb_clear(fb, COL_BG);
@@ -4163,8 +4178,7 @@ void flux_ui_draw_journal(flux_fb_t *fb, const char **names, int n,
 
     int y0 = list_y + 4;
     int max_visible = list_h / JOURNAL_ENTRY_H;
-    if (scroll < 0) scroll = 0;
-    if (scroll > n - max_visible && n > max_visible) scroll = n - max_visible;
+    scroll = journal_clamp_scroll(fb, n, scroll);
 
     for (int i = scroll; i < n && y0 + JOURNAL_ENTRY_H <= list_y + list_h; i++) {
         int ey = y0;

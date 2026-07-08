@@ -459,6 +459,13 @@ void flux_ui_draw_journal(flux_fb_t *fb, const char **names, int n,
 int flux_ui_journal_hit(const flux_fb_t *fb, int x, int y,
                         int n, int *back);
 
+/* Klemmt einen Scroll-Wert auf den gueltigen Bereich (dieselbe Geometrie
+ * wie flux_ui_draw_journal). main.c MUSS journal_scroll hierdurch
+ * schicken, bevor idx + journal_scroll zum Indizieren verwendet wird --
+ * sonst kann ein zu weit gescrollter, ungeklemmter Wert eine Out-of-
+ * Bounds-Indizierung in journal_names_buf[] erzeugen. */
+int flux_ui_journal_clamp_scroll(const flux_fb_t *fb, int n, int scroll);
+
 /* ---- Stimm-Entsperrung (zweiter Faktor nach PIN) ------------------- */
 
 /* Enrollment-Screen: zeigt Aufnahme-Anleitung und Status.

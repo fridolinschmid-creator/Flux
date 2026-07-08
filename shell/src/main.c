@@ -3084,12 +3084,12 @@ int main(void) {
                 continue;
             }
             if (ev.type == FLUX_EV_SWIPE_UP) {
-                journal_scroll++;
+                journal_scroll = flux_ui_journal_clamp_scroll(&fb, journal_n, journal_scroll + 1);
                 flux_ui_draw_journal(&fb, journal_names_p, journal_n, journal_scroll, -1);
                 continue;
             }
             if (ev.type == FLUX_EV_SWIPE_DOWN) {
-                if (journal_scroll > 0) journal_scroll--;
+                journal_scroll = flux_ui_journal_clamp_scroll(&fb, journal_n, journal_scroll - 1);
                 flux_ui_draw_journal(&fb, journal_names_p, journal_n, journal_scroll, -1);
                 continue;
             }
