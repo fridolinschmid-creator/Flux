@@ -38,11 +38,19 @@ void flux_ipc_send_raw(const char *request, char *out, size_t out_cap) {
         return;
     }
 
-    if (write(fd, request, strlen(request)) < 0) {
-        snprintf(out, out_cap, "Fehler beim Senden an fluxaid.");
-        LOGE("ipc: write() an fluxaid fehlgeschlagen: %s", strerror(errno));
-        close(fd);
-        return;
+    /* Schleife bis alles geschrieben ist -- ein Stream-Socket darf bei
+     * grossen Requests (z.B. langer X:-Body) auch weniger als angefordert
+     * schreiben; ein einzelnes write() genuegt dafuer nicht. */
+    size_t req_len = strlen(request), sent = 0;
+    while (sent < req_len) {
+        ssize_t w = write(fd, request + sent, req_len - sent);
+        if (w < 0) {
+            snprintf(out, out_cap, "Fehler beim Senden an fluxaid.");
+            LOGE("ipc: write() an fluxaid fehlgeschlagen: %s", strerror(errno));
+            close(fd);
+            return;
+        }
+        sent += (size_t)w;
     }
 
     /* Schleife bis vollstaendige Antwort (endet mit "\nEND\n") vorliegt.

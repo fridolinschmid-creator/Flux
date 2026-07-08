@@ -340,6 +340,28 @@ static int extract_text(const char *json, api_format_t fmt, char *out, size_t ou
     return 0;
 }
 
+/* Haengt den Gespraechsverlauf (falls use_ctx) und die finale Nutzerfrage
+ * als "user"/"assistant"-Nachrichten an body an. Fuer FMT_ANTHROPIC und
+ * FMT_OPENAI/FMT_LOCAL identisch -- nur der vorangehende system-Block
+ * unterscheidet sich zwischen den beiden Formaten. */
+static void append_ctx_and_final(char *body, size_t cap, int use_ctx, const char *final_q) {
+    if (use_ctx) {
+        for (int i = 0; i < ctx_n; i++) {
+            strncat(body, "{\"role\":\"user\",\"content\":\"",
+                    cap - strlen(body) - 1);
+            json_escape_append(body, cap, ctx_history[i].q);
+            strncat(body, "\"},{\"role\":\"assistant\",\"content\":\"",
+                    cap - strlen(body) - 1);
+            json_escape_append(body, cap, ctx_history[i].a);
+            strncat(body, "\"},", cap - strlen(body) - 1);
+        }
+    }
+    strncat(body, "{\"role\":\"user\",\"content\":\"",
+            cap - strlen(body) - 1);
+    json_escape_append(body, cap, final_q);
+    strncat(body, "\"}]}", cap - strlen(body) - 1);
+}
+
 /* Baut den Request-Body fuer das jeweilige Format und sendet ihn.
  * Gibt 1 bei Erfolg. */
 static int api_call(const flux_provider_def_t *prov, const char *api_key,
@@ -362,22 +384,7 @@ static int api_call(const flux_provider_def_t *prov, const char *api_key,
         json_escape_append(body, sizeof(body), system_prompt);
         strncat(body, "\",\"cache_control\":{\"type\":\"ephemeral\"}}],"
                       "\"messages\":[", sizeof(body) - strlen(body) - 1);
-
-        if (use_ctx) {
-            for (int i = 0; i < ctx_n; i++) {
-                strncat(body, "{\"role\":\"user\",\"content\":\"",
-                        sizeof(body) - strlen(body) - 1);
-                json_escape_append(body, sizeof(body), ctx_history[i].q);
-                strncat(body, "\"},{\"role\":\"assistant\",\"content\":\"",
-                        sizeof(body) - strlen(body) - 1);
-                json_escape_append(body, sizeof(body), ctx_history[i].a);
-                strncat(body, "\"},", sizeof(body) - strlen(body) - 1);
-            }
-        }
-        strncat(body, "{\"role\":\"user\",\"content\":\"",
-                sizeof(body) - strlen(body) - 1);
-        json_escape_append(body, sizeof(body), final_q);
-        strncat(body, "\"}]}", sizeof(body) - strlen(body) - 1);
+        append_ctx_and_final(body, sizeof(body), use_ctx, final_q);
     } else {
         /* OpenAI-kompatibel (FMT_OPENAI und FMT_LOCAL): system als erste Nachricht */
         snprintf(body, sizeof(body),
@@ -385,22 +392,7 @@ static int api_call(const flux_provider_def_t *prov, const char *api_key,
                  "{\"role\":\"system\",\"content\":\"", model);
         json_escape_append(body, sizeof(body), system_prompt);
         strncat(body, "\"},", sizeof(body) - strlen(body) - 1);
-
-        if (use_ctx) {
-            for (int i = 0; i < ctx_n; i++) {
-                strncat(body, "{\"role\":\"user\",\"content\":\"",
-                        sizeof(body) - strlen(body) - 1);
-                json_escape_append(body, sizeof(body), ctx_history[i].q);
-                strncat(body, "\"},{\"role\":\"assistant\",\"content\":\"",
-                        sizeof(body) - strlen(body) - 1);
-                json_escape_append(body, sizeof(body), ctx_history[i].a);
-                strncat(body, "\"},", sizeof(body) - strlen(body) - 1);
-            }
-        }
-        strncat(body, "{\"role\":\"user\",\"content\":\"",
-                sizeof(body) - strlen(body) - 1);
-        json_escape_append(body, sizeof(body), final_q);
-        strncat(body, "\"}]}", sizeof(body) - strlen(body) - 1);
+        append_ctx_and_final(body, sizeof(body), use_ctx, final_q);
     }
 
     char respbuf[16384];
