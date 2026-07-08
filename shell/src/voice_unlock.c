@@ -140,9 +140,12 @@ voice_unlock_result_t voice_unlock_enroll(char *out_msg, size_t msg_cap) {
         snprintf(out_msg, msg_cap, "Konnte Referenz nicht speichern (Schreibfehler).");
         return VOICE_UNLOCK_ERROR;
     }
-    fwrite(&fp, sizeof(fp), 1, f);
+    size_t wn = fwrite(&fp, sizeof(fp), 1, f);
     fclose(f);
-    chmod(VOICE_REF_PATH, 0600);
+    if (wn != 1 || chmod(VOICE_REF_PATH, 0600) != 0) {
+        snprintf(out_msg, msg_cap, "Konnte Referenz nicht speichern (Schreibfehler).");
+        return VOICE_UNLOCK_ERROR;
+    }
 
     snprintf(out_msg, msg_cap,
              "Stimme eingelernt. Bitte noch zweimal wiederholen fuer bessere "

@@ -147,6 +147,9 @@ int flux_config_set(const char *key, const char *value) {
         if (fwrite(plain, 1, strlen(plain), f) != strlen(plain)) rc = -1;
     }
     fclose(f);
-    chmod(path, 0600);
+    /* flux.conf enthaelt PIN-Hash/SMTP-Passwort/API-Keys -- ein
+     * fehlgeschlagenes chmod muss als Fehler gemeldet werden, sonst
+     * bleibt die Datei still lesbar fuer andere. */
+    if (chmod(path, 0600) != 0) rc = -1;
     return rc;
 }

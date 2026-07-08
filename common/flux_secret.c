@@ -8,6 +8,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
+#include <unistd.h>
 
 #define MAGIC      "FLUXSEC1"
 #define MAGIC_LEN  8
@@ -39,8 +40,10 @@ static int load_devkey(unsigned char key[KEY_LEN], int create) {
     if (!f) return 0;
     size_t n = fwrite(key, 1, KEY_LEN, f);
     fclose(f);
-    chmod(path, 0600);
-    return n == KEY_LEN;
+    /* Fehlgeschlagenes chmod wuerde den Device-Key lesbar fuer andere
+     * lassen -- dann lieber die Datei verwerfen als still unsicher weiterlaufen. */
+    if (n != KEY_LEN || chmod(path, 0600) != 0) { unlink(path); return 0; }
+    return 1;
 }
 
 /* Schluessel = SHA-256(devkey || /etc/machine-id). */
