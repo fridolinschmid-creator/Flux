@@ -41,6 +41,7 @@
 #include <sys/wait.h>
 #include <time.h>
 #include <limits.h>
+#include <pthread.h>
 
 /* ---- Uebergangs-Animation (Einblenden von unten) --------------------- */
 
@@ -302,6 +303,42 @@ static void save_call_log(const char *name, const char *number,
     }
     fclose(f);
     snprintf(status, status_cap, "Mitschnitt gespeichert: %s", path);
+}
+
+/* flux_ipc_ask() (ipc.c) blockiert synchron bis zu 5s auf die Antwort des
+ * Daemons -- bislang wurde die "denkt nach"-Blase genau EINMAL vor dem
+ * Aufruf gezeichnet und stand dann fuer die ganze Wartezeit still, obwohl
+ * ihr Shimmer-Balken eigentlich laufen soll (siehe flux_ui_draw_assistant,
+ * thinking-Zweig). Jetzt laeuft die Anfrage in einem Hintergrundthread,
+ * waehrend der Hauptthread die Animation mit ~30fps weiterzeichnet. */
+typedef struct {
+    const char *q;
+    char *out;
+    size_t out_cap;
+} ipc_ask_args_t;
+
+static void *ipc_ask_thread_fn(void *arg) {
+    ipc_ask_args_t *a = arg;
+    flux_ipc_ask(a->q, a->out, a->out_cap);
+    return NULL;
+}
+
+static void ipc_ask_animated(flux_fb_t *fb, const char *q, char *out, size_t out_cap,
+                             const char *last_q, const char *input_buf) {
+    ipc_ask_args_t args = { q, out, out_cap };
+    pthread_t tid;
+    if (pthread_create(&tid, NULL, ipc_ask_thread_fn, &args) != 0) {
+        /* Thread-Erstellung fehlgeschlagen -- synchron als Fallback, dann
+         * bleibt wenigstens die Funktion erhalten (nur ohne Animation). */
+        flux_ipc_ask(q, out, out_cap);
+        return;
+    }
+    for (;;) {
+        flux_ui_draw_assistant(fb, last_q, input_buf, "", 1);
+        struct timespec ts = { 0, 33000000 };
+        nanosleep(&ts, NULL);
+        if (pthread_tryjoin_np(tid, NULL) == 0) break;
+    }
 }
 
 /* Eingangsanimation der Einstellungen: die Zeilen fliegen nacheinander
@@ -1775,19 +1812,19 @@ int main(void) {
         fd_set rfds;
         FD_ZERO(&rfds);
         int maxfd = have_input ? flux_input_add_fds(&in, &rfds) : -1;
-        /* Wetter-Widget auf dem Home-Screen braucht einen fluessigen Takt
-         * fuer die Animation (siehe weather_anim.h); ausserhalb dieses
-         * einen Falls bleibt es bei der 1s-Sparschaltung. Nur aktiv, wenn
-         * der Assistant-Screen tatsaechlich den animierten Leer-Zustand
-         * zeigt -- sonst keine Kostenerhoehung im normalen Chat-/Tipp-Betrieb. */
-        int weather_tick = (screen == FLUX_SCREEN_ASSISTANT) &&
-                            flux_ui_assistant_weather_active(last_q, answer_buf, 0);
+        /* Der leere Assistant-Screen "atmet" (pulsierendes Logo, siehe
+         * ui.c) und zeigt ggf. das animierte Wetter-Widget -- beides
+         * braucht einen fluessigen Takt statt der 1s-Sparschaltung. Nur
+         * aktiv, wenn der Leer-Zustand tatsaechlich sichtbar ist, sonst
+         * keine Kostenerhoehung im normalen Chat-/Tipp-Betrieb. */
+        int idle_anim_tick = (screen == FLUX_SCREEN_ASSISTANT) &&
+                            flux_ui_assistant_idle_anim_active(last_q, answer_buf, 0);
         /* Waehrend der Aufnahme schneller ticken (~10 fps) fuer eine fluessige
          * Mikrofon-Animation, sonst 1 s (stromsparend). */
         struct timeval tv = (voice_active ||
                              (screen == FLUX_SCREEN_CALL && call_connected))
                                 ? (struct timeval){ 0, 100000 }
-                             : weather_tick
+                             : idle_anim_tick
                                 ? (struct timeval){ 0, 33000 }
                                 : (struct timeval){ 1, 0 };
         int ready = (maxfd >= 0) ? select(maxfd + 1, &rfds, NULL, NULL, &tv) : (sleep(1), 0);
@@ -1832,8 +1869,8 @@ int main(void) {
                     if (voice_active) { flux_voice_cancel(); voice_active = 0; }
                     screen = FLUX_SCREEN_LOCK;
                     flux_ui_draw_lock(&fb);
-                } else if (weather_tick) {
-                    /* Naechster Animationsframe des Wetter-Widgets --
+                } else if (idle_anim_tick) {
+                    /* Naechster Frame von Logo-Puls + Wetter-Widget --
                      * Auto-Sperre bleibt oben unveraendert wirksam. */
                     flux_ui_draw_assistant(&fb, last_q, input_buf, answer_buf, 0);
                 }
@@ -3778,8 +3815,7 @@ int main(void) {
             }
 
             snprintf(last_q, sizeof(last_q), "%s", input_buf);
-            flux_ui_draw_assistant(&fb, last_q, "", answer_buf, 1);
-            flux_ipc_ask(last_q, answer_buf, sizeof(answer_buf));
+            ipc_ask_animated(&fb, last_q, answer_buf, sizeof(answer_buf), last_q, "");
             input_buf[0] = '\0';
 
             /* Gespraechs-Transkription: Q&A in tagesaktuelle Datei speichern */

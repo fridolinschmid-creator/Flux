@@ -9,7 +9,7 @@ CC      := $(CROSS_COMPILE)gcc
 HARDEN_CFLAGS  := -fstack-protector-strong -fPIE -Wformat -Wformat-security
 HARDEN_LDFLAGS := -pie -Wl,-z,relro,-z,now
 CFLAGS  ?= -O2 -Wall -Wextra -std=gnu11 -D_GNU_SOURCE $(HARDEN_CFLAGS)
-LDFLAGS ?= -lm -lcrypto $(HARDEN_LDFLAGS)
+LDFLAGS ?= -lm -lcrypto -lpthread $(HARDEN_LDFLAGS)
 
 SRC := $(wildcard src/*.c) $(wildcard ../common/*.c)
 BIN := flux-shell

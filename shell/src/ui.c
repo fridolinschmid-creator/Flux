@@ -1296,8 +1296,11 @@ void flux_ui_draw_assistant(flux_fb_t *fb, const char *last_q,
             }
         }
 
-        /* Grosses Akzent-Logo: Funken-Symbol (KI) im Gradient-Kreis. */
-        int logo_r = 38;
+        /* Grosses Akzent-Logo: Funken-Symbol (KI) im Gradient-Kreis. Pulsiert
+         * leicht ("atmet") -- die KI soll auch ohne Wetterdaten praesent
+         * wirken, nicht nur ein Standbild sein (siehe Motion-System,
+         * docs/DESIGN.md: "lebendig, aber nie hektisch"). */
+        int logo_r = 38 + (int)(flux_pulse(flux_now_ms(), 3200) * 4.0f);
         int logo_cx = fb->width / 2;
         int logo_cy = center_y - 34;
         for (int dy = -logo_r; dy <= logo_r; dy++) {
@@ -1373,17 +1376,16 @@ void flux_ui_draw_assistant(flux_fb_t *fb, const char *last_q,
     flux_fb_present(fb);
 }
 
-/* Fuer main.c: soll die schnellere Idle-Redraw-Schleife laufen? Nur wenn
- * der Assistant-Screen tatsaechlich im Leer-Zustand mit einer laufenden
- * Wetteranimation zu sehen ist -- dieselbe Bedingung wie in
- * flux_ui_draw_assistant() selbst, hier zentral statt in main.c
- * dupliziert (sonst koennten beide Stellen auseinanderlaufen). */
-int flux_ui_assistant_weather_active(const char *last_q, const char *answer, int thinking) {
+/* Fuer main.c: soll die schnellere Idle-Redraw-Schleife laufen? Immer im
+ * Leer-Zustand des Assistant-Screens (die KI "atmet" dort ueber das
+ * pulsierende Logo, siehe flux_ui_draw_assistant) -- das Wetter-Widget
+ * haengt sich, wenn Daten da sind, an denselben Takt an. Dieselbe
+ * Bedingung wie in flux_ui_draw_assistant() selbst, hier zentral statt in
+ * main.c dupliziert (sonst koennten beide Stellen auseinanderlaufen). */
+int flux_ui_assistant_idle_anim_active(const char *last_q, const char *answer, int thinking) {
     if ((last_q && *last_q) || thinking || (answer && *answer) || flux_ui_kbd_is_open())
         return 0;
-    char wline[160] = {0};
-    if (!read_weather_cache(wline, sizeof(wline))) return 0;
-    return flux_weather_anim_active(flux_weather_classify(wline));
+    return 1;
 }
 
 int flux_ui_mic_hit(const flux_fb_t *fb, int x, int y) {
