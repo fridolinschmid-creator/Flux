@@ -19,6 +19,7 @@
 #include "input.h"
 #include "ipc.h"
 #include "ui.h"
+#include "browser_render.h"
 #include "action.h"
 #include "camera.h"
 #include "voice.h"
@@ -1063,12 +1064,11 @@ static const char *habits_p[HABITS_MAX];
 static int         habits_n    = 0;
 static int         habits_scroll = 0;
 
-/* Text-Browser: aktuelle Seite + Adressfeld. browser_url ist die vom
- * letzten browser_open/click zurueckgegebene Adresse (fuer die Anzeige
- * im Adressfeld, wenn nicht gerade getippt wird), browser_body der von
- * fluxaid bereits zu Text umgewandelte Seiteninhalt. */
+/* Browser: aktuelle Seite + Adressfeld. Der Seiteninhalt selbst (Layout,
+ * Bilder, ...) lebt in browser_render.cpp/litehtml -- main.c haelt nur
+ * die Navigation (aktuelle Adresse/Titel/Fehlermeldung) und den
+ * Scroll-Zustand. */
 static char browser_url[256]   = {0};
-static char browser_body[4096] = {0};
 static char browser_input[256] = {0};
 static int  browser_scroll     = 0;
 /* Besuchsprotokoll dieser Browser-Sitzung (fuer die Aktivitaets-
@@ -1079,22 +1079,6 @@ static int     browser_visit_n = 0;
 static time_t  browser_last_shot_t = 0;
 
 #define BROWSER_SHOTS_DIR "/home/user/Journal/browser_shots"
-
-/* Liest die Adresse aus der zweiten Zeile der browser_open/click-Antwort
- * (Format "# Titel\n(URL)\n\n...", siehe fluxai/src/browser.c render_page())
- * fuer die Anzeige im Adressfeld. */
-static void extract_browser_url(const char *answer, char *out, size_t cap) {
-    out[0] = '\0';
-    const char *nl = strchr(answer, '\n');
-    if (!nl) return;
-    const char *op = strchr(nl, '(');
-    const char *cl = op ? strchr(op, ')') : NULL;
-    if (!op || !cl || cl <= op + 1) return;
-    size_t len = (size_t)(cl - op - 1);
-    if (len >= cap) len = cap - 1;
-    memcpy(out, op + 1, len);
-    out[len] = '\0';
-}
 
 /* Speichert alle 5s einen Screenshot + Eintrag im Sitzungsprotokoll,
  * solange der Browser-Screen offen ist (aufgerufen bei jedem Idle-Tick
@@ -1584,8 +1568,7 @@ static void redraw_current_screen(flux_fb_t *fb, flux_screen_t screen,
             flux_ui_draw_search(fb, search_query, search_results_p,
                                 search_n, search_searching); break;
         case FLUX_SCREEN_BROWSER:
-            flux_ui_draw_browser(fb, browser_url, browser_body,
-                                 browser_input, browser_scroll); break;
+            flux_ui_draw_browser(fb, browser_url, browser_input, browser_scroll); break;
         case FLUX_SCREEN_JOURNAL:
             flux_ui_draw_journal(fb, journal_names_p, journal_n, journal_scroll, -1); break;
         case FLUX_SCREEN_VOICE_ENROLL:
@@ -3548,24 +3531,41 @@ int main(void) {
                 continue;
             }
 
-            int do_nav = 0;
+            int do_open = 0;   /* Adressfeld -> flux_browser_render_open() */
+            int click_idx = -1; /* Link angetippt -> flux_browser_render_click() */
 
             if (ev.type == FLUX_EV_TAP) {
-                int br_go, br_scroll;
-                flux_ui_browser_hit(&fb, ev.x, ev.y, &br_go, &br_scroll);
+                int br_go, br_back, br_link, br_scroll;
+                flux_ui_browser_hit(&fb, ev.x, ev.y, browser_scroll,
+                                    &br_go, &br_back, &br_link, &br_scroll);
                 if (br_go) {
-                    do_nav = browser_input[0] != '\0';
+                    do_open = browser_input[0] != '\0';
+                } else if (br_back) {
+                    browser_end_session();
+                    uint32_t *old = capture_frame(&fb);
+                    screen = FLUX_SCREEN_ASSISTANT;
+                    flux_ui_draw_assistant(&fb, last_q, input_buf, answer_buf, 0);
+                    animate_slide_from_left(&fb, old);
+                    free(old);
+                    continue;
+                } else if (br_link >= 0) {
+                    click_idx = br_link;
                 } else if (br_scroll) {
+                    int max_scroll = flux_browser_render_height() - flux_ui_browser_content_height(&fb);
+                    if (max_scroll < 0) max_scroll = 0;
                     browser_scroll += br_scroll;
                     if (browser_scroll < 0) browser_scroll = 0;
+                    if (browser_scroll > max_scroll) browser_scroll = max_scroll;
                 } else {
                     char tap_ch = 0; int tap_bs = 0, tap_enter = 0;
-                    if (flux_ui_kbd_hit(&fb, ev.x, ev.y, &tap_ch, &tap_bs, &tap_enter)) {
+                    if (flux_ui_browser_input_hit(&fb, ev.x, ev.y)) {
+                        flux_ui_set_kbd_open(1);
+                    } else if (flux_ui_kbd_hit(&fb, ev.x, ev.y, &tap_ch, &tap_bs, &tap_enter)) {
                         if (tap_bs) {
                             size_t l = strlen(browser_input);
                             if (l > 0) browser_input[l-1] = '\0';
                         } else if (tap_enter) {
-                            do_nav = browser_input[0] != '\0';
+                            do_open = browser_input[0] != '\0';
                         } else if (tap_ch) {
                             size_t l = strlen(browser_input);
                             if (l + 1 < sizeof(browser_input)) {
@@ -3585,32 +3585,33 @@ int main(void) {
                 size_t l = strlen(browser_input);
                 if (l > 0) browser_input[l-1] = '\0';
             } else if (ev.type == FLUX_EV_ENTER) {
-                do_nav = browser_input[0] != '\0';
+                do_open = browser_input[0] != '\0';
+            } else if (ev.type == FLUX_EV_SWIPE_DOWN && flux_ui_kbd_is_open()) {
+                flux_ui_set_kbd_open(0);
             }
 
-            if (do_nav) {
-                /* Reine Ziffern -> Link-Klick (wie bei Lynx: Nummer statt
-                 * einzelne Links antippen), sonst URL oeffnen. */
-                int is_digits = browser_input[0] != '\0';
-                for (const char *c = browser_input; *c; c++)
-                    if (*c < '0' || *c > '9') { is_digits = 0; break; }
-
-                char q[300];
-                snprintf(q, sizeof(q), "%s%s",
-                        is_digits ? "__flux_browser_click__ " : "__flux_browser_open__ ",
-                        browser_input);
-
-                char resp[FLUX_MAX_RESPONSE] = {0};
-                flux_ipc_ask(q, resp, sizeof(resp));
-                snprintf(browser_body, sizeof(browser_body), "%s", resp);
-                extract_browser_url(resp, browser_url, sizeof(browser_url));
+            if (do_open || click_idx >= 0) {
+                char resolved[256] = {0}, title[256] = {0}, err[128] = {0};
+                int rc = do_open
+                    ? flux_browser_render_open(browser_input, fb.width,
+                                               resolved, sizeof(resolved), title, sizeof(title),
+                                               err, sizeof(err))
+                    : flux_browser_render_click(click_idx, fb.width,
+                                                resolved, sizeof(resolved), title, sizeof(title),
+                                                err, sizeof(err));
+                flux_ui_set_kbd_open(0);
                 browser_input[0] = '\0';
                 browser_scroll = 0;
-                browser_last_shot_t = 0; /* sofortiger Schnappschuss der neuen Seite */
-                browser_maybe_snapshot(&fb, browser_url);
+                if (rc == 0) {
+                    snprintf(browser_url, sizeof(browser_url), "%s", resolved);
+                    browser_last_shot_t = 0; /* sofortiger Schnappschuss der neuen Seite */
+                    browser_maybe_snapshot(&fb, browser_url);
+                } else {
+                    LOGE("browser: %s", err);
+                }
             }
 
-            flux_ui_draw_browser(&fb, browser_url, browser_body, browser_input, browser_scroll);
+            flux_ui_draw_browser(&fb, browser_url, browser_input, browser_scroll);
             continue;
         }
 
@@ -4033,7 +4034,7 @@ int main(void) {
                 browser_input[0] = '\0';
                 uint32_t *old = capture_frame(&fb);
                 screen = FLUX_SCREEN_BROWSER;
-                flux_ui_draw_browser(&fb, browser_url, browser_body, browser_input, browser_scroll);
+                flux_ui_draw_browser(&fb, browser_url, browser_input, browser_scroll);
                 animate_slide_in(&fb, old);
                 free(old);
                 continue;

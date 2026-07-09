@@ -206,28 +206,28 @@ void flux_ui_draw_file_viewer(flux_fb_t *fb, const char *path,
 int flux_ui_viewer_hit(const flux_fb_t *fb, int x, int y,
                        int *scroll_delta, int *back, int *ai);
 
-/* ---- Text-Browser ----------------------------------------------------
- * Kein grafischer Browser (kein JS/Bilder/CSS-Layout) -- siehe
- * fluxai/src/browser.c fuer die Begruendung. url: Adresse der geladenen
- * Seite (leer wenn noch keine geladen). body: von fluxaid bereits zu
- * Text umgewandelter Seiteninhalt mit "[n]"-Link-Markern. input: aktuell
- * getippter Text im Adressfeld (URL oder Link-Nummer). */
-void flux_ui_draw_browser(flux_fb_t *fb, const char *url, const char *body,
-                          const char *input, int scroll);
+/* ---- Browser (echtes HTML/CSS-Rendering, siehe browser_render.h) -----
+ * url: Adresse der geladenen Seite (leer wenn noch keine geladen). input:
+ * aktuell getippter Text im Adressfeld. Der eigentliche Seiteninhalt wird
+ * intern per flux_browser_render_draw() gezeichnet -- main.c haelt nur
+ * die Navigation (open/click), nicht den Seiteninhalt selbst. */
+void flux_ui_draw_browser(flux_fb_t *fb, const char *url, const char *input, int scroll);
 
 /* Tap auf das Adressfeld (oeffnet die Tastatur, wie beim Assistant-Screen). */
 int flux_ui_browser_input_hit(const flux_fb_t *fb, int x, int y);
 
-/* *go: "Los"-Knopf neben dem Adressfeld getroffen. *scroll_delta: Zeilen
- * hoch/runter beim Tippen in die obere/untere Haelfte des Seiteninhalts.
- * Tastatur ist immer sichtbar (wie flux_ui_draw_search) -- der Screen wird
- * per Wisch nach links verlassen, kein *back hier. */
-int flux_ui_browser_hit(const flux_fb_t *fb, int x, int y,
-                        int *go, int *scroll_delta);
+/* *go: "Los"-Knopf getroffen. *back: untere Leiste (nur wenn Tastatur zu).
+ * *link_idx: Tap traf einen Link auf der Seite (Index fuer
+ * flux_browser_render_click(), sonst -1). *scroll_delta: sonst Tap in
+ * obere/untere Haelfte des Inhaltsbereichs. scroll ist der aktuelle
+ * Scroll-Zustand (fuer die Link-Trefferpruefung noetig). */
+int flux_ui_browser_hit(const flux_fb_t *fb, int x, int y, int scroll,
+                        int *go, int *back, int *link_idx, int *scroll_delta);
 
-/* Anzahl sichtbarer Textzeilen im Body-Bereich -- main.c braucht das fuer
- * die Scroll-Begrenzung (dieselbe Geometrie wie flux_ui_draw_browser). */
-int flux_ui_browser_visible_lines(const flux_fb_t *fb);
+/* Pixel-Hoehe des sichtbaren Inhaltsbereichs (zwischen Adressfeld und
+ * Tastatur/unterer Leiste) -- zusammen mit flux_browser_render_height()
+ * (browser_render.h) kann main.c damit den Scroll-Bereich begrenzen. */
+int flux_ui_browser_content_height(const flux_fb_t *fb);
 
 /* ---- Loeschen-Knopf in der Dateien-Ansicht -------------------------
  * Sichtbar wenn selected_idx >= 0. Gibt 1 wenn der Loeschen-Knopf

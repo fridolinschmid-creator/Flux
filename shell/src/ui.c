@@ -2,6 +2,7 @@
 #include "icons.h"
 #include "anim.h"
 #include "weather_anim.h"
+#include "browser_render.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -2250,30 +2251,26 @@ int flux_ui_viewer_hit(const flux_fb_t *fb, int x, int y,
     return 0;
 }
 
-/* ---- Text-Browser ------------------------------------------------------
- * Kein grafischer Browser -- siehe fluxai/src/browser.c fuer die
- * Begruendung (kein X11/GPU auf dem Zielsystem). Layout lehnt sich an
- * flux_ui_draw_search() (Adressfeld oben) und flux_ui_draw_file_viewer()
- * (scrollbarer Textkoerper, obere/untere Bildschirmhaelfte zum Scrollen)
- * an -- dieselbe Geometrie fuer Draw UND Hit-Test, wie ueberall sonst. */
+/* ---- Browser (echtes HTML/CSS-Rendering via litehtml) -----------------
+ * Die Zeichenkomplexitaet (Layout, Schrift, Bilder) steckt komplett in
+ * browser_render.cpp/litehtml -- flux_ui_draw_browser() zeichnet nur den
+ * Chrome (Adressfeld) und ruft flux_browser_render_draw() fuer den
+ * Seiteninhalt auf. Adressfeld-Layout wie flux_ui_draw_search(), Tastatur
+ * aber als Toggle (wie der Assistant-Screen) statt dauerhaft sichtbar --
+ * eine geladene Seite braucht die volle Bildschirmhoehe zum Lesen. */
 #define BROWSER_INPUT_H  56
 #define BROWSER_GO_W     56
 
-static int browser_text_top(void) { return STATUSBAR_H + 8 + BROWSER_INPUT_H + 10; }
+static int browser_content_top(void) { return STATUSBAR_H + 8 + BROWSER_INPUT_H + 8; }
 
-/* Wie flux_ui_draw_search(): Tastatur ist immer sichtbar (kein Toggle),
- * Verlassen des Screens per Wisch nach links statt Zurueck-Leiste --
- * fuer eine Adresszeile, die man fast immer gleich wieder antippt, ist
- * das der kuerzere Weg und spart eine Kbd-open/close-Zustandsmaschine. */
-int flux_ui_browser_visible_lines(const flux_fb_t *fb) {
-    int top = browser_text_top();
-    int bottom = flux_ui_kbd_top(fb) - 4;
-    int avail = (bottom - top) / VIEWER_LINE_H;
-    return avail > 0 ? avail : 0;
+int flux_ui_browser_content_height(const flux_fb_t *fb) {
+    int top = browser_content_top();
+    int bottom = flux_ui_kbd_is_open() ? flux_ui_kbd_top(fb) - 4 : fb->height - LIST_BACK_H - 4;
+    int h = bottom - top;
+    return h > 0 ? h : 0;
 }
 
-void flux_ui_draw_browser(flux_fb_t *fb, const char *url, const char *body,
-                          const char *input, int scroll) {
+void flux_ui_draw_browser(flux_fb_t *fb, const char *url, const char *input, int scroll) {
     flux_fb_clear(fb, COL_BG);
     draw_statusbar(fb);
 
@@ -2295,7 +2292,7 @@ void flux_ui_draw_browser(flux_fb_t *fb, const char *url, const char *body,
         flux_fb_text(fb, 20, iy + (BROWSER_INPUT_H - 16) / 2, disp, COL_TEXT_MUTED, 2);
     } else {
         flux_fb_text(fb, 20, iy + (BROWSER_INPUT_H - 16) / 2,
-                     "Adresse oder Link-Nr. eingeben...", COL_DIM, 2);
+                     "Adresse eingeben, z.B. \"wikipedia.org\"...", COL_DIM, 2);
     }
 
     /* "Los"-Knopf */
@@ -2305,43 +2302,23 @@ void flux_ui_draw_browser(flux_fb_t *fb, const char *url, const char *body,
     flux_icon_draw(fb, FLUX_ICON_CHEVRON_RIGHT, go_x + BROWSER_GO_W / 2,
                    iy + BROWSER_INPUT_H / 2, 22, 0xFFFFFF);
 
-    int text_top = browser_text_top();
-    int text_bottom = flux_ui_kbd_top(fb) - 4;
-    int avail_lines = (text_bottom - text_top) / VIEWER_LINE_H;
+    int content_top = browser_content_top();
+    int kbd_open = flux_ui_kbd_is_open();
+    int content_bottom = kbd_open ? flux_ui_kbd_top(fb) - 4 : fb->height - LIST_BACK_H - 4;
 
-    if (body && body[0]) {
-        const char *p = body;
-        int cur_line = 0, visible = 0;
-        while (*p && visible < avail_lines) {
-            const char *eol = p;
-            while (*eol && *eol != '\n') eol++;
-            if (cur_line >= scroll) {
-                char linebuf[256];
-                size_t len = (size_t)(eol - p);
-                if (len >= sizeof(linebuf)) len = sizeof(linebuf) - 1;
-                memcpy(linebuf, p, len);
-                linebuf[len] = '\0';
-                flux_fb_text(fb, 12, text_top + visible * VIEWER_LINE_H,
-                             linebuf, COL_TEXT, 2);
-                visible++;
-            }
-            cur_line++;
-            if (*eol) eol++;
-            p = eol;
-            if (!*p) break;
-        }
+    if (url && url[0]) {
+        /* Weisser Seitenuntergrund -- die meisten echten Webseiten setzen
+         * einen hellen Hintergrund voraus (viele Seiten setzen ihn gar
+         * nicht explizit und verlassen sich auf den Browser-Standard). */
+        flux_fb_fill_rect(fb, 0, content_top, fb->width, content_bottom - content_top, 0xFFFFFF);
+        flux_browser_render_draw(fb, content_top, content_bottom, scroll);
     } else {
-        flux_fb_text(fb, 16, text_top + 12,
+        flux_fb_text(fb, 16, content_top + 12,
                      "Gib eine Adresse ein, z.B. \"wikipedia.org\".", COL_DIM, 2);
     }
 
-    if (scroll > 0) {
-        const char *up = "^ Hoch";
-        flux_fb_text(fb, fb->width - flux_fb_text_width(up, 2) - 12,
-                     text_bottom - 20, up, COL_DIM, 2);
-    }
-
-    draw_keyboard(fb);
+    if (kbd_open) draw_keyboard(fb);
+    else draw_back_bar(fb, "Zurück");
     flux_fb_present(fb);
 }
 
@@ -2351,14 +2328,16 @@ int flux_ui_browser_input_hit(const flux_fb_t *fb, int x, int y) {
     return (x >= 8 && x < 8 + field_w && y >= iy && y < iy + BROWSER_INPUT_H);
 }
 
-/* *go: "Los"-Knopf getroffen. *scroll_delta: Tap in die obere/untere
- * Haelfte des Seitenbereichs (zwischen Adressfeld und Tastatur). Die
- * Tastatur selbst wird von flux_ui_kbd_hit() behandelt; den Screen
- * verlaesst man per Wisch nach links (siehe main.c), daher kein *back
- * hier. */
-int flux_ui_browser_hit(const flux_fb_t *fb, int x, int y,
-                        int *go, int *scroll_delta) {
-    *go = 0; *scroll_delta = 0;
+/* *go: "Los"-Knopf getroffen. *link_idx: Tap traf einen Link auf der
+ * geladenen Seite (Index fuer flux_browser_render_click(), sonst -1).
+ * *scroll_delta: sonst Tap in obere/untere Haelfte des Inhaltsbereichs.
+ * scroll ist der aktuelle Scroll-Zustand (fuer die Link-Trefferpruefung
+ * in Dokumentkoordinaten noetig, siehe flux_browser_render_link_at).
+ * Tastatur wird von flux_ui_kbd_hit() behandelt, untere Leiste nur wenn
+ * Tastatur zu -- dieselbe Geometrie wie flux_ui_draw_browser(). */
+int flux_ui_browser_hit(const flux_fb_t *fb, int x, int y, int scroll,
+                        int *go, int *back, int *link_idx, int *scroll_delta) {
+    *go = 0; *back = 0; *link_idx = -1; *scroll_delta = 0;
     int iy = STATUSBAR_H + 8;
     int field_w = fb->width - 16 - BROWSER_GO_W - 8;
     int go_x = 8 + field_w + 8;
@@ -2366,12 +2345,19 @@ int flux_ui_browser_hit(const flux_fb_t *fb, int x, int y,
         *go = 1;
         return 1;
     }
-    int text_top = browser_text_top();
-    int text_bottom = flux_ui_kbd_top(fb) - 4;
-    if (y < text_top || y >= text_bottom) return 0; /* Tastatur o.ae. */
-    int mid = text_top + (text_bottom - text_top) / 2;
-    if (y < mid - 20) { *scroll_delta = -3; return 1; }
-    if (y > mid + 20) { *scroll_delta =  3; return 1; }
+    if (flux_ui_kbd_is_open()) return 0; /* von flux_ui_kbd_hit() behandelt */
+    if (y >= fb->height - LIST_BACK_H) { *back = 1; return 1; }
+
+    int content_top = browser_content_top();
+    int content_bottom = fb->height - LIST_BACK_H - 4;
+    if (y < content_top || y >= content_bottom) return 0;
+
+    int link = flux_browser_render_link_at(x, y, content_top, scroll);
+    if (link >= 0) { *link_idx = link; return 1; }
+
+    int mid = content_top + (content_bottom - content_top) / 2;
+    if (y < mid - 20) { *scroll_delta = -3 * VIEWER_LINE_H; return 1; }
+    if (y > mid + 20) { *scroll_delta =  3 * VIEWER_LINE_H; return 1; }
     return 0;
 }
 

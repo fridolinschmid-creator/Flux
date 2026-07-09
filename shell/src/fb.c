@@ -264,10 +264,9 @@ static void blit_glyph(flux_fb_t *fb, const glyph_entry_t *g, int gx, int gy, ui
     }
 }
 
-void flux_fb_text(flux_fb_t *fb, int x, int y, const char *s, uint32_t rgb, int scale) {
+void flux_fb_text_px(flux_fb_t *fb, int x, int y, const char *s, uint32_t rgb, int px) {
     font_init();
     if (!g_font_ready || !s) return;
-    int px = (int)(font_px_for_scale(scale) + 0.5f);
     float sf = stbtt_ScaleForPixelHeight(&g_font, (float)px);
     int asc, desc, gap; stbtt_GetFontVMetrics(&g_font, &asc, &desc, &gap);
     int baseline = y + (int)(asc * sf + 0.5f);
@@ -286,10 +285,9 @@ void flux_fb_text(flux_fb_t *fb, int x, int y, const char *s, uint32_t rgb, int 
     }
 }
 
-int flux_fb_text_width(const char *s, int scale) {
+int flux_fb_text_width_px(const char *s, int px) {
     font_init();
     if (!g_font_ready || !s) return 0;
-    int px = (int)(font_px_for_scale(scale) + 0.5f);
     float sf = stbtt_ScaleForPixelHeight(&g_font, (float)px);
     float w = 0.0f;
     const unsigned char *p = (const unsigned char *)s;
@@ -302,6 +300,29 @@ int flux_fb_text_width(const char *s, int scale) {
         prev = cp;
     }
     return (int)(w + 0.5f);
+}
+
+/* Font-Metriken (Aufstieg/Abstieg in Pixeln bei gegebener Pixelhoehe) --
+ * fuer litehtml's create_font()/font_metrics (siehe browser_render.cpp). */
+void flux_fb_font_metrics_px(int px, int *ascent, int *descent, int *line_gap) {
+    font_init();
+    if (!g_font_ready) { *ascent = px; *descent = 0; *line_gap = 0; return; }
+    int asc, desc, gap;
+    stbtt_GetFontVMetrics(&g_font, &asc, &desc, &gap);
+    float sf = stbtt_ScaleForPixelHeight(&g_font, (float)px);
+    *ascent   = (int)(asc  * sf + 0.5f);
+    *descent  = (int)(-desc * sf + 0.5f);
+    *line_gap = (int)(gap  * sf + 0.5f);
+}
+
+void flux_fb_text(flux_fb_t *fb, int x, int y, const char *s, uint32_t rgb, int scale) {
+    int px = (int)(font_px_for_scale(scale) + 0.5f);
+    flux_fb_text_px(fb, x, y, s, rgb, px);
+}
+
+int flux_fb_text_width(const char *s, int scale) {
+    int px = (int)(font_px_for_scale(scale) + 0.5f);
+    return flux_fb_text_width_px(s, px);
 }
 
 /* ---- Erweiterte Primitive --------------------------------------------- */

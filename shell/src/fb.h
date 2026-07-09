@@ -30,6 +30,13 @@ void flux_fb_blend_rect(flux_fb_t *fb, int x, int y, int w, int h, uint32_t rgb,
 void flux_fb_text(flux_fb_t *fb, int x, int y, const char *s, uint32_t rgb, int scale);
 int  flux_fb_text_width(const char *s, int scale);
 
+/* Wie oben, aber mit exakter Pixelhoehe statt der festen scale-Stufen
+ * (1/2/3) -- fuer beliebige CSS-Schriftgroessen aus dem HTML-Renderer
+ * (siehe browser_render.cpp). ascent/descent/line_gap in Pixeln. */
+void flux_fb_text_px(flux_fb_t *fb, int x, int y, const char *s, uint32_t rgb, int px);
+int  flux_fb_text_width_px(const char *s, int px);
+void flux_fb_font_metrics_px(int px, int *ascent, int *descent, int *line_gap);
+
 /* Kopiert nur Zeilen, die sich seit dem letzten Aufruf geaendert haben. */
 void flux_fb_present(flux_fb_t *fb);
 
