@@ -39,6 +39,7 @@
 #include "specialists.h"
 #include "imap.h"
 #include "radio.h"
+#include "browser.h"
 #include "../../common/flux_config.h"
 #include "../../common/flux_sha256.h"
 #include "../../common/flux_util.h"
@@ -2291,6 +2292,8 @@ int flux_tool_exec(const char *name, const char *arg,
     if (strcmp(name, "mail_read")        == 0) return tool_mail_read(arg, out, out_cap);
     if (strcmp(name, "web_search")       == 0) return tool_web_search(arg, out, out_cap);
     if (strcmp(name, "news_search")      == 0) return tool_news_search(arg, out, out_cap);
+    if (strcmp(name, "browser_open")     == 0) return flux_browser_open(arg, out, out_cap);
+    if (strcmp(name, "browser_click")    == 0) return flux_browser_click(arg, out, out_cap);
     if (strcmp(name, "date_time")        == 0) return tool_date_time(arg, out, out_cap);
     if (strcmp(name, "weather")          == 0) return tool_weather(arg, out, out_cap);
     if (strcmp(name, "file_read")        == 0) return tool_file_read(arg, out, out_cap);
@@ -2403,6 +2406,8 @@ static const flux_tool_def_t TOOL_DEFS[] = {
     { "mail_read",       "Volltext einer E-Mail lesen.", "UID (aus mail_unread)", 1 },
     { "web_search",      "Im Internet suchen (aktuelle Infos/Fakten, allgemeine Anfragen).", "Suchbegriff", 1 },
     { "news_search",     "Aktuelle Nachrichten/Schlagzeilen zu einem Thema abrufen und zusammenfassen.", "Thema (z.B. 'Klimapolitik' oder 'Deutschland')", 1 },
+    { "browser_open",    "Eine Webseite oeffnen und als lesbaren Text mit nummerierten Links anzeigen (Text-Browser, kein JavaScript/Bilder).", "URL (z.B. 'wikipedia.org/wiki/Berlin')", 1 },
+    { "browser_click",   "Einem Link von der zuletzt geoeffneten Seite folgen (Nummer aus browser_open/browser_click).", "Link-Nummer, z.B. '3'", 1 },
 };
 static const int TOOL_DEFS_N = (int)(sizeof(TOOL_DEFS) / sizeof(TOOL_DEFS[0]));
 
