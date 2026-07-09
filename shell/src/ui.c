@@ -453,15 +453,19 @@ void flux_ui_draw_lock(flux_fb_t *fb) {
         }
     }
 
-    /* Wetter-Info mit Icon */
+    /* Wetter-Info mit animiertem Icon. Der Lock-Screen wird im Leerlauf
+     * bereits einmal pro Sekunde neu gezeichnet (Uhrzeit) -- die Animation
+     * laeuft also im bestehenden Redraw-Takt mit, ohne einen zusaetzlichen
+     * schnellen Timer und damit ohne Mehrverbrauch im Ruhezustand. */
     int lock_info_y = date_y + 26; /* Start-Y fuer Info-Chips unter Datum */
     {
         char wline[160] = {0};
         if (read_weather_cache(wline, sizeof(wline))) {
-            int wy = date_y + 30;
+            int wy = date_y + 26;
             weather_cond_t cond = flux_weather_classify(wline);
-            draw_weather_icon(fb, (fb->width - flux_fb_text_width(wline, 2)) / 2 - 36, wy, cond);
-            flux_fb_text(fb, (fb->width - flux_fb_text_width(wline, 2)) / 2, wy + 5, wline, COL_DIM, 2);
+            flux_weather_anim_draw(fb, (fb->width - flux_fb_text_width(wline, 2)) / 2 - 42,
+                                    wy, 36, 32, cond, flux_now_ms());
+            flux_fb_text(fb, (fb->width - flux_fb_text_width(wline, 2)) / 2, wy + 9, wline, COL_DIM, 2);
             lock_info_y = wy + 46;
         }
     }

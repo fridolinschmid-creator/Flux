@@ -164,6 +164,15 @@ int main(int argc, char *argv[]) {
     flux_ui_draw_lock(&fb);
     save_png(&fb, outdir, "01_lockscreen");
 
+    /* 01b -- Lockscreen mit animiertem Wetter-Widget */
+    {
+        FILE *wf = fopen("/tmp/flux_weather.txt", "w");
+        if (wf) { fprintf(wf, "Berlin: Regen, 14°C, 80%% Feuchte, Wind 12 km/h\n"); fclose(wf); }
+        flux_ui_draw_lock(&fb);
+        save_png(&fb, outdir, "01b_lockscreen_wetter");
+        remove("/tmp/flux_weather.txt");
+    }
+
     /* 02 -- PIN-Eingabe (2 von 4 Ziffern) */
     flux_ui_draw_pin(&fb, 2, 0);
     save_png(&fb, outdir, "02_pin");
