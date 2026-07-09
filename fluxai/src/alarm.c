@@ -16,6 +16,7 @@
 #include <string.h>
 #include <time.h>
 #include <unistd.h>
+#include <sys/file.h>
 
 #define ALARMS_FILE   "/tmp/flux_alarms.txt"
 #define TIMERS_FILE   "/tmp/flux_timers.txt"
@@ -29,6 +30,11 @@ static void append_trigger(const char *msg) {
 static int check_alarms(time_t now) {
     FILE *f = fopen(ALARMS_FILE, "r");
     if (!f) return 0;
+    /* notification.c prueft dieselbe Datei aus einem eigenen Thread --
+     * ohne Sperre koennte dessen fopen(ALARM_FILE,"w") mitten in unserer
+     * Lese-Schreib-Sequenz einschlagen und Alarme verlieren oder doppelt
+     * ausloesen. flock() haelt die gesamte Sequenz atomar. */
+    flock(fileno(f), LOCK_EX);
 
     char tmppath[128];
     snprintf(tmppath, sizeof(tmppath), "%s.tmp", ALARMS_FILE);
@@ -67,10 +73,11 @@ static int check_alarms(time_t now) {
         }
         fprintf(tf, "%s\n", line);
     }
-    fclose(f);
-    fclose(tf);
     if (triggered) rename(tmppath, ALARMS_FILE);
     else           remove(tmppath);
+    flock(fileno(f), LOCK_UN);
+    fclose(f);
+    fclose(tf);
     return triggered;
 }
 

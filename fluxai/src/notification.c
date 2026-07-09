@@ -25,6 +25,7 @@
 #include <unistd.h>
 #include <pthread.h>
 #include <sys/stat.h>
+#include <sys/file.h>
 
 #define NOTIF_MAX        10
 #define CHECK_INTERVAL   900   /* 15 Minuten in Sekunden */
@@ -173,6 +174,10 @@ static void check_birthdays(void) {
 static void check_alarms(void) {
     FILE *f = fopen(ALARM_FILE, "r");
     if (!f) return;
+    /* alarm.c prueft dieselbe Datei aus dem Hauptthread (alle 30s) --
+     * flock() verhindert, dass beide Seiten sich gegenseitig Eintraege
+     * ueberschreiben oder Alarme doppelt/gar nicht ausloesen. */
+    flock(fileno(f), LOCK_EX);
 
     time_t now = time(NULL);
     char kept[64][256]; int nkept = 0;
@@ -204,7 +209,6 @@ static void check_alarms(void) {
             snprintf(kept[nkept], sizeof(kept[nkept]), "%s", line); nkept++;
         }
     }
-    fclose(f);
 
     if (nring > 0) {
         /* Klingeldatei schreiben -- Shell liest diese und zeigt Vollbild */
@@ -226,6 +230,8 @@ static void check_alarms(void) {
             fclose(wf);
         }
     }
+    flock(fileno(f), LOCK_UN);
+    fclose(f);
 }
 
 /* ---- Thread ---------------------------------------------------------- */
