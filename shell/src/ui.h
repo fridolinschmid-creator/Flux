@@ -80,6 +80,12 @@ int flux_ui_pin_hit(const flux_fb_t *fb, int x, int y, char *out_digit, int *out
 void flux_ui_draw_assistant(flux_fb_t *fb, const char *last_q,
                               const char *input, const char *answer, int thinking);
 
+/* main.c: soll der schnellere Idle-Redraw-Takt fuer das Wetter-Widget
+ * laufen? Nur true im Leer-Zustand (kein last_q/answer/thinking/Tastatur)
+ * MIT vorhandenen, animierbaren Wetterdaten. Dieselbe Bedingung wie in
+ * flux_ui_draw_assistant() selbst -- zentral hier statt dupliziert. */
+int flux_ui_assistant_weather_active(const char *last_q, const char *answer, int thinking);
+
 int flux_ui_kbd_top(const flux_fb_t *fb);
 int flux_ui_kbd_hit(const flux_fb_t *fb, int x, int y,
                      char *out_ch, int *out_backspace, int *out_enter);

@@ -1775,11 +1775,20 @@ int main(void) {
         fd_set rfds;
         FD_ZERO(&rfds);
         int maxfd = have_input ? flux_input_add_fds(&in, &rfds) : -1;
+        /* Wetter-Widget auf dem Home-Screen braucht einen fluessigen Takt
+         * fuer die Animation (siehe weather_anim.h); ausserhalb dieses
+         * einen Falls bleibt es bei der 1s-Sparschaltung. Nur aktiv, wenn
+         * der Assistant-Screen tatsaechlich den animierten Leer-Zustand
+         * zeigt -- sonst keine Kostenerhoehung im normalen Chat-/Tipp-Betrieb. */
+        int weather_tick = (screen == FLUX_SCREEN_ASSISTANT) &&
+                            flux_ui_assistant_weather_active(last_q, answer_buf, 0);
         /* Waehrend der Aufnahme schneller ticken (~10 fps) fuer eine fluessige
          * Mikrofon-Animation, sonst 1 s (stromsparend). */
         struct timeval tv = (voice_active ||
                              (screen == FLUX_SCREEN_CALL && call_connected))
                                 ? (struct timeval){ 0, 100000 }
+                             : weather_tick
+                                ? (struct timeval){ 0, 33000 }
                                 : (struct timeval){ 1, 0 };
         int ready = (maxfd >= 0) ? select(maxfd + 1, &rfds, NULL, NULL, &tv) : (sleep(1), 0);
 
@@ -1823,6 +1832,10 @@ int main(void) {
                     if (voice_active) { flux_voice_cancel(); voice_active = 0; }
                     screen = FLUX_SCREEN_LOCK;
                     flux_ui_draw_lock(&fb);
+                } else if (weather_tick) {
+                    /* Naechster Animationsframe des Wetter-Widgets --
+                     * Auto-Sperre bleibt oben unveraendert wirksam. */
+                    flux_ui_draw_assistant(&fb, last_q, input_buf, answer_buf, 0);
                 }
             }
             /* Spracheingabe: animierten Aufnahme-Indikator weiterzeichnen */

@@ -1,6 +1,7 @@
 #include "ui.h"
 #include "icons.h"
 #include "anim.h"
+#include "weather_anim.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -86,13 +87,11 @@ static void draw_setting_icon(flux_fb_t *fb, int icon, int cx, int cy, int s, ui
 static void fill_round_rect(flux_fb_t *fb, int x, int y, int w, int h, int r, uint32_t col);
 static void draw_thick_line(flux_fb_t *fb, int x0, int y0, int x1, int y1, int t, uint32_t col);
 
-/* Wetter-Typen -- Deklaration vor draw_lock (Implementierung weiter unten). */
-typedef enum {
-    WCOND_SUNNY = 0, WCOND_PARTLY_CLOUDY, WCOND_CLOUDY,
-    WCOND_RAINY, WCOND_SNOWY, WCOND_STORMY, WCOND_FOGGY, WCOND_UNKNOWN,
-} weather_cond_t;
-static weather_cond_t classify_weather(const char *desc);
+/* Wetter-Typ (weather_cond_t) und Klassifizierung kommen aus weather_anim.h
+ * -- dieselbe Logik treibt sowohl das kleine statische Lock-Screen-Icon
+ * hier als auch das animierte Widget auf dem Assistant-Screen. */
 static void draw_weather_icon(flux_fb_t *fb, int ox, int oy, weather_cond_t cond);
+static int read_weather_cache(char *out, size_t cap);
 
 /* ---- Statusleiste (oben, fast alle Bildschirme) -------------------- */
 
@@ -458,13 +457,9 @@ void flux_ui_draw_lock(flux_fb_t *fb) {
     int lock_info_y = date_y + 26; /* Start-Y fuer Info-Chips unter Datum */
     {
         char wline[160] = {0};
-        FILE *wf = fopen("/tmp/flux_weather.txt", "r");
-        if (wf) { if (!fgets(wline, sizeof(wline), wf)) wline[0] = '\0'; fclose(wf); }
-        size_t wl = strlen(wline);
-        while (wl > 0 && (wline[wl-1] == '\n' || wline[wl-1] == '\r')) wline[--wl] = '\0';
-        if (wline[0]) {
+        if (read_weather_cache(wline, sizeof(wline))) {
             int wy = date_y + 30;
-            weather_cond_t cond = classify_weather(wline);
+            weather_cond_t cond = flux_weather_classify(wline);
             draw_weather_icon(fb, (fb->width - flux_fb_text_width(wline, 2)) / 2 - 36, wy, cond);
             flux_fb_text(fb, (fb->width - flux_fb_text_width(wline, 2)) / 2, wy + 5, wline, COL_DIM, 2);
             lock_info_y = wy + 46;
@@ -795,30 +790,6 @@ int flux_ui_quickrow_hit(const flux_fb_t *fb, int x, int y) {
 
 /* Pixel-Art-Ikone (28x28) fuer verschiedene Wetterbedingungen */
 
-static weather_cond_t classify_weather(const char *desc) {
-    /* Entscheidet anhand von Schlagworten im ASCII-Beschreibungstext */
-    char low[256];
-    int i;
-    for (i = 0; desc[i] && i < 255; i++)
-        low[i] = (desc[i] >= 'A' && desc[i] <= 'Z') ? desc[i] + 32 : desc[i];
-    low[i] = '\0';
-    if (strstr(low, "thunder") || strstr(low, "storm") || strstr(low, "gewitter"))
-        return WCOND_STORMY;
-    if (strstr(low, "snow")   || strstr(low, "sleet") || strstr(low, "schnee"))
-        return WCOND_SNOWY;
-    if (strstr(low, "rain")   || strstr(low, "drizzle") || strstr(low, "regen"))
-        return WCOND_RAINY;
-    if (strstr(low, "fog")    || strstr(low, "mist") || strstr(low, "nebel"))
-        return WCOND_FOGGY;
-    if (strstr(low, "overcast") || strstr(low, "bedeckt"))
-        return WCOND_CLOUDY;
-    if (strstr(low, "cloud") || strstr(low, "wolke") || strstr(low, "partly"))
-        return WCOND_PARTLY_CLOUDY;
-    if (strstr(low, "sun") || strstr(low, "clear") || strstr(low, "sonne") || strstr(low, "klar"))
-        return WCOND_SUNNY;
-    return WCOND_UNKNOWN;
-}
-
 /* Zeichnet eine 28x28 Wetter-Pixel-Ikone bei (ox,oy). */
 static void draw_weather_icon(flux_fb_t *fb, int ox, int oy, weather_cond_t cond) {
     /* Farben */
@@ -900,6 +871,19 @@ static void draw_weather_icon(flux_fb_t *fb, int ox, int oy, weather_cond_t cond
         flux_fb_fill_rect(fb, ox+8,  oy+12, 12, 4, COL_DIM);
         break;
     }
+}
+
+/* Liest die letzte Wetterzeile aus dem Cache. Gibt 1 zurueck wenn
+ * vorhanden, sonst 0 -- ohne Daten wird nichts erfunden angezeigt. */
+static int read_weather_cache(char *out, size_t cap) {
+    out[0] = '\0';
+    FILE *f = fopen(WEATHER_CACHE, "r");
+    if (!f) return 0;
+    if (!fgets(out, (int)cap, f)) out[0] = '\0';
+    fclose(f);
+    size_t l = strlen(out);
+    while (l > 0 && (out[l-1] == '\n' || out[l-1] == '\r')) out[--l] = '\0';
+    return out[0] != '\0';
 }
 
 /* ---- Assistenten-Bildschirm ------------------------------------------ */
@@ -1293,6 +1277,21 @@ void flux_ui_draw_assistant(flux_fb_t *fb, const char *last_q,
         /* Leerer Zustand: zentiertes KI-Symbol + Einladungstext */
         int center_y = chat_top + (input_y - chat_top) / 2;
 
+        /* Wetter-Widget: die einzige laufende Animation des Home-Screens
+         * (siehe weather_anim.h), oben rechts im Content-Bereich, unab-
+         * haengig vom zentrierten Logo darunter. Nur sichtbar mit echten
+         * Daten -- kein erfundenes Wetter ohne Cache (Ehrlichkeitsprinzip,
+         * wie ueberall sonst im System). */
+        {
+            char wline[160] = {0};
+            if (read_weather_cache(wline, sizeof(wline))) {
+                weather_cond_t wcond = flux_weather_classify(wline);
+                int ww = 84, wh = 74;
+                int wx = fb->width - ww - 14, wy = chat_top + 2;
+                flux_weather_anim_draw(fb, wx, wy, ww, wh, wcond, flux_now_ms());
+            }
+        }
+
         /* Grosses Akzent-Logo: Funken-Symbol (KI) im Gradient-Kreis. */
         int logo_r = 38;
         int logo_cx = fb->width / 2;
@@ -1368,6 +1367,19 @@ void flux_ui_draw_assistant(flux_fb_t *fb, const char *last_q,
         draw_keyboard(fb);
     }
     flux_fb_present(fb);
+}
+
+/* Fuer main.c: soll die schnellere Idle-Redraw-Schleife laufen? Nur wenn
+ * der Assistant-Screen tatsaechlich im Leer-Zustand mit einer laufenden
+ * Wetteranimation zu sehen ist -- dieselbe Bedingung wie in
+ * flux_ui_draw_assistant() selbst, hier zentral statt in main.c
+ * dupliziert (sonst koennten beide Stellen auseinanderlaufen). */
+int flux_ui_assistant_weather_active(const char *last_q, const char *answer, int thinking) {
+    if ((last_q && *last_q) || thinking || (answer && *answer) || flux_ui_kbd_is_open())
+        return 0;
+    char wline[160] = {0};
+    if (!read_weather_cache(wline, sizeof(wline))) return 0;
+    return flux_weather_anim_active(flux_weather_classify(wline));
 }
 
 int flux_ui_mic_hit(const flux_fb_t *fb, int x, int y) {
@@ -2263,18 +2275,10 @@ void flux_ui_draw_notify(flux_fb_t *fb) {
     /* --- Wetter-Karte ------------------------------------------------- */
     {
         char weather[256] = {0};
-        FILE *f = fopen(WEATHER_CACHE, "r");
-        if (f) {
-            if (!fgets(weather, sizeof(weather), f)) weather[0] = '\0';
-            size_t l = strlen(weather);
-            while (l > 0 && (weather[l-1] == '\n' || weather[l-1] == '\r'))
-                weather[--l] = '\0';
-            fclose(f);
-        }
-        if (weather[0]) {
+        if (read_weather_cache(weather, sizeof(weather))) {
             fill_round_rect(fb, 12, y, fb->width - 24, 60, 10, COL_SURFACE2);
             flux_fb_hline(fb, 12, y, fb->width - 24, COL_DIVIDER);
-            weather_cond_t cond = classify_weather(weather);
+            weather_cond_t cond = flux_weather_classify(weather);
             draw_weather_icon(fb, 22, y + 8, cond);
             draw_wrapped(fb, 60, y + 8, fb->width - 80, weather, COL_TEXT_MUTED, 2, 44);
             y += 70;

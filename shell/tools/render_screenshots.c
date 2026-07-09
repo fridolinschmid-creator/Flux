@@ -183,6 +183,41 @@ int main(int argc, char *argv[]) {
     save_png(&fb, outdir, "04b_home_anim");
     flux_ui_set_quick_reveal(4, 100);
 
+    /* 04c/d/e -- Wetter-Widget: drei Zeitpunkte derselben Regen-Animation.
+     * flux_now_ms() liefert die echte Monotonic-Zeit -- die kurzen usleep()
+     * zwischen den Aufnahmen sorgen fuer sichtbar unterschiedliche
+     * Tropfenpositionen, ohne die Animationslogik selbst testbar machen
+     * zu muessen. */
+    {
+        FILE *wf = fopen("/tmp/flux_weather.txt", "w");
+        if (wf) { fprintf(wf, "Berlin: Regen, 14°C, 80%% Feuchte, Wind 12 km/h\n"); fclose(wf); }
+        flux_ui_draw_assistant(&fb, "", "", "", 0);
+        save_png(&fb, outdir, "04c_wetter_regen_t0");
+        usleep(300000);
+        flux_ui_draw_assistant(&fb, "", "", "", 0);
+        save_png(&fb, outdir, "04d_wetter_regen_t300");
+        usleep(300000);
+        flux_ui_draw_assistant(&fb, "", "", "", 0);
+        save_png(&fb, outdir, "04e_wetter_regen_t600");
+
+        wf = fopen("/tmp/flux_weather.txt", "w");
+        if (wf) { fprintf(wf, "Berlin: Sonnig, 22°C, 40%% Feuchte, Wind 5 km/h\n"); fclose(wf); }
+        flux_ui_draw_assistant(&fb, "", "", "", 0);
+        save_png(&fb, outdir, "04f_wetter_sonnig");
+
+        wf = fopen("/tmp/flux_weather.txt", "w");
+        if (wf) { fprintf(wf, "Berlin: Schnee, -2°C, 85%% Feuchte, Wind 8 km/h\n"); fclose(wf); }
+        flux_ui_draw_assistant(&fb, "", "", "", 0);
+        save_png(&fb, outdir, "04g_wetter_schnee");
+
+        wf = fopen("/tmp/flux_weather.txt", "w");
+        if (wf) { fprintf(wf, "Berlin: Gewitter, 18°C, 90%% Feuchte, Wind 30 km/h\n"); fclose(wf); }
+        flux_ui_draw_assistant(&fb, "", "", "", 0);
+        save_png(&fb, outdir, "04h_wetter_gewitter");
+
+        remove("/tmp/flux_weather.txt");
+    }
+
     /* 05 -- Assistent: tippt Frage (Tastatur sichtbar: grosse Tasten +
      * Vorschlagsleiste mit Autovervollstaendigung "ei" -> eine/einen). */
     flux_ui_set_kbd_open(1);
