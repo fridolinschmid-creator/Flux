@@ -334,6 +334,10 @@ int main(int argc, char *argv[]) {
     flux_ui_draw_files(&fb, "/home/user", names, metas, 5, 0, 4);
     save_png(&fb, outdir, "15_dateien_ausgewaehlt");
 
+    /* 15b -- Dateibrowser leer (neuer icon-first Leer-Zustand) */
+    flux_ui_draw_files(&fb, "/home/user/Leer", NULL, NULL, 0, 0, -1);
+    save_png(&fb, outdir, "15b_dateien_leer");
+
     /* 16 -- Datei-Betrachter */
     flux_ui_draw_file_viewer(&fb, "/home/user/notizen.txt",
         "Einkaufliste:\n"
@@ -381,6 +385,10 @@ int main(int argc, char *argv[]) {
         flux_ui_draw_contacts(&fb, cnames, cdetails, 3, 0);
     }
     save_png(&fb, outdir, "20_kontakte");
+
+    /* 20b -- Kontakte leer (neuer icon-first Leer-Zustand) */
+    flux_ui_draw_contacts(&fb, NULL, NULL, 0, -1);
+    save_png(&fb, outdir, "20b_kontakte_leer");
     flux_ui_set_accent(0x6366F1);  /* #8: Akzent zurücksetzen */
 
     /* 21 -- Fotogalerie: echtes 3-Spalten-Raster mit Thumbnails.

@@ -938,6 +938,30 @@ static int draw_wrapped(flux_fb_t *fb, int x, int y, int max_w, const char *s,
     return cy;
 }
 
+/* Einheitlicher Leer-Zustand fuer Listen-Screens: gedaempftes Icon in
+ * einem Kreis + Titel + optionaler Hinweis, zentriert unter dem Header --
+ * dieselbe icon-first Sprache wie der Assistant-Screen statt nackten
+ * Textzeilen wie "(Ordner leer)". Bewusst gedaempfte Farben (COL_SURFACE2/
+ * COL_DIM), nicht der KI-Akzent -- das bleibt dem Assistant-Logo vorbehalten. */
+static void draw_empty_list_state(flux_fb_t *fb, flux_icon_t icon,
+                                  const char *title, const char *hint) {
+    int cx = fb->width / 2;
+    int cy = STATUSBAR_H + TITLE_AREA_H + 56;
+    flux_fb_fill_circle(fb, cx, cy, 30, COL_SURFACE2);
+    flux_icon_draw(fb, icon, cx, cy, 26, COL_DIM);
+
+    int tw = flux_fb_text_width(title, 2);
+    flux_fb_text(fb, cx - tw / 2, cy + 44, title, COL_TEXT_MUTED, 2);
+
+    if (hint && *hint) {
+        int hw = flux_fb_text_width(hint, 1);
+        if (hw <= fb->width - 40)
+            flux_fb_text(fb, cx - hw / 2, cy + 70, hint, COL_DIM, 1);
+        else
+            draw_wrapped(fb, 20, cy + 68, fb->width - 40, hint, COL_DIM, 1, 18);
+    }
+}
+
 /* ---- Nachrichtenblasen (Nutzer rechts, KI links) -------------------- */
 
 static int measure_wrapped_height(int max_w, const char *s, int scale, int line_h) {
@@ -2065,8 +2089,8 @@ void flux_ui_draw_files(flux_fb_t *fb, const char *path, const char **names,
     }
 
     if (n == 0) {
-        flux_fb_text(fb, 24, STATUSBAR_H + TITLE_AREA_H + 20,
-                     "(Ordner leer)", COL_DIM, 2);
+        draw_empty_list_state(fb, FLUX_ICON_FOLDER, "Ordner ist leer",
+                              "Tippe auf \"Ordner\" oben, um einen anzulegen.");
     } else {
         list_row_geom_t rows[LIST_MAX_ROWS];
         int rn = build_list_rows(fb, n, rows);
@@ -3017,10 +3041,8 @@ void flux_ui_draw_contacts(flux_fb_t *fb, const char **names,
     flux_fb_fill_gradient_h(fb, 16, STATUSBAR_H + 40, 96, 2, COL_ACCENT, COL_ACCENT2);
 
     if (n == 0) {
-        int ey = STATUSBAR_H + TITLE_AREA_H + 20;
-        fill_round_rect(fb, 12, ey, fb->width - 24, 72, 10, COL_SURFACE);
-        flux_fb_text(fb, 24, ey + 10, "Noch keine Kontakte gespeichert.", COL_TEXT_MUTED, 2);
-        flux_fb_text(fb, 24, ey + 34, "Sage der KI: \"Speichere Max, +49 151...\"", COL_DIM, 2);
+        draw_empty_list_state(fb, FLUX_ICON_USER, "Noch keine Kontakte",
+                              "Sage der KI: \"Speichere Max, +49 151...\"");
     } else {
         list_row_geom_t rows[LIST_MAX_ROWS];
         int rn = build_list_rows(fb, n, rows);

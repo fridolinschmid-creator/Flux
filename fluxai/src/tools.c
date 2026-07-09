@@ -2030,7 +2030,12 @@ static int parse_searxng(const char *resp, char *out, size_t cap, int max_result
     return n;
 }
 
-static int tool_web_search(const char *arg, char *out, size_t cap) {
+/* Gemeinsamer Unterbau fuer web_search UND news_search -- beide fragen
+ * dieselbe selbstgehostete SearXNG-Instanz ab, nur mit anderer Kategorie
+ * und Ergebnis-Kopfzeile. categories: SearXNG-Kategorie ("" fuer Web-
+ * Standardsuche, "news" fuer Nachrichten). */
+static int searxng_query(const char *arg, const char *categories,
+                         const char *header_fmt, char *out, size_t cap) {
     if (!arg || !*arg) {
         snprintf(out, cap, "Fehler: kein Suchbegriff angegeben");
         return 1;
@@ -2052,8 +2057,10 @@ static int tool_web_search(const char *arg, char *out, size_t cap) {
     char *q = curl_easy_escape(curl, arg, 0);
     char url[1024];
     snprintf(url, sizeof(url),
-             "%s/search?q=%s&format=json&language=de&safesearch=1",
-             base, q ? q : "");
+             "%s/search?q=%s&format=json&language=de&safesearch=1%s%s",
+             base, q ? q : "",
+             (categories && *categories) ? "&categories=" : "",
+             (categories && *categories) ? categories : "");
     if (q) curl_free(q);
 
     /* Wachsender Heap-Antwortpuffer (gemeinsame flux_http_buf-Hilfe).
@@ -2094,12 +2101,26 @@ static int tool_web_search(const char *arg, char *out, size_t cap) {
     }
 
     char header[300];
-    snprintf(header, sizeof(header), "Web-Suchergebnisse fuer \"%s\":\n", arg);
+    snprintf(header, sizeof(header), header_fmt, arg);
     snprintf(out, cap, "%s", header);
     int n = parse_searxng(mb.data, out, cap, 5);
     flux_http_buf_free(&mb);
     if (n == 0) snprintf(out, cap, "Keine Treffer fuer \"%s\".", arg);
     return 1;
+}
+
+static int tool_web_search(const char *arg, char *out, size_t cap) {
+    return searxng_query(arg, "", "Web-Suchergebnisse fuer \"%s\":\n", out, cap);
+}
+
+/* Aktuelle Nachrichten zu einem Thema -- die KI fasst die zurueckgegebenen
+ * Treffer (Titel + Auszug) in ihrer Antwort zusammen. Nutzt dieselbe
+ * SearXNG-Instanz wie web_search (categories=news), kein separater
+ * Nachrichtendienst noetig -- ein Schluessel/Endpunkt weniger zu pflegen,
+ * und derselbe "selbst gehostet statt fest verdrahtetes Drittanbieter-API"
+ * Ansatz wie beim Web-Suche-Tool. */
+static int tool_news_search(const char *arg, char *out, size_t cap) {
+    return searxng_query(arg, "news", "Aktuelle Nachrichten zu \"%s\":\n", out, cap);
 }
 
 /* ---- journal_list ---------------------------------------------------- */
@@ -2269,6 +2290,7 @@ int flux_tool_exec(const char *name, const char *arg,
     if (strcmp(name, "mail_unread")      == 0) return tool_mail_unread(arg, out, out_cap);
     if (strcmp(name, "mail_read")        == 0) return tool_mail_read(arg, out, out_cap);
     if (strcmp(name, "web_search")       == 0) return tool_web_search(arg, out, out_cap);
+    if (strcmp(name, "news_search")      == 0) return tool_news_search(arg, out, out_cap);
     if (strcmp(name, "date_time")        == 0) return tool_date_time(arg, out, out_cap);
     if (strcmp(name, "weather")          == 0) return tool_weather(arg, out, out_cap);
     if (strcmp(name, "file_read")        == 0) return tool_file_read(arg, out, out_cap);
@@ -2379,7 +2401,8 @@ static const flux_tool_def_t TOOL_DEFS[] = {
     { "doc_analyze",     "Dateiinhalt lesen und der KI als Kontext uebergeben.", "Dateipfad", 1 },
     { "mail_unread",     "Ungelesene E-Mails abrufen (Von/Betreff/Datum, fuer Zusammenfassungen).", "(leer)", 0 },
     { "mail_read",       "Volltext einer E-Mail lesen.", "UID (aus mail_unread)", 1 },
-    { "web_search",      "Im Internet suchen (aktuelle Infos/News/Fakten).", "Suchbegriff", 1 },
+    { "web_search",      "Im Internet suchen (aktuelle Infos/Fakten, allgemeine Anfragen).", "Suchbegriff", 1 },
+    { "news_search",     "Aktuelle Nachrichten/Schlagzeilen zu einem Thema abrufen und zusammenfassen.", "Thema (z.B. 'Klimapolitik' oder 'Deutschland')", 1 },
 };
 static const int TOOL_DEFS_N = (int)(sizeof(TOOL_DEFS) / sizeof(TOOL_DEFS[0]));
 
