@@ -188,7 +188,10 @@ int main(void) {
             }
             continue;
         }
-        if (ret < 0) continue;
+        if (ret < 0) {
+            if (errno != EINTR) LOGW("select(): %s", strerror(errno));
+            continue;
+        }
 
         int cfd = accept(listen_fd, NULL, NULL);
         if (cfd < 0) {
