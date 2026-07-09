@@ -279,7 +279,16 @@ static int tool_file_read(const char *arg, char *out, size_t cap) {
 /* ---- file_list ------------------------------------------------------- */
 
 static int tool_file_list(const char *arg, char *out, size_t cap) {
-    const char *path = (arg && *arg) ? arg : "/";
+    const char *path = (arg && *arg) ? arg : "/home/user/";
+    /* Gleicher Schutz wie file_read: sonst liesse sich jedes Verzeichnis
+     * (z.B. /etc/flux/ mit flux.conf) auflisten, auch ohne Dateiinhalte
+     * zu bekommen ist das Vorhandensein/die Struktur schon ein Leck. */
+    if (!path_read_allowed(path)) {
+        snprintf(out, cap,
+                 "Fehler: Auflisten nur unter /home/user/, /tmp/, /proc/ und /sys/ "
+                 "erlaubt (Schutz von Systemdateien und Zugangsdaten).");
+        return 1;
+    }
     DIR *d = opendir(path);
     if (!d) {
         snprintf(out, cap, "Fehler: Verzeichnis '%s' nicht zugaenglich", path);
