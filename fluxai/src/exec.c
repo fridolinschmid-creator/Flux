@@ -25,7 +25,16 @@ static void strip_angle_addr(char *s) {
 /* Loest einen Namen ueber /etc/flux/contacts.txt auf.
  * want_email: 1 = E-Mail-Feld (mit '@'), 0 = Telefon-Feld (Ziffern).
  * Schreibt das Ergebnis nach out und gibt 1 zurueck, wenn gefunden.
- * Format je Zeile: "Name,Telefon,Email[,...]". */
+ * Format je Zeile: "Name,Telefon,Email[,...]".
+ *
+ * Diese Aufloesung laeuft NACH der Nutzerbestaetigung (der Confirm-Screen
+ * zeigt nur den rohen, evtl. noch unaufgeloesten Namen der KI-Antwort).
+ * Ein exakter Namenstreffer ist eindeutig und wird sofort verwendet. Bei
+ * mehreren Teilstring-Treffern (z.B. "Ana" passt auf "Anna Schmidt" UND
+ * "Diana Mueller") waere ein blindes "erster Treffer gewinnt" ein
+ * Kontakt-Verwechslungsrisiko, das der Nutzer nie bestaetigt hat -- daher
+ * gilt ein mehrdeutiger Teilstring-Treffer als NICHT gefunden statt eine
+ * Ratenentscheidung zu treffen. */
 static int resolve_contact(const char *name, int want_email,
                            char *out, size_t cap) {
     if (!name || !*name) return 0;
@@ -38,27 +47,32 @@ static int resolve_contact(const char *name, int want_email,
         want[wi++] = (char)tolower((unsigned char)*q);
     want[wi] = '\0';
 
+    char exact[256] = {0}; int have_exact = 0;
+    char sub[256] = {0};   int sub_count = 0;
+
     char line[256];
-    int found = 0;
-    while (!found && fgets(line, sizeof(line), f)) {
+    while (!have_exact && fgets(line, sizeof(line), f)) {
         size_t l = strlen(line);
         while (l > 0 && (line[l-1] == '\n' || line[l-1] == '\r')) line[--l] = '\0';
         if (!line[0] || line[0] == '#') continue;
 
         /* Name = erstes Feld */
         char *c1 = strchr(line, ',');
+        if (!c1) continue; /* Zeile ohne Felder -> nichts zum Aufloesen */
         char namebuf[128];
-        size_t nl = c1 ? (size_t)(c1 - line) : strlen(line);
+        size_t nl = (size_t)(c1 - line);
         if (nl >= sizeof(namebuf)) nl = sizeof(namebuf)-1;
         memcpy(namebuf, line, nl); namebuf[nl] = '\0';
         char namelo[128]; size_t ni = 0;
         for (const char *q = namebuf; *q && ni < sizeof(namelo)-1; q++)
             namelo[ni++] = (char)tolower((unsigned char)*q);
         namelo[ni] = '\0';
-        if (!strstr(namelo, want)) continue;
-        if (!c1) continue; /* Zeile ohne Felder -> nichts zum Aufloesen */
+
+        int is_exact = (strcmp(namelo, want) == 0);
+        if (!is_exact && !strstr(namelo, want)) continue;
 
         /* passendes Feld suchen: mit '@' (Mail) bzw. mit Ziffer (Telefon) */
+        char field[256] = {0}; int field_found = 0;
         char *save;
         for (char *tok = strtok_r(c1 + 1, ",", &save);
              tok; tok = strtok_r(NULL, ",", &save)) {
@@ -66,12 +80,24 @@ static int resolve_contact(const char *name, int want_email,
             int has_at = strchr(tok, '@') != NULL;
             int has_digit = 0;
             for (const char *t = tok; *t; t++) if (isdigit((unsigned char)*t)) has_digit = 1;
-            if (want_email && has_at) { snprintf(out, cap, "%s", tok); found = 1; break; }
-            if (!want_email && has_digit && !has_at) { snprintf(out, cap, "%s", tok); found = 1; break; }
+            if (want_email && has_at) { snprintf(field, sizeof(field), "%s", tok); field_found = 1; break; }
+            if (!want_email && has_digit && !has_at) { snprintf(field, sizeof(field), "%s", tok); field_found = 1; break; }
+        }
+        if (!field_found) continue;
+
+        if (is_exact) {
+            snprintf(exact, sizeof(exact), "%s", field);
+            have_exact = 1;
+        } else {
+            sub_count++;
+            if (sub_count == 1) snprintf(sub, sizeof(sub), "%s", field);
         }
     }
     fclose(f);
-    return found;
+
+    if (have_exact) { snprintf(out, cap, "%s", exact); return 1; }
+    if (sub_count == 1) { snprintf(out, cap, "%s", sub); return 1; }
+    return 0;
 }
 
 void flux_exec_action(const char *payload, char *out, size_t out_cap) {
