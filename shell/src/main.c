@@ -54,6 +54,31 @@ static uint32_t *capture_frame(const flux_fb_t *fb) {
     return buf;
 }
 
+/* Schreibt den aktuellen Backbuffer als PPM (P6) nach path. Bewusst PPM
+ * statt PNG: kein neuer Bibliotheks-Dependency fuer das Zielsystem noetig
+ * (nur render_screenshots.c, ein reines Host-Build-Werkzeug, braucht
+ * libpng) -- und fluxai/src/vision.c erwartet fuer Bildanalyse ohnehin
+ * schon einen ppm_path, passt also direkt zusammen. Gibt 0 bei Erfolg. */
+static int save_ppm_screenshot(const flux_fb_t *fb, const char *path) {
+    FILE *f = fopen(path, "wb");
+    if (!f) return -1;
+    fprintf(f, "P6\n%d %d\n255\n", fb->width, fb->height);
+    uint8_t *row = malloc((size_t)fb->width * 3);
+    if (!row) { fclose(f); return -1; }
+    for (int y = 0; y < fb->height; y++) {
+        for (int x = 0; x < fb->width; x++) {
+            uint32_t px = fb->back[y * fb->stride_px + x];
+            row[x * 3 + 0] = (uint8_t)((px >> 16) & 0xff);
+            row[x * 3 + 1] = (uint8_t)((px >> 8) & 0xff);
+            row[x * 3 + 2] = (uint8_t)(px & 0xff);
+        }
+        fwrite(row, 1, (size_t)fb->width * 3, f);
+    }
+    free(row);
+    fclose(f);
+    return 0;
+}
+
 /* ---- Fehler-Benachrichtigung --------------------------------------------
  * Ein Fehler (Log-Level ERROR+) soll nicht still im Hintergrund bleiben:
  * er landet im Log (common/flux_log.c), erscheint als Eintrag im
@@ -1038,6 +1063,109 @@ static const char *habits_p[HABITS_MAX];
 static int         habits_n    = 0;
 static int         habits_scroll = 0;
 
+/* Text-Browser: aktuelle Seite + Adressfeld. browser_url ist die vom
+ * letzten browser_open/click zurueckgegebene Adresse (fuer die Anzeige
+ * im Adressfeld, wenn nicht gerade getippt wird), browser_body der von
+ * fluxaid bereits zu Text umgewandelte Seiteninhalt. */
+static char browser_url[256]   = {0};
+static char browser_body[4096] = {0};
+static char browser_input[256] = {0};
+static int  browser_scroll     = 0;
+/* Besuchsprotokoll dieser Browser-Sitzung (fuer die Aktivitaets-
+ * Zusammenfassung beim Verlassen des Screens, siehe browser_end_session). */
+#define BROWSER_VISIT_MAX 64
+static char    browser_visit_log[BROWSER_VISIT_MAX][640];
+static int     browser_visit_n = 0;
+static time_t  browser_last_shot_t = 0;
+
+#define BROWSER_SHOTS_DIR "/home/user/Journal/browser_shots"
+
+/* Liest die Adresse aus der zweiten Zeile der browser_open/click-Antwort
+ * (Format "# Titel\n(URL)\n\n...", siehe fluxai/src/browser.c render_page())
+ * fuer die Anzeige im Adressfeld. */
+static void extract_browser_url(const char *answer, char *out, size_t cap) {
+    out[0] = '\0';
+    const char *nl = strchr(answer, '\n');
+    if (!nl) return;
+    const char *op = strchr(nl, '(');
+    const char *cl = op ? strchr(op, ')') : NULL;
+    if (!op || !cl || cl <= op + 1) return;
+    size_t len = (size_t)(cl - op - 1);
+    if (len >= cap) len = cap - 1;
+    memcpy(out, op + 1, len);
+    out[len] = '\0';
+}
+
+/* Speichert alle 5s einen Screenshot + Eintrag im Sitzungsprotokoll,
+ * solange der Browser-Screen offen ist (aufgerufen bei jedem Idle-Tick
+ * der Hauptschleife -- eigene 5s-Sperre ueber browser_last_shot_t). */
+static void browser_maybe_snapshot(const flux_fb_t *fb, const char *url) {
+    if (!url || !url[0]) return;
+    time_t now = time(NULL);
+    if (now - browser_last_shot_t < 5) return;
+    browser_last_shot_t = now;
+
+    mkdir("/home/user/Journal", 0755);
+    mkdir(BROWSER_SHOTS_DIR, 0755);
+
+    char ts[32]; struct tm tmv; localtime_r(&now, &tmv);
+    strftime(ts, sizeof(ts), "%Y-%m-%d_%H%M%S", &tmv);
+    char shot_path[300];
+    snprintf(shot_path, sizeof(shot_path), "%s/%s.ppm", BROWSER_SHOTS_DIR, ts);
+    save_ppm_screenshot(fb, shot_path);
+
+    if (browser_visit_n < BROWSER_VISIT_MAX) {
+        snprintf(browser_visit_log[browser_visit_n], sizeof(browser_visit_log[0]),
+                 "%s\t%s\t%s", ts, url, shot_path);
+        browser_visit_n++;
+    }
+}
+
+/* Beim Verlassen des Browser-Screens: wenn diese Sitzung Besuche
+ * protokolliert hat, die KI um eine kurze Zusammenfassung bitten und als
+ * eigene Journal-Datei speichern (referenziert die Screenshots). Bewusst
+ * ein neuer, eigener Dateiname statt eines der bestehenden Journal-
+ * Formate (journal.c schreibt .md fuer den taeglichen KI-Rueckblick,
+ * tools.c's journal_read erwartet .txt, main.c haengt Gespraeche an eine
+ * dritte .md-Datei an) -- statt eine dieser bereits uneinheitlichen
+ * Konventionen zu erben, eine eigene, klar benannte Datei. */
+static void browser_end_session(void) {
+    if (browser_visit_n == 0) return;
+
+    char q[3072];
+    size_t pos = (size_t)snprintf(q, sizeof(q),
+        "Fasse diese Browser-Sitzung in 2-3 knappen Saetzen auf Deutsch "
+        "zusammen (welche Seiten, worum ging es vermutlich). "
+        "Antworte NUR mit der Zusammenfassung:\n\n");
+    for (int i = 0; i < browser_visit_n && pos + 200 < sizeof(q); i++)
+        pos += (size_t)snprintf(q + pos, sizeof(q) - pos, "%s\n", browser_visit_log[i]);
+
+    char summary[1024] = {0};
+    flux_ipc_ask(q, summary, sizeof(summary));
+
+    time_t now = time(NULL); struct tm tmv; localtime_r(&now, &tmv);
+    char day[16]; strftime(day, sizeof(day), "%Y-%m-%d", &tmv);
+    char path[256];
+    snprintf(path, sizeof(path), "/home/user/Journal/Browser_%s.md", day);
+    FILE *f = fopen(path, "a");
+    if (f) {
+        char hm[8]; strftime(hm, sizeof(hm), "%H:%M", &tmv);
+        fprintf(f, "\n## Sitzung %s\n\n%s\n\nBesuchte Seiten:\n", hm,
+                summary[0] ? summary : "(keine Zusammenfassung)");
+        for (int i = 0; i < browser_visit_n; i++) {
+            char *tab1 = strchr(browser_visit_log[i], '\t');
+            char *tab2 = tab1 ? strchr(tab1 + 1, '\t') : NULL;
+            if (tab1 && tab2) {
+                *tab1 = '\0'; *tab2 = '\0';
+                fprintf(f, "- %s (%s) -- Screenshot: %s\n",
+                        tab1 + 1, browser_visit_log[i], tab2 + 1);
+            }
+        }
+        fclose(f);
+    }
+    browser_visit_n = 0;
+}
+
 static void load_habits(void) {
     habits_n = 0;
     FILE *f = fopen("/etc/flux/habits.txt", "r");
@@ -1455,6 +1583,9 @@ static void redraw_current_screen(flux_fb_t *fb, flux_screen_t screen,
         case FLUX_SCREEN_SEARCH:
             flux_ui_draw_search(fb, search_query, search_results_p,
                                 search_n, search_searching); break;
+        case FLUX_SCREEN_BROWSER:
+            flux_ui_draw_browser(fb, browser_url, browser_body,
+                                 browser_input, browser_scroll); break;
         case FLUX_SCREEN_JOURNAL:
             flux_ui_draw_journal(fb, journal_names_p, journal_n, journal_scroll, -1); break;
         case FLUX_SCREEN_VOICE_ENROLL:
@@ -1853,6 +1984,12 @@ int main(void) {
                     }
                 }
             }
+            /* Browser-Screen: alle 5s einen Schnappschuss + Besuchseintrag
+             * fuer die spaetere Aktivitaets-Zusammenfassung (siehe
+             * browser_maybe_snapshot/browser_end_session). */
+            if (screen == FLUX_SCREEN_BROWSER)
+                browser_maybe_snapshot(&fb, browser_url);
+
             /* Kein Input -- Uhr auf dem Lockscreen, Auto-Sperre pruefen. */
             if (screen == FLUX_SCREEN_LOCK) {
                 flux_ui_draw_lock(&fb);
@@ -3400,6 +3537,83 @@ int main(void) {
             continue;
         }
 
+        if (screen == FLUX_SCREEN_BROWSER) {
+            if (ev.type == FLUX_EV_SWIPE_LEFT) {
+                browser_end_session();
+                uint32_t *old = capture_frame(&fb);
+                screen = FLUX_SCREEN_ASSISTANT;
+                flux_ui_draw_assistant(&fb, last_q, input_buf, answer_buf, 0);
+                animate_slide_from_left(&fb, old);
+                free(old);
+                continue;
+            }
+
+            int do_nav = 0;
+
+            if (ev.type == FLUX_EV_TAP) {
+                int br_go, br_scroll;
+                flux_ui_browser_hit(&fb, ev.x, ev.y, &br_go, &br_scroll);
+                if (br_go) {
+                    do_nav = browser_input[0] != '\0';
+                } else if (br_scroll) {
+                    browser_scroll += br_scroll;
+                    if (browser_scroll < 0) browser_scroll = 0;
+                } else {
+                    char tap_ch = 0; int tap_bs = 0, tap_enter = 0;
+                    if (flux_ui_kbd_hit(&fb, ev.x, ev.y, &tap_ch, &tap_bs, &tap_enter)) {
+                        if (tap_bs) {
+                            size_t l = strlen(browser_input);
+                            if (l > 0) browser_input[l-1] = '\0';
+                        } else if (tap_enter) {
+                            do_nav = browser_input[0] != '\0';
+                        } else if (tap_ch) {
+                            size_t l = strlen(browser_input);
+                            if (l + 1 < sizeof(browser_input)) {
+                                browser_input[l] = tap_ch;
+                                browser_input[l+1] = '\0';
+                            }
+                        }
+                    }
+                }
+            } else if (ev.type == FLUX_EV_CHAR) {
+                size_t l = strlen(browser_input);
+                if (l + 1 < sizeof(browser_input)) {
+                    browser_input[l] = ev.ch;
+                    browser_input[l+1] = '\0';
+                }
+            } else if (ev.type == FLUX_EV_BACKSPACE) {
+                size_t l = strlen(browser_input);
+                if (l > 0) browser_input[l-1] = '\0';
+            } else if (ev.type == FLUX_EV_ENTER) {
+                do_nav = browser_input[0] != '\0';
+            }
+
+            if (do_nav) {
+                /* Reine Ziffern -> Link-Klick (wie bei Lynx: Nummer statt
+                 * einzelne Links antippen), sonst URL oeffnen. */
+                int is_digits = browser_input[0] != '\0';
+                for (const char *c = browser_input; *c; c++)
+                    if (*c < '0' || *c > '9') { is_digits = 0; break; }
+
+                char q[300];
+                snprintf(q, sizeof(q), "%s%s",
+                        is_digits ? "__flux_browser_click__ " : "__flux_browser_open__ ",
+                        browser_input);
+
+                char resp[FLUX_MAX_RESPONSE] = {0};
+                flux_ipc_ask(q, resp, sizeof(resp));
+                snprintf(browser_body, sizeof(browser_body), "%s", resp);
+                extract_browser_url(resp, browser_url, sizeof(browser_url));
+                browser_input[0] = '\0';
+                browser_scroll = 0;
+                browser_last_shot_t = 0; /* sofortiger Schnappschuss der neuen Seite */
+                browser_maybe_snapshot(&fb, browser_url);
+            }
+
+            flux_ui_draw_browser(&fb, browser_url, browser_body, browser_input, browser_scroll);
+            continue;
+        }
+
         /* FLUX_SCREEN_ASSISTANT -- Voice-Overlay: beliebiger Input stoppt die Aufnahme */
         if (voice_active && (ev.type == FLUX_EV_TAP || ev.type == FLUX_EV_CHAR ||
                               ev.type == FLUX_EV_ENTER || ev.type == FLUX_EV_BACKSPACE)) {
@@ -3809,6 +4023,17 @@ int main(void) {
                 uint32_t *old = capture_frame(&fb);
                 screen = FLUX_SCREEN_HABITS;
                 flux_ui_draw_habits(&fb, habits_p, habits_n, habits_scroll);
+                animate_slide_in(&fb, old);
+                free(old);
+                continue;
+            }
+            if (strcasecmp(input_buf, "browser") == 0 || strcasecmp(input_buf, "internet") == 0 ||
+                strcasecmp(input_buf, "web") == 0) {
+                input_buf[0] = '\0';
+                browser_input[0] = '\0';
+                uint32_t *old = capture_frame(&fb);
+                screen = FLUX_SCREEN_BROWSER;
+                flux_ui_draw_browser(&fb, browser_url, browser_body, browser_input, browser_scroll);
                 animate_slide_in(&fb, old);
                 free(old);
                 continue;

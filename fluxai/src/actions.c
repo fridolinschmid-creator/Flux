@@ -1,4 +1,5 @@
 #include "actions.h"
+#include "browser.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -177,7 +178,25 @@ static int try_flight_mode(const char *q, char *out, size_t cap) {
     return 1;
 }
 
+/* Direkte Browser-Navigation vom Browser-Screen (shell/src/ui.c) --
+ * bewusst ein exaktes Praefix statt Schlagwort-Suche wie die anderen
+ * lokalen Aktionen: die Shell konstruiert diese Anfrage selbst (Nutzer
+ * tippt nur die URL/Nummer ein), es soll nie mit echtem Freitext
+ * kollidieren. Laeuft komplett lokal -- kein LLM-Umweg fuer eine simple
+ * Navigation, dieselbe "lokal zuerst" Idee wie Uhrzeit/Akku/etc. */
+#define BROWSER_OPEN_PREFIX  "__flux_browser_open__ "
+#define BROWSER_CLICK_PREFIX "__flux_browser_click__ "
+
+static int try_browser(const char *q, char *out, size_t cap) {
+    if (strncmp(q, BROWSER_OPEN_PREFIX, strlen(BROWSER_OPEN_PREFIX)) == 0)
+        return flux_browser_open(q + strlen(BROWSER_OPEN_PREFIX), out, cap);
+    if (strncmp(q, BROWSER_CLICK_PREFIX, strlen(BROWSER_CLICK_PREFIX)) == 0)
+        return flux_browser_click(q + strlen(BROWSER_CLICK_PREFIX), out, cap);
+    return 0;
+}
+
 int flux_actions_try(const char *question, char *out, size_t out_cap) {
+    if (try_browser(question, out, out_cap))      return 1;
     if (try_battery(question, out, out_cap))      return 1;
     if (try_time(question, out, out_cap))         return 1;
     if (try_date(question, out, out_cap))         return 1;

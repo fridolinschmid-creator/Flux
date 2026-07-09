@@ -543,6 +543,27 @@ int main(int argc, char *argv[]) {
     }
     save_png(&fb, outdir, "28_semantic_search");
 
+    /* 28b -- Text-Browser: leer (Startzustand) */
+    flux_ui_draw_browser(&fb, "", "", "", 0);
+    save_png(&fb, outdir, "28b_browser_leer");
+
+    /* 28c -- Text-Browser: geladene Seite mit Links */
+    flux_ui_draw_browser(&fb,
+        "https://example.org/artikel",
+        "# Beispielartikel\n(https://example.org/artikel)\n\n"
+        "Dies ist ein Beispieltext, wie ihn der Text-Browser nach dem\n"
+        "Umwandeln einer echten Webseite anzeigen wuerde. Links werden\n"
+        "nummeriert dargestellt.\n\n"
+        "Mehr erfahren [1]\n"
+        "Zur Startseite [2]\n"
+        "Kontakt [3]\n",
+        "", 0);
+    save_png(&fb, outdir, "28c_browser_seite");
+
+    /* 28d -- Text-Browser: Link-Nummer wird eingetippt */
+    flux_ui_draw_browser(&fb, "https://example.org/artikel", "Mehr erfahren [1]\n", "2", 0);
+    save_png(&fb, outdir, "28d_browser_eingabe");
+
     /* 29 -- Spracheingabe-Overlay (animiert, Aufnahme läuft 7 s) */
     flux_ui_draw_voice_overlay(&fb, 7, 6);
     save_png(&fb, outdir, "29_voice_overlay");
