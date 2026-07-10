@@ -57,6 +57,21 @@ static int try_date(const char *q, char *out, size_t cap) {
     return 1;
 }
 
+static int try_weekday(const char *q, char *out, size_t cap) {
+    if (!contains(q, "wochentag") && !contains(q, "welcher tag") &&
+        !contains(q, "was fuer ein tag"))
+        return 0;
+    static const char *names[7] = {
+        "Sonntag", "Montag", "Dienstag", "Mittwoch",
+        "Donnerstag", "Freitag", "Samstag"
+    };
+    time_t t = time(NULL);
+    struct tm tmv;
+    localtime_r(&t, &tmv);
+    snprintf(out, cap, "Heute ist %s.", names[tmv.tm_wday]);
+    return 1;
+}
+
 static int try_uptime(const char *q, char *out, size_t cap) {
     if (!contains(q, "uptime") && !contains(q, "laeuft schon"))
         return 0;
@@ -181,6 +196,7 @@ int flux_actions_try(const char *question, char *out, size_t out_cap) {
     if (try_battery(question, out, out_cap))      return 1;
     if (try_time(question, out, out_cap))         return 1;
     if (try_date(question, out, out_cap))         return 1;
+    if (try_weekday(question, out, out_cap))      return 1;
     if (try_uptime(question, out, out_cap))       return 1;
     if (try_wifi_status(question, out, out_cap))  return 1;
     if (try_flight_mode(question, out, out_cap))  return 1;

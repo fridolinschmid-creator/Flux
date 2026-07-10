@@ -78,7 +78,8 @@ screen, and only a tap on "Senden" sends the `X:` execute request. Preserve
 this flow when touching `provider.c`, `action.c`, `exec.c`, or the protocol.
 
 **Request order in `fluxaid` for `Q:` (`fluxai/src/main.c`):**
-1. `actions.c` — local intents (time, date, battery, uptime). If matched, the
+1. `actions.c` — local intents (time, date, weekday, battery, uptime, WLAN-/
+   Flugmodus-Status). If matched, the
    question never leaves the device (speed + privacy).
 2. `provider.c` — cloud fallback only if (1) found nothing. Multi-provider:
    Anthropic (Messages API + prompt caching), DeepSeek and NVIDIA NIM (both
