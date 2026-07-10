@@ -38,3 +38,21 @@ BR2_PACKAGE_RPI_FIRMWARE_CONFIG_FILE="$(FLUX_CONFIG_TXT)"
 
 # --- Eigenes Kernel-Config-Fragment: Boot-Logo + fbdev-Emulation ---
 BR2_LINUX_KERNEL_CONFIG_FRAGMENT_FILES="$(FLUX_LINUX_FRAGMENT)"
+
+# --- WPE WebKit: echter Browser mit JavaScript (fluxweb-Companion-
+# Prozess, siehe fluxweb/README.md) -----------------------------------
+# NUR im Pi5-Fragment, nicht in der QEMU-virt-Defconfig: WPE braucht
+# einen echten EGL/GLES-faehigen GPU-Treiber (Mesa v3d ueber KMS/DRM,
+# ueber config.txt oben aktiviert) -- QEMU aarch64-virt hat keine GPU.
+# Optionen gegen den echten Buildroot-2024.02.x-Baum geprueft
+# (package/wpewebkit/Config.in) -- der Build selbst ist in dieser
+# Sitzung NICHT baubar/testbar (kein Buildroot-Checkout hier), das
+# muss auf dem echten Pi 5 verifiziert werden. Dutzende neue
+# Transitiv-Abhaengigkeiten (JavaScriptCore, Cairo, ICU, Wayland,
+# libepoxy, ...) -- erster Build dauert vermutlich sehr lange.
+BR2_PACKAGE_WPEWEBKIT=y
+BR2_PACKAGE_MESA3D=y
+BR2_PACKAGE_MESA3D_GALLIUM_DRIVER_V3D=y
+BR2_PACKAGE_MESA3D_OPENGL_EGL=y
+BR2_PACKAGE_MESA3D_OPENGL_ES=y
+BR2_PACKAGE_MESA3D_GBM=y

@@ -71,6 +71,27 @@ mkdir -p "$ROOT_DIR/build/overlay-pi5/usr/bin"
 cp "$ROOT_DIR/shell/flux-shell"   "$ROOT_DIR/build/overlay-pi5/usr/bin/"
 cp "$ROOT_DIR/fluxai/fluxaid"     "$ROOT_DIR/build/overlay-pi5/usr/bin/"
 
+echo "==> [4b/4] fluxweb (WPE-Browser-Companion) bauen -- siehe fluxweb/README.md"
+echo "    NICHT verifiziert: erster Build hier ueberhaupt, viele neue"
+echo "    Transitiv-Abhaengigkeiten (JavaScriptCore etc.). Bei Fehlern:"
+echo "    fluxweb/README.md, dann 'make WPE=1' im fluxweb/-Verzeichnis"
+echo "    von Hand mit den Fehlermeldungen weiter debuggen."
+PKG_CONFIG_BIN="$(ls "$OUT_DIR"/host/bin/pkg-config 2>/dev/null | head -1)"
+if [ -n "$PKG_CONFIG_BIN" ]; then
+    make -C "$ROOT_DIR/fluxweb" clean
+    if make -C "$ROOT_DIR/fluxweb" WPE=1 CROSS_COMPILE="$CROSS_PREFIX" \
+            PKG_CONFIG="$PKG_CONFIG_BIN"; then
+        cp "$ROOT_DIR/fluxweb/fluxweb" "$ROOT_DIR/build/overlay-pi5/usr/bin/"
+        echo "    fluxweb gebaut und ins Overlay kopiert."
+    else
+        echo "    fluxweb-Build fehlgeschlagen (erwartbar beim ersten Mal --"
+        echo "    siehe fluxweb/README.md 'VERIFY'-Stellen). Image wird OHNE"
+        echo "    fluxweb weitergebaut, der Rest des Systems bleibt lauffaehig."
+    fi
+else
+    echo "    Kein host-pkg-config in $OUT_DIR gefunden -- fluxweb uebersprungen."
+fi
+
 # Finales Image mit Flux-Binaries neu packen.
 make -C "$BR_DIR" O="$OUT_DIR" -j"$(nproc)"
 

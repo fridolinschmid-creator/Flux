@@ -1,6 +1,7 @@
 shell/flux-shell
 shell/render_screenshots
 fluxai/fluxaid
+fluxweb/fluxweb
 build/overlay/usr/bin/flux-shell
 build/overlay/usr/bin/fluxaid
 build/overlay-pi5/usr/bin/flux-shell
