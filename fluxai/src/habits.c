@@ -113,7 +113,7 @@ void flux_habits_morning_briefing(const char *api_key, const char *model) {
     if (hf) {
         /* Screens zaehlen */
         int cnt_assistant = 0, cnt_calendar = 0, cnt_contacts = 0,
-            cnt_files = 0, cnt_gallery = 0, cnt_settings = 0;
+            cnt_files = 0, cnt_gallery = 0;
         char last_topics[5][80]; int lt_n = 0;
         char line[128];
         while (fgets(line, sizeof(line), hf)) {
@@ -122,7 +122,6 @@ void flux_habits_morning_briefing(const char *api_key, const char *model) {
             if (strstr(line, "contacts"))  cnt_contacts++;
             if (strstr(line, "files"))     cnt_files++;
             if (strstr(line, "gallery"))   cnt_gallery++;
-            if (strstr(line, "settings"))  cnt_settings++;
             /* Letzte Themen sammeln */
             char *pipe = strchr(line, '|');
             if (pipe && lt_n < 5) {

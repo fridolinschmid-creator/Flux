@@ -15,6 +15,8 @@ statt zu suchen.
 
 [Konzept](#konzept) · [Demo](#verifiziert-echter-boot-in-qemu) · [Schnellstart](#schnellstart) · [Architektur](#architektur) · [Konfiguration](#konfiguration) · [Roadmap](#roadmap)
 
+[Dokumentation](docs/README.md) · [Benutzerhandbuch](docs/USER_GUIDE.md) · [Entwicklung](docs/DEVELOPMENT.md)
+
 </div>
 
 ---
@@ -78,6 +80,7 @@ eine Hardware-Tastatur funktioniert parallel weiter.
 | Bereich | Funktion |
 |---|---|
 | **Assistent** | Natürlichsprachige Anfragen, lokale Intents (Zeit, Akku, Uptime) ohne Netzwerk, Cloud-Fallback bei Bedarf |
+| **Notizen** | Eigener Notizen-Screen mit Liste, Zeitstempeln, Einzelansicht und Editor für neue Einträge |
 | **KI-Aktionen** | Mail / SMS / Anruf — immer mit Apple-artigem Bestätigungs-Dialog (Senden / Abbrechen / Bearbeiten) |
 | **E-Mail** | Echter Versand per SMTP und Abruf ungelesener Mails per IMAP (libcurl); Server werden aus der Domain abgeleitet |
 | **Telefonie** | Vollbild-Anruf-Screen (annehmen/auflegen) mit KI-Mitschnitt, gespeichert als Markdown unter `/home/user/Anrufe/` |

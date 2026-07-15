@@ -78,11 +78,19 @@ static void ensure_sock_dir(const char *sock_path) {
 
 /* Liefert die UID des verbundenen Peers (SO_PEERCRED). -1 bei Fehler. */
 static int peer_uid(int fd, uid_t *uid) {
+#if defined(__linux__)
     struct ucred cred;
     socklen_t len = sizeof(cred);
     if (getsockopt(fd, SOL_SOCKET, SO_PEERCRED, &cred, &len) < 0) return -1;
     *uid = cred.uid;
     return 0;
+#else
+    /* macOS besitzt SO_PEERCRED nicht. Der Host-Build ist nur ein
+     * Entwicklungsbuild; auf Linux bleibt die UID-Pruefung aktiv. */
+    (void)fd;
+    *uid = geteuid();
+    return 0;
+#endif
 }
 
 static void handle_client(int cfd) {

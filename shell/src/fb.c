@@ -15,9 +15,16 @@
 #include <string.h>
 #include <sys/mman.h>
 #include <sys/ioctl.h>
+#if defined(__linux__)
 #include <linux/fb.h>
+#endif
 
 int flux_fb_open(flux_fb_t *fb, const char *device) {
+#if !defined(__linux__)
+    (void)fb;
+    (void)device;
+    return -1;
+#else
     memset(fb, 0, sizeof(*fb));
     fb->fd = open(device, O_RDWR);
     if (fb->fd < 0)
@@ -54,6 +61,7 @@ int flux_fb_open(flux_fb_t *fb, const char *device) {
     /* prev mit ungueltigem Wert vorbelegen -> erster present() zeichnet alles */
     memset(fb->prev, 0xFF, pixels * sizeof(uint32_t));
     return 0;
+#endif
 }
 
 void flux_fb_close(flux_fb_t *fb) {

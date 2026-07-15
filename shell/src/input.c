@@ -7,7 +7,11 @@
 #include <stdio.h>
 #include <sys/ioctl.h>
 #include <sys/select.h>
+#if defined(__linux__)
 #include <linux/input.h>
+#endif
+
+#if defined(__linux__)
 
 /* Keycode -> ASCII (Kleinbuchstaben/Ziffern, deutsches Layout
  * ignoriert -- fuer den Prototyp reicht US-QWERTY). */
@@ -208,3 +212,30 @@ flux_event_t flux_input_poll(flux_input_t *in) {
 
     return none;
 }
+#else
+
+int flux_input_open(flux_input_t *in, int screen_w, int screen_h) {
+    memset(in, 0, sizeof(*in));
+    in->kbd_fd = -1;
+    in->touch_fd = -1;
+    in->screen_w = screen_w;
+    in->screen_h = screen_h;
+    return -1;
+}
+
+void flux_input_close(flux_input_t *in) { (void)in; }
+
+int flux_input_add_fds(flux_input_t *in, void *rfds_fd_set) {
+    (void)in;
+    (void)rfds_fd_set;
+    return -1;
+}
+
+flux_event_t flux_input_poll(flux_input_t *in) {
+    (void)in;
+    flux_event_t out;
+    memset(&out, 0, sizeof(out));
+    return out;
+}
+
+#endif

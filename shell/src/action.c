@@ -28,11 +28,11 @@ static int normalize_flight_state(char *s) {
 
     if (strcmp(buf, "an") == 0 || strcmp(buf, "ein") == 0 || strcmp(buf, "on") == 0 ||
         strcmp(buf, "1") == 0 || strcmp(buf, "true") == 0) {
-        strcpy(s, "an"); return 1;
+        s[0] = 'a'; s[1] = 'n'; s[2] = '\0'; return 1;
     }
     if (strcmp(buf, "aus") == 0 || strcmp(buf, "off") == 0 || strcmp(buf, "0") == 0 ||
         strcmp(buf, "false") == 0) {
-        strcpy(s, "aus"); return 1;
+        s[0] = 'a'; s[1] = 'u'; s[2] = 's'; s[3] = '\0'; return 1;
     }
     return 0;
 }

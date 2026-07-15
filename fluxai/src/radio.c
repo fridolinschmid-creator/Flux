@@ -5,11 +5,14 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <unistd.h>
+#if defined(__linux__)
 #include <linux/rfkill.h>
+#endif
 
 #define RFKILL_DEV "/dev/rfkill"
 
 /* Klartext-Name je rfkill-Typ (fuer die Zusammenfassung). */
+#if defined(__linux__)
 static const char *type_name(unsigned char t) {
     switch (t) {
         case RFKILL_TYPE_WLAN:      return "WLAN";
@@ -115,3 +118,18 @@ void flux_radio_set_airplane(int on, char *out, size_t out_cap) {
         snprintf(out, out_cap,
             "Flugmodus ausgeschaltet -- Funkmodule sind wieder freigegeben.");
 }
+#else
+
+void flux_radio_status(char *out, size_t out_cap) {
+    snprintf(out, out_cap,
+             "Keine Funkhardware erkannt -- rfkill ist auf diesem Host "
+             "nicht verfuegbar. Auf Linux-Zielhardware wird /dev/rfkill genutzt.");
+}
+
+void flux_radio_set_airplane(int on, char *out, size_t out_cap) {
+    (void)on;
+    snprintf(out, out_cap,
+             "Flugmodus nicht verfuegbar -- rfkill gibt es nur auf Linux-Zielhardware.");
+}
+
+#endif

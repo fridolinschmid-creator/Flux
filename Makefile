@@ -10,6 +10,9 @@
 
 CC     ?= cc
 CFLAGS ?= -O2 -Wall -Wextra -std=gnu11 -D_GNU_SOURCE
+PKG_CFLAGS := $(shell pkg-config --cflags openssl 2>/dev/null)
+PKG_LDFLAGS := $(shell pkg-config --libs openssl 2>/dev/null)
+CFLAGS += $(PKG_CFLAGS)
 
 all: daemon shell
 
@@ -32,7 +35,7 @@ tests/test_actions: tests/test_actions.c fluxai/src/actions.c
 	$(CC) $(CFLAGS) -o $@ $^
 
 tests/test_config: tests/test_config.c common/flux_config.c common/flux_secret.c
-	$(CC) $(CFLAGS) -o $@ $^ -lcrypto
+	$(CC) $(CFLAGS) -o $@ $^ $(if $(PKG_LDFLAGS),$(PKG_LDFLAGS),-lcrypto)
 
 tests/protocol_client: tests/protocol_client.c
 	$(CC) $(CFLAGS) -o $@ $^

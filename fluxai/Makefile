@@ -7,9 +7,21 @@
 CROSS_COMPILE ?=
 CC      := $(CROSS_COMPILE)gcc
 HARDEN_CFLAGS  := -fstack-protector-strong -fPIE -Wformat -Wformat-security
+UNAME_S := $(shell uname -s)
+ifeq ($(UNAME_S),Darwin)
+HARDEN_LDFLAGS :=
+else
 HARDEN_LDFLAGS := -pie -Wl,-z,relro,-z,now
+endif
 CFLAGS  ?= -O2 -Wall -Wextra -std=gnu11 -D_GNU_SOURCE $(HARDEN_CFLAGS)
-LDFLAGS ?= -lcurl -lpthread -lcrypto $(HARDEN_LDFLAGS)
+LDFLAGS ?= -lcurl -lpthread $(HARDEN_LDFLAGS)
+# Homebrew und andere Unix-Hosts installieren OpenSSL oft ausserhalb der
+# Standard-Include-Pfade. Auf Linux bleibt die Variable leer und der
+# Buildroot-Cross-Compiler setzt seine eigenen Pfade.
+OPENSSL_CFLAGS := $(shell pkg-config --cflags openssl 2>/dev/null)
+OPENSSL_LDFLAGS := $(shell pkg-config --libs openssl 2>/dev/null)
+CFLAGS += $(OPENSSL_CFLAGS)
+LDFLAGS += $(if $(OPENSSL_LDFLAGS),$(OPENSSL_LDFLAGS),-lcrypto)
 
 SRC := $(wildcard src/*.c) $(wildcard ../common/*.c)
 BIN := fluxaid

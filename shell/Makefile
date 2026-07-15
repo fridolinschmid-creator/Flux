@@ -16,10 +16,19 @@ CROSS_COMPILE ?=
 CC      := $(CROSS_COMPILE)gcc
 CXX     := $(CROSS_COMPILE)g++
 HARDEN_CFLAGS  := -fstack-protector-strong -fPIE -Wformat -Wformat-security
+UNAME_S := $(shell uname -s)
+ifeq ($(UNAME_S),Darwin)
+HARDEN_LDFLAGS :=
+else
 HARDEN_LDFLAGS := -pie -Wl,-z,relro,-z,now
+endif
 CFLAGS   ?= -O2 -Wall -Wextra -std=gnu11 -D_GNU_SOURCE $(HARDEN_CFLAGS)
 CXXFLAGS ?= -O2 -Wall -Wextra -std=c++17 $(HARDEN_CFLAGS)
-LDFLAGS  ?= -lm -lcrypto -lpthread -lcurl $(HARDEN_LDFLAGS)
+LDFLAGS  ?= -lm -lpthread -lcurl $(HARDEN_LDFLAGS)
+OPENSSL_CFLAGS := $(shell pkg-config --cflags openssl 2>/dev/null)
+OPENSSL_LDFLAGS := $(shell pkg-config --libs openssl 2>/dev/null)
+CFLAGS += $(OPENSSL_CFLAGS)
+LDFLAGS += $(if $(OPENSSL_LDFLAGS),$(OPENSSL_LDFLAGS),-lcrypto)
 
 LH_DIR      := src/litehtml
 LH_INCLUDES := -I$(LH_DIR)/src -I$(LH_DIR)/include -I$(LH_DIR)/include/litehtml \
@@ -41,6 +50,12 @@ BIN := flux-shell
 $(BIN): $(C_OBJ) $(CXX_OBJ) $(GUMBO_OBJ) $(LITEHTML_OBJ)
 	$(CXX) -o $@ $^ $(LDFLAGS)
 
+# Diese Regel muss vor der allgemeinen C-Regel stehen: Gumbo verwendet
+# interne Header unter src/gumbo/include/gumbo.
+$(OBJDIR)/$(LH_DIR)/src/gumbo/%.o: $(LH_DIR)/src/gumbo/%.c
+	@mkdir -p $(dir $@)
+	$(CC) -O2 -std=c99 -Wall -fPIE $(LH_INCLUDES) -c $< -o $@
+
 $(OBJDIR)/%.o: %.c
 	@mkdir -p $(dir $@)
 	$(CC) $(CFLAGS) -Isrc -c $< -o $@
@@ -48,10 +63,6 @@ $(OBJDIR)/%.o: %.c
 $(OBJDIR)/%.o: %.cpp
 	@mkdir -p $(dir $@)
 	$(CXX) $(CXXFLAGS) -Isrc $(LH_INCLUDES) -c $< -o $@
-
-$(OBJDIR)/$(LH_DIR)/src/gumbo/%.o: $(LH_DIR)/src/gumbo/%.c
-	@mkdir -p $(dir $@)
-	$(CC) -O2 -std=c99 -Wall -fPIE $(LH_INCLUDES) -c $< -o $@
 
 clean:
 	rm -rf $(OBJDIR) $(BIN)

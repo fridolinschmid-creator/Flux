@@ -18,9 +18,14 @@ BR2_PACKAGE_WPA_SUPPLICANT=y
 BR2_PACKAGE_WPA_SUPPLICANT_CLI=y
 BR2_PACKAGE_IW=y
 BR2_PACKAGE_DHCPCD=y
-# Firmware fuer den Pi-5-WLAN/BT-Chip (Cypress/Infineon)
-BR2_PACKAGE_RPI_WIFI_FIRMWARE=y
-BR2_PACKAGE_RPI_BT_FIRMWARE=y
+# Firmware fuer den Pi-5-WLAN/BT-Chip (Cypress/Infineon CYW43455).
+# BR2_PACKAGE_RPI_WIFI_FIRMWARE/RPI_BT_FIRMWARE wurden in Buildroot
+# 2024.08 entfernt -- brcmfmac_sdio-firmware-rpi (LibreELEC-Quelle,
+# von Buildroot fuer alle Pi-Modelle inkl. Cypress-Chips genutzt)
+# deckt WLAN+BT jetzt ab.
+BR2_PACKAGE_BRCMFMAC_SDIO_FIRMWARE_RPI=y
+BR2_PACKAGE_BRCMFMAC_SDIO_FIRMWARE_RPI_BT=y
+BR2_PACKAGE_BRCMFMAC_SDIO_FIRMWARE_RPI_WIFI=y
 
 # --- Zeit/Datum stimmen (sonst falsche Uhr im Lockscreen) ---
 BR2_PACKAGE_NTP=y

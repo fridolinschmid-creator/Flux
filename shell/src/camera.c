@@ -14,20 +14,25 @@
 #include <sys/mman.h>
 #include <sys/stat.h>
 #include <sys/select.h>
+#if defined(__linux__)
 #include <linux/videodev2.h>
+#endif
 
 /* Sicherer Wertebereich 0-255. */
 static inline int clamp8(int v) { return v < 0 ? 0 : v > 255 ? 255 : v; }
 
 /* Schreibt einen RGB-Pixel in den Ausgabe-PPM-Stream. */
+#if defined(__linux__)
 static void write_rgb(FILE *f, int r, int g, int b) {
     fputc(clamp8(r), f);
     fputc(clamp8(g), f);
     fputc(clamp8(b), f);
 }
+#endif
 
 /* Konvertiert einen YUYV-Puffer in PPM und schreibt ihn in f.
  * W/H muessen gerade sein (YUYV-Anforderung). */
+#if defined(__linux__)
 static void yuyv_to_ppm(FILE *f, const unsigned char *yuyv, int W, int H) {
     fprintf(f, "P6\n%d %d\n255\n", W, H);
     for (int row = 0; row < H; row++) {
@@ -48,9 +53,11 @@ static void yuyv_to_ppm(FILE *f, const unsigned char *yuyv, int W, int H) {
         }
     }
 }
+#endif
 
 /* Versucht ein Einzelbild von /dev/video0 per V4L2 zu erfassen und als PPM
  * unter path zu speichern. Gibt 0 bei Erfolg, -1 wenn kein Geraet verfuegbar. */
+#if defined(__linux__)
 static int try_v4l2(const char *path) {
     int fd = open("/dev/video0", O_RDWR | O_NONBLOCK);
     if (fd < 0) return -1;
@@ -113,6 +120,12 @@ static int try_v4l2(const char *path) {
     close(fd);
     return f ? 0 : -1;
 }
+#else
+static int try_v4l2(const char *path) {
+    (void)path;
+    return -1;
+}
+#endif
 
 /* Erzeugt ein farbiges Testmuster (Himmel/Boden-Gradient mit Farbpalette) als PPM.
  * Sieht wie ein abstraktes Landschaftsfoto aus. */

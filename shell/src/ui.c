@@ -4366,6 +4366,79 @@ int flux_ui_journal_hit(const flux_fb_t *fb, int x, int y,
     return idx;
 }
 
+/* ---- Notizen ------------------------------------------------------- */
+
+#define NOTES_ENTRY_H 72
+
+int flux_ui_notes_clamp_scroll(const flux_fb_t *fb, int n, int scroll) {
+    int list_y = STATUSBAR_H + TITLE_AREA_H;
+    int list_h = fb->height - list_y - LIST_BACK_H;
+    int max_visible = list_h / NOTES_ENTRY_H;
+    if (scroll < 0) scroll = 0;
+    if (n > max_visible && scroll > n - max_visible) scroll = n - max_visible;
+    if (n <= max_visible) scroll = 0;
+    return scroll;
+}
+
+void flux_ui_draw_notes(flux_fb_t *fb, const char **entries, int n, int scroll) {
+    flux_fb_clear(fb, COL_BG);
+    draw_statusbar(fb);
+
+    flux_fb_text(fb, 16, STATUSBAR_H + 12, "Notizen", COL_TEXT, 3);
+    flux_fb_fill_gradient_h(fb, 16, STATUSBAR_H + 42, 86, 2, COL_ACCENT, COL_ACCENT2);
+
+    int bx = fb->width - 132, by = STATUSBAR_H + 10;
+    fill_round_rect(fb, bx, by, 116, 42, 10, COL_SURFACE2);
+    flux_icon_draw(fb, FLUX_ICON_PLUS, bx + 22, by + 21, 20, COL_ACCENT);
+    flux_fb_text(fb, bx + 38, by + 14, "Neue Notiz", COL_TEXT, 2);
+
+    int list_y = STATUSBAR_H + TITLE_AREA_H;
+    int list_h = fb->height - list_y - LIST_BACK_H;
+    int max_visible = list_h / NOTES_ENTRY_H;
+    scroll = flux_ui_notes_clamp_scroll(fb, n, scroll);
+    if (n == 0) {
+        fill_round_rect(fb, 12, list_y + 20, fb->width - 24, 92, 10, COL_SURFACE);
+        flux_icon_draw(fb, FLUX_ICON_FILE, fb->width / 2, list_y + 47, 26, COL_ACCENT);
+        const char *empty = "Noch keine Notizen";
+        int tw = flux_fb_text_width(empty, 2);
+        flux_fb_text(fb, (fb->width - tw) / 2, list_y + 76, empty, COL_DIM, 2);
+    } else {
+        int y = list_y + 4;
+        for (int i = scroll; i < n && y + NOTES_ENTRY_H <= list_y + list_h; i++) {
+            fill_round_rect(fb, 8, y, fb->width - 16, NOTES_ENTRY_H - 6, 8, COL_SURFACE);
+            flux_fb_fill_rect(fb, 8, y, 3, NOTES_ENTRY_H - 6, COL_ACCENT);
+            flux_icon_draw(fb, FLUX_ICON_FILE, 30, y + 28, 22, COL_ACCENT);
+            draw_wrapped(fb, 52, y + 12, fb->width - 76, entries[i], COL_TEXT, 2, 22);
+            y += NOTES_ENTRY_H;
+        }
+        if (n > max_visible) {
+            int bar_h = list_h * max_visible / n;
+            int bar_y = list_y + list_h * scroll / n;
+            fill_round_rect(fb, fb->width - 5, bar_y, 4, bar_h, 2, COL_ACCENT);
+        }
+    }
+    draw_back_bar(fb, "Zurück");
+    flux_fb_present(fb);
+}
+
+int flux_ui_notes_hit(const flux_fb_t *fb, int x, int y, int n,
+                      int scroll, int *back, int *new_note) {
+    *back = 0;
+    *new_note = 0;
+    if (y >= fb->height - LIST_BACK_H) { *back = 1; return -1; }
+    int bx = fb->width - 132;
+    if (x >= bx && x < fb->width - 16 && y >= STATUSBAR_H + 10 &&
+        y < STATUSBAR_H + 52) { *new_note = 1; return -1; }
+    scroll = flux_ui_notes_clamp_scroll(fb, n, scroll);
+    int list_y = STATUSBAR_H + TITLE_AREA_H;
+    int list_h = fb->height - list_y - LIST_BACK_H;
+    int max_visible = list_h / NOTES_ENTRY_H;
+    if (y < list_y || x < 8 || x >= fb->width - 8) return -1;
+    int idx = (y - list_y - 4) / NOTES_ENTRY_H;
+    if (idx < 0 || idx >= max_visible || scroll + idx >= n) return -1;
+    return scroll + idx;
+}
+
 /* ---- Stimm-Entsperrung (zweiter Faktor) ----------------------------- */
 
 /* Zeichnet Mikrofon-Icon einfach mit Text fuer diesen Screen. */

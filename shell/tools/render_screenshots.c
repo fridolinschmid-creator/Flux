@@ -532,6 +532,17 @@ int main(int argc, char *argv[]) {
     }
     save_png(&fb, outdir, "27_ki_gedaechtnis");
 
+    /* 27b -- Notizen als eigener, direkt bedienbarer Bereich */
+    {
+        const char *notes[] = {
+            "[2026-06-19 09:15] Max wegen der Unterlagen zurueckrufen.",
+            "[2026-06-18 18:40] Geschenkidee: Konzertkarten fuer Laura.",
+            "[2026-06-17 12:05] Einkauf: Tee, Brot und Tomaten.",
+        };
+        flux_ui_draw_notes(&fb, notes, 3, 0);
+    }
+    save_png(&fb, outdir, "27b_notizen");
+
     /* 28 -- Semantische KI-Suche (#3: Lauras Geburtstag konsistent) */
     {
         const char *results[] = {

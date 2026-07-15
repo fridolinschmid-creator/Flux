@@ -32,6 +32,7 @@ typedef enum {
     FLUX_SCREEN_SEARCH,       /* Semantische KI-Suche ueber alles */
     FLUX_SCREEN_WIFI,         /* WLAN-Netze scannen und verbinden */
     FLUX_SCREEN_JOURNAL,       /* Tages-Journal Eintraege (Liste + Betrachter) */
+    FLUX_SCREEN_NOTES,         /* Notizen-Liste und neue Notiz */
     FLUX_SCREEN_VOICE_ENROLL,  /* Stimme einlernen fuer zweiten Faktor */
     FLUX_SCREEN_VOICE_VERIFY,  /* Stimm-Verifizierung nach PIN (zweiter Faktor) */
     FLUX_SCREEN_ALARM_APP,     /* Wecker/Timer-Verwaltungs-Screen */
@@ -496,6 +497,19 @@ int flux_ui_journal_hit(const flux_fb_t *fb, int x, int y,
  * sonst kann ein zu weit gescrollter, ungeklemmter Wert eine Out-of-
  * Bounds-Indizierung in journal_names_buf[] erzeugen. */
 int flux_ui_journal_clamp_scroll(const flux_fb_t *fb, int n, int scroll);
+
+/* ---- Notizen ------------------------------------------------------- */
+
+/* Zeigt die lokal gespeicherten Notizen. Der erste Header-Knopf oeffnet
+ * den Editor fuer eine neue Notiz; die Liste bleibt scrollbar. */
+void flux_ui_draw_notes(flux_fb_t *fb, const char **entries, int n, int scroll);
+
+int flux_ui_notes_clamp_scroll(const flux_fb_t *fb, int n, int scroll);
+
+/* Gibt den Eintragsindex zurueck, setzt back/new_note bei den jeweiligen
+ * Treffern. Der Index bezieht sich auf den sichtbaren Scroll-Ausschnitt. */
+int flux_ui_notes_hit(const flux_fb_t *fb, int x, int y, int n,
+                      int scroll, int *back, int *new_note);
 
 /* ---- Stimm-Entsperrung (zweiter Faktor nach PIN) ------------------- */
 

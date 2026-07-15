@@ -93,6 +93,11 @@ static int save_ppm_screenshot(const flux_fb_t *fb, const char *path) {
 static volatile int g_error_pending = 0;
 static char         g_error_msg[200];
 
+static void flux_secure_zero(void *ptr, size_t len) {
+    volatile unsigned char *p = (volatile unsigned char *)ptr;
+    while (len--) *p++ = 0;
+}
+
 /* Haengt eine Fehlerzeile (mit Uhrzeit) an ERR_FILE an und kuerzt die Datei
  * auf die letzten ERR_KEEP Zeilen. */
 static void error_file_append(const char *line) {
@@ -341,17 +346,19 @@ typedef struct {
     const char *q;
     char *out;
     size_t out_cap;
+    volatile int done;
 } ipc_ask_args_t;
 
 static void *ipc_ask_thread_fn(void *arg) {
     ipc_ask_args_t *a = arg;
     flux_ipc_ask(a->q, a->out, a->out_cap);
+    a->done = 1;
     return NULL;
 }
 
 static void ipc_ask_animated(flux_fb_t *fb, const char *q, char *out, size_t out_cap,
                              const char *last_q, const char *input_buf) {
-    ipc_ask_args_t args = { q, out, out_cap };
+    ipc_ask_args_t args = { q, out, out_cap, 0 };
     pthread_t tid;
     if (pthread_create(&tid, NULL, ipc_ask_thread_fn, &args) != 0) {
         /* Thread-Erstellung fehlgeschlagen -- synchron als Fallback, dann
@@ -363,7 +370,10 @@ static void ipc_ask_animated(flux_fb_t *fb, const char *q, char *out, size_t out
         flux_ui_draw_assistant(fb, last_q, input_buf, "", 1);
         struct timespec ts = { 0, 33000000 };
         nanosleep(&ts, NULL);
-        if (pthread_tryjoin_np(tid, NULL) == 0) break;
+        if (args.done) {
+            pthread_join(tid, NULL);
+            break;
+        }
     }
 }
 
@@ -545,6 +555,7 @@ typedef enum {
     EDIT_EMAIL_ADDR,    /* Schritt 1: E-Mail-Adresse */
     EDIT_EMAIL_PASS,    /* Schritt 2: App-Passwort */
     EDIT_WIFI_PASS,     /* WLAN-Passwort fuer das gewaehlte Netz */
+    EDIT_NEW_NOTE,      /* neue Notiz im Notizen-Screen */
 } edit_target_t;
 
 /* Zwischengespeicherte E-Mail-Adresse zwischen Schritt 1 und 2. */
@@ -1006,6 +1017,40 @@ static char        journal_names_buf[JOURNAL_MAX][32];
 static const char *journal_names_p[JOURNAL_MAX];
 static int         journal_n      = 0;
 static int         journal_scroll = 0;
+
+/* Notizen-Screen */
+#define NOTES_MAX 100
+#define NOTES_PATH "/etc/flux/notes.txt"
+static char        notes_buf[NOTES_MAX][256];
+static const char *notes_p[NOTES_MAX];
+static int         notes_n = 0;
+static int         notes_scroll = 0;
+
+static void load_notes_list(void) {
+    notes_n = 0;
+    FILE *f = fopen(NOTES_PATH, "r");
+    if (!f) return;
+    char line[sizeof(notes_buf[0])];
+    while (notes_n < NOTES_MAX && fgets(line, sizeof(line), f)) {
+        size_t len = strlen(line);
+        while (len > 0 && (line[len - 1] == '\n' || line[len - 1] == '\r'))
+            line[--len] = '\0';
+        if (!line[0]) continue;
+        snprintf(notes_buf[notes_n], sizeof(notes_buf[0]), "%s", line);
+        notes_p[notes_n] = notes_buf[notes_n];
+        notes_n++;
+    }
+    fclose(f);
+    /* Die neuesten Eintraege stehen oben, ohne die Datei umzuschreiben. */
+    for (int i = 0; i < notes_n / 2; i++) {
+        int j = notes_n - 1 - i;
+        char tmp[sizeof(notes_buf[0])];
+        memcpy(tmp, notes_buf[i], sizeof(tmp));
+        memcpy(notes_buf[i], notes_buf[j], sizeof(tmp));
+        memcpy(notes_buf[j], tmp, sizeof(tmp));
+    }
+    for (int i = 0; i < notes_n; i++) notes_p[i] = notes_buf[i];
+}
 
 static void load_journal_list(void) {
     mkdir("/home/user/Journal", 0755);
@@ -1571,6 +1616,8 @@ static void redraw_current_screen(flux_fb_t *fb, flux_screen_t screen,
             flux_ui_draw_browser(fb, browser_url, browser_input, browser_scroll); break;
         case FLUX_SCREEN_JOURNAL:
             flux_ui_draw_journal(fb, journal_names_p, journal_n, journal_scroll, -1); break;
+        case FLUX_SCREEN_NOTES:
+            flux_ui_draw_notes(fb, notes_p, notes_n, notes_scroll); break;
         case FLUX_SCREEN_VOICE_ENROLL:
             flux_ui_draw_voice_enroll(fb, voice_enroll_phase, voice_enroll_msg); break;
         case FLUX_SCREEN_VOICE_VERIFY:
@@ -2189,7 +2236,7 @@ int main(void) {
                 char stored[128] = {0};
                 flux_config_get("pin_hash", stored, sizeof(stored));
                 pin_len = 0;
-                explicit_bzero(pin_buf, sizeof(pin_buf));
+                flux_secure_zero(pin_buf, sizeof(pin_buf));
                 if (strcmp(hash, stored) == 0) {
                     pin_fail_count = 0;
                     pin_locked_until = 0;
@@ -2395,6 +2442,31 @@ int main(void) {
                     screen = FLUX_SCREEN_FILES;
                     flux_ui_draw_files(&fb, files_path, file_names, file_metas,
                                        file_n, file_truncated, file_selected);
+                    animate_slide_in(&fb, old);
+                    free(old);
+                } else if (edit_target == EDIT_NEW_NOTE) {
+                    if (edit_buf[0]) {
+                        FILE *nf = fopen(NOTES_PATH, "a");
+                        if (nf) {
+                            time_t nt = time(NULL);
+                            struct tm ntm;
+                            localtime_r(&nt, &ntm);
+                            char stamp[32];
+                            strftime(stamp, sizeof(stamp), "[%Y-%m-%d %H:%M]", &ntm);
+                            fprintf(nf, "%s %s\n", stamp, edit_buf);
+                            fclose(nf);
+                            snprintf(answer_buf, sizeof(answer_buf), "Notiz gespeichert.");
+                        } else {
+                            snprintf(answer_buf, sizeof(answer_buf),
+                                     "Notiz konnte nicht gespeichert werden.");
+                        }
+                    }
+                    load_notes_list();
+                    notes_scroll = 0;
+                    flux_ui_set_edit_title(NULL);
+                    uint32_t *old = capture_frame(&fb);
+                    screen = FLUX_SCREEN_NOTES;
+                    flux_ui_draw_notes(&fb, notes_p, notes_n, notes_scroll);
                     animate_slide_in(&fb, old);
                     free(old);
                 } else if (edit_target == EDIT_EMAIL_ADDR) {
@@ -3243,6 +3315,59 @@ int main(void) {
             continue;
         }
 
+        /* ---- FLUX_SCREEN_NOTES ---------------------------------------- */
+        if (screen == FLUX_SCREEN_NOTES) {
+            if (ev.type == FLUX_EV_SWIPE_LEFT || ev.type == FLUX_EV_SWIPE_RIGHT) {
+                uint32_t *old = capture_frame(&fb);
+                screen = FLUX_SCREEN_ASSISTANT;
+                flux_ui_draw_assistant(&fb, last_q, input_buf, answer_buf, 0);
+                animate_slide_from_left(&fb, old);
+                free(old);
+                continue;
+            }
+            if (ev.type == FLUX_EV_SWIPE_UP) {
+                notes_scroll = flux_ui_notes_clamp_scroll(&fb, notes_n, notes_scroll + 1);
+                flux_ui_draw_notes(&fb, notes_p, notes_n, notes_scroll);
+                continue;
+            }
+            if (ev.type == FLUX_EV_SWIPE_DOWN) {
+                notes_scroll = flux_ui_notes_clamp_scroll(&fb, notes_n, notes_scroll - 1);
+                flux_ui_draw_notes(&fb, notes_p, notes_n, notes_scroll);
+                continue;
+            }
+            if (ev.type == FLUX_EV_TAP) {
+                int back = 0, new_note = 0;
+                int idx = flux_ui_notes_hit(&fb, ev.x, ev.y, notes_n,
+                                            notes_scroll, &back, &new_note);
+                if (back) {
+                    uint32_t *old = capture_frame(&fb);
+                    screen = FLUX_SCREEN_ASSISTANT;
+                    flux_ui_draw_assistant(&fb, last_q, input_buf, answer_buf, 0);
+                    animate_slide_from_left(&fb, old);
+                    free(old);
+                } else if (new_note) {
+                    edit_buf[0] = '\0';
+                    edit_target = EDIT_NEW_NOTE;
+                    flux_ui_set_edit_title("Neue Notiz");
+                    uint32_t *old = capture_frame(&fb);
+                    screen = FLUX_SCREEN_EDIT_BODY;
+                    flux_ui_draw_edit_body(&fb, edit_buf);
+                    animate_slide_in(&fb, old);
+                    free(old);
+                } else if (idx >= 0 && idx < notes_n) {
+                    snprintf(viewer_path, sizeof(viewer_path), "Notiz");
+                    snprintf(viewer_content, sizeof(viewer_content), "%s", notes_buf[idx]);
+                    viewer_scroll = 0;
+                    uint32_t *old = capture_frame(&fb);
+                    screen = FLUX_SCREEN_FILE_VIEWER;
+                    flux_ui_draw_file_viewer(&fb, viewer_path, viewer_content, viewer_scroll);
+                    animate_slide_in(&fb, old);
+                    free(old);
+                }
+            }
+            continue;
+        }
+
         /* ---- FLUX_SCREEN_JOURNAL --------------------------------------- */
         if (screen == FLUX_SCREEN_JOURNAL) {
             if (ev.type == FLUX_EV_SWIPE_LEFT || ev.type == FLUX_EV_SWIPE_RIGHT) {
@@ -3911,21 +4036,11 @@ int main(void) {
             }
             if (strcasecmp(input_buf, "notizen") == 0 || strcasecmp(input_buf, "notes") == 0) {
                 input_buf[0] = '\0';
-                /* Open notes file directly in file viewer */
-                const char *npath = "/etc/flux/notes.txt";
-                snprintf(viewer_path, sizeof(viewer_path), "%s", npath);
-                viewer_content[0] = '\0'; viewer_scroll = 0;
-                FILE *nf = fopen(npath, "r");
-                if (nf) {
-                    size_t nn = fread(viewer_content, 1, VIEWER_CONTENT_MAX - 1, nf);
-                    viewer_content[nn] = '\0';
-                    fclose(nf);
-                } else {
-                    snprintf(viewer_content, sizeof(viewer_content), "(Noch keine Notizen vorhanden.)");
-                }
+                load_notes_list();
+                notes_scroll = 0;
                 uint32_t *old = capture_frame(&fb);
-                screen = FLUX_SCREEN_FILE_VIEWER;
-                flux_ui_draw_file_viewer(&fb, viewer_path, viewer_content, viewer_scroll);
+                screen = FLUX_SCREEN_NOTES;
+                flux_ui_draw_notes(&fb, notes_p, notes_n, notes_scroll);
                 animate_slide_in(&fb, old);
                 free(old);
                 continue;

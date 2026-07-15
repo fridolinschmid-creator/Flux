@@ -16,6 +16,13 @@
 #define VISION_MODEL   "claude-haiku-4-5-20251001"
 #define VISION_API_URL "https://api.anthropic.com/v1/messages"
 
+/* Portabler Speicherloesch-Helfer: explicit_bzero ist nicht in jeder
+ * libc deklariert und darf nicht durch den Optimierer entfernt werden. */
+static void flux_secure_zero(void *ptr, size_t len) {
+    volatile unsigned char *p = (volatile unsigned char *)ptr;
+    while (len--) *p++ = 0;
+}
+
 
 /* ---- Base64-Encoder ------------------------------------------------- */
 
@@ -248,6 +255,6 @@ int flux_vision_analyze(const char *ppm_path, char *out, size_t out_cap,
     curl_easy_cleanup(curl);
     free(resp.data);
     free(body);
-    explicit_bzero(key_buf, sizeof(key_buf));
+    flux_secure_zero(key_buf, sizeof(key_buf));
     return ok;
 }
