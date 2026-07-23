@@ -5,5 +5,6 @@ build/overlay/usr/bin/flux-shell
 build/overlay/usr/bin/fluxaid
 *.o
 tests/test_actions
+tests/test_config
 tests/protocol_client
 .claude/

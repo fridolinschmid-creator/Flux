@@ -5,7 +5,7 @@
 CROSS_COMPILE ?=
 CC      := $(CROSS_COMPILE)gcc
 CFLAGS  ?= -O2 -Wall -Wextra -std=gnu11 -D_GNU_SOURCE
-LDFLAGS ?= -lm
+LDFLAGS ?= -lm -lcrypto
 
 SRC := $(wildcard src/*.c) $(wildcard ../common/*.c)
 BIN := flux-shell

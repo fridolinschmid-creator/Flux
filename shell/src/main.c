@@ -25,6 +25,7 @@
 #include "../../common/flux_protocol.h"
 #include "../../common/flux_config.h"
 #include "../../common/flux_sha256.h"
+#include "../../common/flux_privdrop.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -892,6 +893,15 @@ int main(void) {
     int have_input = (flux_input_open(&in, fb.width, fb.height) == 0);
     if (!have_input)
         fprintf(stderr, "flux-shell: keine Eingabegeraete gefunden, nur Uhr wird angezeigt.\n");
+
+    /* Privilegien ablegen, NACHDEM Framebuffer/Eingabegeraete geoeffnet sind
+     * (die offenen fds ueberleben setuid). Opt-in: nur wenn "service_user_ui"
+     * konfiguriert ist; der Nutzer muss in den Gruppen video/input sein
+     * (siehe scripts/setup-users.sh). */
+    if (flux_privdrop("service_user_ui", "FLUX_SHELL_USER") != 0) {
+        fprintf(stderr, "flux-shell: Privilege-Drop fehlgeschlagen -- beende\n");
+        return 1;
+    }
 
     flux_screen_t screen = FLUX_SCREEN_LOCK;
     time_t last_event_time = time(NULL);
